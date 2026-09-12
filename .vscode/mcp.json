@@ -1,0 +1,12 @@
+{
+  "servers": {
+    "rest-client": {
+      "type": "stdio",
+      "command": "/usr/share/code/code",
+      "args": [
+        "/home/pori/.vscode/extensions/johncole.restclient-mcp-1.7.0/dist/mcp-server.mjs"
+      ],
+      "cwd": "/home/pori/.vscode/extensions/johncole.restclient-mcp-1.7.0"
+    }
+  }
+}

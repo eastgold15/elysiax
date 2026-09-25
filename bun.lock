@@ -60,10 +60,11 @@
         "@types/bun": "latest",
       },
     },
-    "packages/elysia": {
-      "name": "@inferdi/elysia",
-      "version": "6.1.0",
+    "packages/core": {
+      "name": "@elysiax/core",
+      "version": "0.1.0",
       "dependencies": {
+        "@inferdi/elysia": "workspace:*",
         "@inferdi/inferdi": "^6.1.0",
         "elysia": "catalog:",
       },
@@ -71,11 +72,10 @@
         "typescript": "^7",
       },
     },
-    "packages/elysiax": {
-      "name": "@elysiax/core",
-      "version": "0.1.0",
+    "packages/elysia": {
+      "name": "@inferdi/elysia",
+      "version": "6.1.0",
       "dependencies": {
-        "@inferdi/elysia": "workspace:*",
         "@inferdi/inferdi": "^6.1.0",
         "elysia": "catalog:",
       },
@@ -106,7 +106,7 @@
 
     "@elysiax/cli": ["@elysiax/cli@workspace:packages/cli"],
 
-    "@elysiax/core": ["@elysiax/core@workspace:packages/elysiax"],
+    "@elysiax/core": ["@elysiax/core@workspace:packages/core"],
 
     "@inferdi/elysia": ["@inferdi/elysia@workspace:packages/elysia"],
 

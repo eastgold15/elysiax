@@ -1,0 +1,19 @@
+{
+  "name": "@elysiax/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./plugin": "./src/plugin.ts",
+    "./di": "./src/di.ts"
+  },
+  "dependencies": {
+    "@inferdi/inferdi": "^6.1.0",
+    "elysia": "catalog:",
+    "@inferdi/elysia": "workspace:*"
+  },
+  "peerDependencies": {
+    "typescript": "^7"
+  }
+}

@@ -13,7 +13,7 @@ const api = elysiaxAPI(root, modules);
 const app = new Elysia({ prefix: "/api" }).use(api);
 
 serve({
-  port: 3000,
+  port: 3111,
   routes: {
     "/": index,
     "/api/*": (req) => app.handle(req),
@@ -21,7 +21,7 @@ serve({
   development: true,
 });
 
-console.log(`✅ elysiax demo: http://localhost:3000`);
+console.log(`✅ elysiax demo: http://localhost:3111`);
 console.log(`   已挂载模块: ${Object.keys(modules).join(", ")}`);
 
 export type api = typeof app;

@@ -1,28 +1,21 @@
 {
-  "name": "bun-elysiax",
+  "name": "demo",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "bun --hot src/index.ts",
-    "start": "NODE_ENV=production bun src/index.ts",
-    "build": "bun run build.ts"
+    "start": "bun src/index.ts"
   },
   "dependencies": {
-    "@elysia/html": "^1.4.1",
     "@elysiax/core": "workspace:*",
-    "@inferdi/elysia": "workspace:*",
     "@inferdi/inferdi": "^6.1.0",
-    "@workspace/htmx": "workspace:*",
     "bun-plugin-tailwind": "^0.1.2",
     "elysia": "catalog:",
-    "htmx.org": "4",
-    "tailwindcss": "^4.1.11"
+    "tailwindcss": "^4.1.11",
+    "@inferdi/elysia": "workspace:*"
   },
   "devDependencies": {
     "@types/bun": "latest"
-  },
-  "peerDependencies": {
-    "typescript": "^7"
   }
 }

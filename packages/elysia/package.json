@@ -1,0 +1,50 @@
+{
+  "name": "@inferdi/elysia",
+  "version": "6.1.0",
+  "description": "Elysia request-scope plugin for InferDI.",
+  "keywords": [
+    "typescript",
+    "dependency-injection",
+    "di",
+    "ioc",
+    "inferdi",
+    "elysia",
+    "plugin",
+    "request-scope"
+  ],
+  "author": {
+    "name": "Viacheslav Kabanov",
+    "email": "vkabanov@inferdi.com",
+    "url": "https://github.com/maxrendel"
+  },
+  "license": "MIT",
+  "homepage": "https://inferdi.com/adapters/elysia",
+  "bugs": {
+    "url": "https://github.com/inferdi/inferdi/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/inferdi/inferdi.git",
+    "directory": "packages/elysia"
+  },
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "private": true,
+  "dependencies": {
+    "@inferdi/inferdi": "^6.1.0",
+    "elysia": "catalog:"
+  },
+  "peerDependencies": {
+    "typescript": "^7"
+  }
+}

@@ -1,0 +1,16 @@
+<div class="space-y-4">
+  <h2 class="text-lg font-semibold">用户列表</h2>
+  <ul class="divide-y divide-gray-700">
+    <li class="py-2">Alice</li>
+    <li class="py-2">Bob</li>
+  </ul>
+  <button
+    class="inline-flex items-center justify-center rounded-md bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-500 transition-colors"
+    hx-get="/api/users/1/orders"
+    hx-target="#orders"
+    hx-swap="innerHTML"
+  >
+    查看 Alice 的订单
+  </button>
+  <div id="orders"></div>
+</div>

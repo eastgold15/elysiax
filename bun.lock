@@ -11,11 +11,29 @@
         "typescript": "^7",
       },
     },
+    "apps/demo": {
+      "name": "demo",
+      "version": "0.1.0",
+      "dependencies": {
+        "@elysiax/core": "workspace:*",
+        "@inferdi/elysia": "workspace:*",
+        "@inferdi/inferdi": "^6.1.0",
+        "bun-plugin-tailwind": "^0.1.2",
+        "elysia": "catalog:",
+        "tailwindcss": "^4.1.11",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+    },
     "apps/elysiax": {
       "name": "bun-elysiax",
       "version": "0.1.0",
       "dependencies": {
         "@elysia/html": "^1.4.1",
+        "@elysiax/core": "workspace:*",
+        "@inferdi/elysia": "workspace:*",
+        "@inferdi/inferdi": "^6.1.0",
         "@workspace/htmx": "workspace:*",
         "bun-plugin-tailwind": "^0.1.2",
         "elysia": "catalog:",
@@ -24,6 +42,42 @@
       },
       "devDependencies": {
         "@types/bun": "latest",
+      },
+      "peerDependencies": {
+        "typescript": "^7",
+      },
+    },
+    "packages/cli": {
+      "name": "@elysiax/cli",
+      "version": "0.1.0",
+      "bin": {
+        "elysiax": "./src/index.ts",
+      },
+      "dependencies": {
+        "@visulima/cerebro": "^3.1.2",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+      },
+    },
+    "packages/elysia": {
+      "name": "@inferdi/elysia",
+      "version": "6.1.0",
+      "dependencies": {
+        "@inferdi/inferdi": "^6.1.0",
+        "elysia": "catalog:",
+      },
+      "peerDependencies": {
+        "typescript": "^7",
+      },
+    },
+    "packages/elysiax": {
+      "name": "@elysiax/core",
+      "version": "0.1.0",
+      "dependencies": {
+        "@inferdi/elysia": "workspace:*",
+        "@inferdi/inferdi": "^6.1.0",
+        "elysia": "catalog:",
       },
       "peerDependencies": {
         "typescript": "^7",
@@ -49,6 +103,14 @@
   },
   "packages": {
     "@elysia/html": ["@elysia/html@1.4.1", "", { "dependencies": { "@kitajs/html": "^4.1.0", "@kitajs/ts-html-plugin": "^4.0.1" }, "peerDependencies": { "elysia": ">= 1.4.0" } }, "sha512-U9/8Au1hZBaqW16AKhoT+e3/QC9Y4wp5iplej6b3BnAiO37pqbByaTHpGIC2MoTE5EfVwSyeLECQDn/jiGjBJQ=="],
+
+    "@elysiax/cli": ["@elysiax/cli@workspace:packages/cli"],
+
+    "@elysiax/core": ["@elysiax/core@workspace:packages/elysiax"],
+
+    "@inferdi/elysia": ["@inferdi/elysia@workspace:packages/elysia"],
+
+    "@inferdi/inferdi": ["@inferdi/inferdi@6.1.0", "", {}, "sha512-lbiWw4l+iGjm5j3HYajJNmGlw2zvv2340edfTqlUaMakJxlHij0h82DNCrKVzO1D0xG0easACotEIXhUw9ToyA=="],
 
     "@kitajs/html": ["@kitajs/html@4.2.13", "", { "dependencies": { "csstype": "^3.1.3" } }, "sha512-o+8e61EsoLDPTP7rsPkYolca1YFybHuxU2Lr5fWDZCUkYT/6uBlVkvnZUdCXMQKentJL9dxwpR8/xK2Q+U4LhA=="],
 
@@ -122,6 +184,14 @@
 
     "@typescript/typescript-win32-x64": ["@typescript/typescript-win32-x64@7.0.2", "", { "os": "win32", "cpu": "x64" }, "sha512-0BQ3HkAHHlKLSp1qRvf3SUhGpGsDuhB/jgFw75guyqbxJqEaS0Cw/VFO8i2nHglJUzQCRtMMR/IBAKE3ETMC4g=="],
 
+    "@visulima/cerebro": ["@visulima/cerebro@3.1.2", "", { "dependencies": { "@visulima/colorize": "2.1.1", "@visulima/tabular": "4.1.0", "fastest-levenshtein": "^1.0.16" }, "peerDependencies": { "@bomb.sh/tab": ">=0.0.22", "@visulima/boxen": "5.0.0", "@visulima/find-cache-dir": "3.0.1", "@visulima/pail": "5.0.0", "github-slugger": ">=2.0.0" }, "optionalPeers": ["@bomb.sh/tab", "@visulima/boxen", "@visulima/find-cache-dir", "@visulima/pail", "github-slugger"], "os": [ "linux", "win32", "darwin", ] }, "sha512-vQgFGxp6Bu9RuCII3nDmx++/JWvvqRNlrU0CTx0/Vst94LwfSeC4H0kGRtjESSZiCGBL5NJNdu5qFpQU8BWESQ=="],
+
+    "@visulima/colorize": ["@visulima/colorize@2.1.1", "", { "dependencies": { "@visulima/is-ansi-color-supported": "4.0.0" }, "os": [ "linux", "win32", "darwin", ] }, "sha512-oz8t10iI6g1Jt8W+5HEhTYqvMX0H7ts2AvjvosjIS4oA8wMEA9XDz4dIb/8zQhTBC9JqzgYtflqr7sFxFNfs9Q=="],
+
+    "@visulima/is-ansi-color-supported": ["@visulima/is-ansi-color-supported@4.0.0", "", {}, "sha512-GFTPtUCVoFlrtO/VrEz6Bhm1VkRPWJ1fp7P/LoBAPN6gUiBSsDMTp2N58/G+irr843RP/IP1pAUULbBi7gG8TA=="],
+
+    "@visulima/tabular": ["@visulima/tabular@4.1.0", "", {}, "sha512-fIzyHilmtFwEBfS9Tmc/G/PY77yu7+SrJfXljhFdWOW4K881wFjIuVd1bvydAqPJ3a0kgQ11iP4i50gG4JXtJQ=="],
+
     "@workspace/htmx": ["@workspace/htmx@workspace:packages/htmx"],
 
     "ansi-regex": ["ansi-regex@6.3.0", "", {}, "sha512-WpDfL7NO6j7tH88IDBNVdUJxDh9nmCteAVW9dsep846XdwF4naCBK+/tGLX3KJgcpgMRXCFlTM2hKGoK9FsdrQ=="],
@@ -142,6 +212,8 @@
 
     "csstype": ["csstype@3.2.3", "", {}, "sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ=="],
 
+    "demo": ["demo@workspace:apps/demo"],
+
     "deuri": ["deuri@3.0.0", "", {}, "sha512-3rbQr245VesQGHyzUlWmpv3WihImbLT5NBe/mrgsgEvc7aWTYEpDhER8Z3RsdiDSYw1kxQo0kU9fpociUu77/w=="],
 
     "elysia": ["elysia@2.0.0-beta.14", "", { "dependencies": { "deuri": "^3.0.0", "memoirist": "1.2.2" }, "peerDependencies": { "@types/bun": ">= 1.3.0", "exact-mirror": ">= 1.2.6", "openapi-types": ">= 12.0.0", "typebox": ">= 1.3.0", "typescript": ">= 5.7.0" }, "optionalPeers": ["@types/bun", "typescript"] }, "sha512-7s1eL0pSlX7iNlX6Quf1m+zdltYXddJnYo+PEcmqeMr2MAl+wdc7mq004mNndICdw2pDrozhCZcMF15VjYM8Cw=="],
@@ -151,6 +223,8 @@
     "escalade": ["escalade@3.2.0", "", {}, "sha512-WUj2qlxaQtO4g6Pq5c29GTcWGDyd8itL8zTlipgECz3JesAiiOKotd8JU6otB3PACgG6xkJUyVhboMS+bje/jA=="],
 
     "exact-mirror": ["exact-mirror@1.2.6", "", { "peerDependencies": { "typebox": ">= 1.1.0" }, "optionalPeers": ["typebox"] }, "sha512-EGx81nhFP1GE94coJsz94FLzdxWrnkNCJdfdX44rbd7pVcAotWzDlBJUC7yy1Ae7d7dYKpoTtZ1jCAIz2IVtfA=="],
+
+    "fastest-levenshtein": ["fastest-levenshtein@1.0.16", "", {}, "sha512-eRnCtTTtGZFpQCwhJiUOuxPQWRXVKYDn0b2PeHfXL6/Zi53SLAzAHfVhVWK2AryC/WH05kGfxhFIPvTF0SXQzg=="],
 
     "get-caller-file": ["get-caller-file@2.0.5", "", {}, "sha512-DyFP3BM/3YHTQOCUL/w0OZHR0lpKeGrxotcHWcqNEdnltqFwXVfhEBQ94eIo34AfQpo0rGki4cyIiftY06h2Fg=="],
 

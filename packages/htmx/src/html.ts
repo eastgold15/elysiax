@@ -40,25 +40,20 @@ export function html(options: HtmlOptions = {}) {
     })
     .as('global')
 
-
   if (options.autoDetect)
     instance.mapResponse(
-
       function handlerPossibleHtml({ responseValue: value, set }) {
+        // 简单 html 字符串,或 @kitajs/html 的流
         if (
           !(
-            // Simple html string
-            (
-              isHtml(value) ||
-              // @kitajs/html stream
-              (value instanceof Readable && 'rid' in value)
-            )
+            isHtml(value) ||
+            (value instanceof Readable && 'rid' in value)
           )
         )
           return
 
         return handleHtml(value, options, 'content-type' in set.headers)
       }
-    )
+    ).as('global')
   return instance
 }

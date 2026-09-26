@@ -1,3 +1,5 @@
+import type { Component } from "@workspace/htmx";
+
 export { moduleAggregator } from "./plugin";
 export type { ModuleAggregatorOptions } from "./plugin";
 export { elysiaxAPI, inferdiElysia } from "./di";
@@ -14,6 +16,6 @@ export interface ModuleManifest {
 /** 聚合产物 modules.gen 中每个模块的形态 */
 export interface ModuleEntry {
   manifest: ModuleManifest;
-  ui?: string;
+  ui?: Component<any>;
   controller?: import("elysia").Elysia;
 }

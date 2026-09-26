@@ -1,8 +1,8 @@
 import { Elysia } from "elysia";
-import ui from "./order.ui.html" with { type: "text" };
+import OrderUi from "./order.ui";
 
 export const orderController = new Elysia({ prefix: "/orders" })
-  .get("/ui", () => ui)
+  .get("/ui", () => <OrderUi />)
   .get("/:id/user-name", ({ di, params }: any) =>
     di.get("orderService").getUserName(Number(params.id)),
   );

@@ -10,10 +10,14 @@
   },
   "dependencies": {
     "@inferdi/inferdi": "^6.1.0",
+    "@workspace/htmx": "workspace:*",
     "elysia": "catalog:",
     "@inferdi/elysia": "workspace:*"
   },
   "peerDependencies": {
     "typescript": "^7"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
   }
 }

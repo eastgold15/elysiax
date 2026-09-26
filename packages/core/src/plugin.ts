@@ -9,7 +9,7 @@ export interface ModuleAggregatorOptions {
 
 /**
  * 模块聚合插件：扫描 `<dir>/<name>/module.json`，把每个模块的
- * manifest / <name>.ui.html / <name>.controller.ts 聚合进 `modules.gen`。
+ * manifest / <name>.ui.tsx / <name>.controller.tsx 聚合进 `modules.gen`。
  *
  * 注意：Bun 运行时只有「路径形态」的 specifier 会进插件的 onResolve，
  * `virtual:modules` 这类裸包名会被跳过。所以应用侧用真实占位文件
@@ -45,8 +45,8 @@ export function moduleAggregator(options: ModuleAggregatorOptions = {}): BunPlug
         const exports: string[] = [];
 
         const suffixMap = {
-          ui: ".ui.html",
-          controller: ".controller.ts",
+          ui: ".ui.tsx",
+          controller: ".controller.tsx",
         } as const;
 
         for (const manifest of manifests) {
@@ -70,9 +70,9 @@ export function moduleAggregator(options: ModuleAggregatorOptions = {}): BunPlug
                   `import { ${camel}Controller as ${importName} } from ${JSON.stringify(filePath)};`,
                 );
               } else {
-                // .ui.html 按纯文本导入（Bun 默认会把 .html 当全栈页面对象）
+                // .ui.tsx 约定为默认导出组件：export default function XxxUi(...)
                 imports.push(
-                  `import ${importName} from ${JSON.stringify(filePath)} with { type: "text" };`,
+                  `import ${importName} from ${JSON.stringify(filePath)};`,
                 );
               }
               entries.push(`    ${key}: ${importName},`);

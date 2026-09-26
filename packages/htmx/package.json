@@ -1,24 +1,33 @@
 {
   "name": "@workspace/htmx",
-  "module": "index.ts",
+  "module": "src/index.ts",
   "type": "module",
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@kitajs/ts-html-plugin": "^4.0.1"
   },
   "exports": {
     ".": {
       "import": "./src/index.ts",
       "types": "./src/index.ts"
+    },
+    "./htmx": {
+      "import": "./src/htmlx.ts",
+      "types": "./src/htmlx.ts"
+    },
+    "./hotwire": {
+      "import": "./src/hotwire.ts",
+      "types": "./src/hotwire.ts"
     }
   },
-  "scripts": {},
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
   "peerDependencies": {
-    "typescript": "^7",
     "elysia": "catalog:"
   },
   "dependencies": {
-    "@kitajs/html": "^4.1.0",
-    "@kitajs/ts-html-plugin": "^4.0.1"
+    "@kitajs/html": "^4.1.0"
   },
   "private": true
 }

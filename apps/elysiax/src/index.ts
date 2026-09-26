@@ -3,7 +3,7 @@ import { serve } from "bun";
 import index from "./index.html";
 import { modules } from "./modules.gen";
 import { buildRootContainer } from "./shared/container";
-import { elysiaxAPI } from "@elysiax/core/di";
+import { elysiaxAPI } from "@elysiax/core";
 
 const root = buildRootContainer();
 

@@ -13,7 +13,8 @@
     "bun-plugin-tailwind": "^0.1.2",
     "elysia": "catalog:",
     "tailwindcss": "^4.1.11",
-    "@inferdi/elysia": "workspace:*"
+    "@inferdi/elysia": "workspace:*",
+    "@workspace/htmx": "workspace:*"
   },
   "devDependencies": {
     "@types/bun": "latest"

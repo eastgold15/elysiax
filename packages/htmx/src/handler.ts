@@ -1,4 +1,4 @@
-import { Readable } from 'stream'
+import { Readable } from 'node:stream'
 import type { HtmlOptions } from './options'
 import { isHtml, isTagHtml } from './utils'
 
@@ -11,6 +11,10 @@ export function handleHtml(
   if (value instanceof Promise)
     return value.then((v) => handleHtml(v, options, hasContentType))
 
+  const headers = hasContentType
+    ? undefined
+    : { headers: { 'content-type': options.contentType! } }
+
   // Simple string use cases
   if (typeof value === 'string') {
     if (
@@ -21,16 +25,13 @@ export function handleHtml(
     )
       value = '<!doctype html>' + value
 
-    return new Response(
-      value,
-      hasContentType
-        ? undefined
-        : { headers: { 'content-type': options.contentType! } }
-    )
+    return new Response(value, headers)
   }
 
   // Stream use cases
-  let stream = Readable.toWeb(value)
+  let stream = Readable.toWeb(value) as unknown as ReadableStream<
+    string | Uint8Array
+  >
 
   // We can convert to a readable stream with StreamTransform
   if (options.autoDoctype) {
@@ -41,26 +42,21 @@ export function handleHtml(
         transform(chunk, controller) {
           let str = chunk!.toString()
 
-          if (
-            first &&
-            isTagHtml(str) &&
-            // Avoids double adding !doctype or adding to non root html tags.
-            isTagHtml(str)
-          ) {
+          // Only ever inspect the very first chunk — checking later chunks
+          // risks injecting a doctype mid-document. (The first chunk of a
+          // stream doesn't end with '>', so isHtml() would never match;
+          // isTagHtml() alone is the right test here.)
+          if (first) {
             first = false
-            str = '<!doctype html>' + str
+
+            if (isTagHtml(str)) str = '<!doctype html>' + str
           }
 
           controller.enqueue(str)
         }
-      }) as any
+      })
     )
   }
 
-  return new Response(
-    stream as any,
-    hasContentType
-      ? undefined
-      : { headers: { 'content-type': options.contentType! } }
-  )
+  return new Response(stream as any, headers)
 }

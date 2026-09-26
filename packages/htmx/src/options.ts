@@ -31,7 +31,7 @@ export interface HtmlOptions {
    * app.get('/', ({ html }) => html('<html></html>')
    * ```
    *
-   * @default true
+   * @default 'full'
    */
   autoDoctype?: boolean | 'full'
 

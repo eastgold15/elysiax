@@ -26,5 +26,5 @@ export function isHtml(this: void, value?: any): value is string {
  * casing**.
  */
 export function isTagHtml(this: void, value: string) {
-  return value.trimStart().slice(0, 5).startsWith('<html')
+  return value.trimStart().slice(0, 5).toLowerCase() === '<html'
 }

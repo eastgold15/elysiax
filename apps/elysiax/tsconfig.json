@@ -9,7 +9,7 @@
     "jsxImportSource": "@kitajs/html",
     "plugins": [{ "name": "@kitajs/ts-html-plugin" }],
     "allowJs": true,
-    "types": ["bun", "@kitajs/html/htmx"],
+    "types": ["bun"],
 
     // Bundler mode
     "moduleResolution": "bundler",

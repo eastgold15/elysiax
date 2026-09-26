@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "bun --hot src/index.ts",
-    "start": "bun src/index.ts"
+    "start": "bun src/index.ts",
+    "build": "bun run build.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@elysiax/core": "workspace:*",

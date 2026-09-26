@@ -5,35 +5,29 @@ import { UserService } from "../../modules/user/user.service";
 import { OrderRepository } from "../../modules/order/order.repository";
 import { OrderService } from "../../modules/order/order.service";
 
+// 限界上下文：order 不依赖 user；user 通过 Lazy 伴随键单向查询订单。
+// 单向依赖可以在一条链式调用中线性注册，全程类型安全（无 any）。
 export function buildRootContainer() {
-  const base = new Container()
+  return new Container()
     // 基础设施
     .registerValue("db", db)
     .registerClass("userRepository", UserRepository, ["db"], "singleton")
-    .registerClass("orderRepository", OrderRepository, ["db"], "singleton");
-
-  // userService ⇄ orderService 互相通过 Lazy 伴随键延迟解析。
-  // InferDI 6.1 的类型是线性 builder：依赖键必须在注册时已存在于容器类型中，
-  // 一条链式调用无法前向引用对方尚未注册的 *Lazy 键（运行时完全支持）。
-  // 因此这里用 any 桥接，仅牺牲这两个注册的编译期键检查。
-  const c = base as any;
-  return c
-    // user 模块：单例，同时生成 Lazy 伴随键
-    .registerClass(
-      "userService",
-      UserService,
-      ["userRepository", "orderServiceLazy"], // ← 依赖 Lazy<OrderService>
-      "singleton",
-      "userServiceLazy", // ← 生成 'userServiceLazy' 伴随键
-    )
-    // order 模块：单例
+    .registerClass("orderRepository", OrderRepository, ["db"], "singleton")
+    // order 模块先注册，生成 'orderServiceLazy' 伴随键
     .registerClass(
       "orderService",
       OrderService,
-      ["orderRepository", "userServiceLazy"], // ← 依赖 Lazy<UserService>
+      ["orderRepository"],
       "singleton",
-      "orderServiceLazy", // ← 生成 'orderServiceLazy' 伴随键
-    ) as Container<any>;
+      "orderServiceLazy",
+    )
+    // user 模块单向依赖 Lazy<OrderService>
+    .registerClass(
+      "userService",
+      UserService,
+      ["userRepository", "orderServiceLazy"],
+      "singleton",
+    );
 }
 
 export type RootContainer = ReturnType<typeof buildRootContainer>;

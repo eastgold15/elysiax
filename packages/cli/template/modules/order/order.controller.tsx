@@ -1,8 +1,17 @@
-import { Elysia } from "elysia";
+import { elysiaxModule } from "@elysiax/core";
 import OrderUi from "./order.ui";
+import type { UserService } from "../user/user.service";
 
-export const orderController = new Elysia({ prefix: "/orders" })
+export const orderController = elysiaxModule<{ userService: UserService }>({
+  prefix: "/orders",
+})
   .get("/ui", () => <OrderUi />)
-  .get("/:id/user-name", ({ di, params }) =>
-    di.get("orderService").getUserName(Number(params.id)),
-  );
+  // 跨限界上下文的组合（订单 → 用户名字）放在应用层，service 保持单向依赖
+  .get("/:id/user-name", ({ di, params }) => {
+    const id = Number(params.id);
+    const user = di
+      .get("userService")
+      .listUsers()
+      .find((u) => u.id === id);
+    return user?.name ?? "Unknown";
+  });

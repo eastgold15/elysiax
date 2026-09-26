@@ -1,22 +1,11 @@
-import type { Lazy } from "@inferdi/inferdi";
 import type { OrderRepository } from "./order.repository";
-import type { UserService } from "../user/user.service";
 
+// order 限界上下文：只关心订单，不认识 user 上下文的概念。
+// “订单属于哪个用户 / 用户叫什么” 这类跨上下文组合由 controller（应用层）完成。
 export class OrderService {
-  constructor(
-    private orderRepository: OrderRepository,
-    private userServiceLazy: Lazy<UserService>, // ← 延迟解析
-  ) {}
+  constructor(private orderRepository: OrderRepository) {}
 
   listByUser(userId: number) {
     return this.orderRepository.findByUser(userId);
-  }
-
-  getUserName(userId: number) {
-    const user = this.userServiceLazy
-      .get()
-      .listUsers()
-      .find((u) => u.id === userId);
-    return user?.name ?? "Unknown";
   }
 }

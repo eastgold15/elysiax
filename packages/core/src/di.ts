@@ -1,10 +1,41 @@
 import { Elysia } from "elysia";
 import { inferdiElysia } from "@inferdi/elysia";
 import { html } from "@workspace/htmx";
-import type { Container } from "@inferdi/inferdi";
+import type { Container, Lifetime, Spec } from "@inferdi/inferdi";
 import type { ModuleEntry } from "./index";
 
 export { inferdiElysia } from "@inferdi/elysia";
+
+/** 把「服务名 → 服务类型」映射成 InferDI 容器的依赖图谱 */
+type ServiceSpecs<S extends Record<string, unknown>> = {
+  [K in keyof S]: Spec<S[K], Lifetime>;
+};
+
+/**
+ * 定义一个模块 controller：与 `new Elysia()` 相同，但上下文里的 `di`
+ * （每请求一个 InferDI scope）带有类型 —— 泛型参数声明本模块需要
+ * 从容器解析的服务（对应 module.json 的 requires / provides）。
+ *
+ * 运行时的 `di` 由 `elysiaxAPI` 在挂载时注入（derive 沿同一实例链传播），
+ * 这里只补充类型，不产生任何运行时行为。
+ *
+ * ```ts
+ * export const orderController = elysiaxModule<{ userService: UserService }>(
+ *   { prefix: "/orders" },
+ * ).get("/:id/user-name", ({ di, params }) =>
+ *   di.get("userService").listUsers()...
+ * );
+ * ```
+ */
+export function elysiaxModule<S extends Record<string, unknown>>(
+  options?: ConstructorParameters<typeof Elysia>[0],
+) {
+  return new Elysia(options) as unknown as Elysia<
+    "",
+    "local",
+    { decorator: {}; store: {}; derive: { di: Container<ServiceSpecs<S>> } }
+  >;
+}
 
 /**
  * 创建 DI 插件并挂载所有模块的 controller / ui 片段。
@@ -33,7 +64,7 @@ export function elysiaxAPI<T extends Record<string | symbol, any>>(
 ) {
   const api = inferdiElysia({ container: root }).use(html());
 
-  let app = api as any;
+  let app = api
   for (const mod of Object.values(modules)) {
     if (mod.controller) {
       app = app.use(mod.controller);
@@ -43,5 +74,5 @@ export function elysiaxAPI<T extends Record<string | symbol, any>>(
       app = app.use(new Elysia().get(`${route}/ui`, () => Ui({})));
     }
   }
-  return app as typeof api;
+  return app
 }

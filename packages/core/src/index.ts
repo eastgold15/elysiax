@@ -2,7 +2,7 @@ import type { Component } from "@workspace/htmx";
 
 export { moduleAggregator } from "./plugin";
 export type { ModuleAggregatorOptions } from "./plugin";
-export { elysiaxAPI, inferdiElysia } from "./di";
+export { elysiaxAPI, elysiaxModule, inferdiElysia } from "./di";
 
 /** 模块清单（modules/<name>/module.json） */
 export interface ModuleManifest {

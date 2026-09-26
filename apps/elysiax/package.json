@@ -7,7 +7,9 @@
     "dev": "bun --hot src/index.ts",
     "start": "NODE_ENV=production bun src/index.ts",
     "build": "bun run build.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "compile": "bun compile.ts",
+    "compile:windows": "bun compile-windows.ts"
   },
   "dependencies": {
     "@elysiax/core": "workspace:*",
@@ -19,7 +21,8 @@
     "tailwindcss": "^4.1.11"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "webview-bun": "^2.4.0"
   },
   "peerDependencies": {
     "typescript": "^7"

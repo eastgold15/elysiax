@@ -41,3 +41,7 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 
 **/.turbo/**
+packaging/pkg/
+packaging/src/
+packaging/elysiax-app
+packaging/*.pkg.tar.zst

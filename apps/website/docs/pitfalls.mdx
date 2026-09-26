@@ -1,0 +1,93 @@
+---
+title: 踩坑记录
+description: elysiax 从 demo 到桌面应用打包过程中踩过的坑与解法（Bun / Elysia 2.0 / InferDI / webview-bun / Arch 打包）。
+---
+
+# 踩坑记录
+
+elysiax 落地过程中遇到的非显然问题与最终解法，按主题分组。
+
+## Bun 运行时与打包器
+
+### 1. 运行时插件不拦截 bare / virtual 模块名
+
+最初设计用 `virtual:modules` 虚拟模块聚合所有模块。实测：**Bun 运行时插件的 `onResolve` 只对路径形态的 specifier 生效**（`./`、`~/` 等），`virtual:modules`、bare 包名根本不会触发（用 `/.*/` filter 探针验证过）。
+
+**解法**：落一个真实的 `src/modules.gen.ts` stub 文件（同时天然获得 TS 类型——ambient module 声明不支持相对路径），插件负责改写它的加载内容。
+
+### 2. `Bun.Glob` 只匹配文件，不匹配目录
+
+`new Glob("modules/*/")` 扫不到任何东西。要扫模块目录就直接匹配里面的文件：`modules/*/module.json`。
+
+### 3. bunfig.toml 的 `preload` 必须放在文件顶部
+
+TOML 的键值归属最近的 `[table]`。`preload` 写在 `[serve.static]` 之后就变成了那个表的键，静默失效。
+
+### 4. `Bun.build` 不吃 bunfig 的运行时配置
+
+`build.ts` 里两个坑：默认 browser 构建会拒绝 `import { serve } from "bun"`（要 `target: "bun"`）；bunfig 的 preload/static 插件对 `Bun.build` 不生效，必须手动传 `plugins: [tailwind, moduleAggregator()]`。
+
+### 5. `bun build --compile` 的二进制里 preload 依然执行
+
+编译产物中模块已在构建期内联，但 bunfig 的 `preload = ["./src/plugin.ts"]` 仍会跑，此时 `@elysiax/core/plugin` 无法解析。
+
+**解法**：preload 改成 try/catch 动态 import，失败即静默（编译产物不需要运行时聚合）。
+
+## Elysia 2.0
+
+### 6. 破坏性变更清单（1.x → 2.0）
+
+- 路由签名 `.post(path, handler, hook)` → `(path, hook, handler)`，旧顺序直接抛错
+- `onError` → `error`、`onAfterResponse` → `afterResponse`、`resolve` 并入 `derive`
+- scope 参数 `{ as: "scoped" }` → 字符串 `'plugin'`
+- 类泛型变为 `Elysia<BasePath, Scope, Singleton, Definitions, Metadata, Routes, Ephemeral, Volatile>`
+
+### 7. `derive` 不跨 `.use()` 兄弟插件边界
+
+DI 插件挂到 app 上、模块 controller 再 `.use()` 上去时，controller 里拿不到 `di`。但 derive **沿同一实例链传播**。
+
+**解法**：`elysiaxAPI()` 让 DI 插件实例自己去 `.use()` 各模块 controller，再整体挂进外层 app。模块代码的类型则由 `elysiaxModule<S>()` 门面补（框架内部一次断言，用户代码零 `any`）。
+
+### 8. `@inferdi/elysia` 面向 Elysia 1.x，2.0 下直接崩
+
+`withValidatedScope.onError is not a function`。
+
+**解法**：把适配器复制到 `packages/elysia` 本地移植（API 改名 + 新泛型 + 结构化 RequestContext 替代 elysia 的 Context 导入），每请求 InferDI scope 得以保留。
+
+## InferDI
+
+### 9. 线性 builder 类型无法表达双向 Lazy 循环
+
+`registerClass` 的 `deps` 只允许引用**已注册**的键。`userService ⇄ orderService` 互相依赖对方的 `*Lazy` 伴随键时，无论注册顺序如何，类型系统必然拒绝（运行时其实支持）。`Container<any>` 也不行——`NoKeyOverlap` 在 `keyof any` 下坍缩成 `never`。
+
+**解法（架构层面）**：不做双向 Lazy。按限界上下文把依赖改单向（user → order），跨上下文组合上移到 controller——双向循环本质上是上下文边界没划清。
+
+## TypeScript
+
+### 10. `@kitajs/html/htmx` 的 types 指令在 TS7 下失效
+
+tsconfig `types: ["@kitajs/html/htmx"]` 报 TS2688（子路径无法通过 `./*` 恒等通配导出解析，TS5.9 同样失败）。当前 app 不用 TSX 的 hx-* 属性，直接 `types: ["bun"]`。
+
+## 桌面应用（webview-bun）
+
+### 11. `Bun.WebView` 不是桌面窗口
+
+Bun 1.4 的 `Bun.WebView` 是**无头浏览器**（自动化/测试/爬虫，类似 Puppeteer），macOS 用 WKWebView、其余平台走 CDP 驱动 Chrome——没有窗口概念。做窗口要用 `webview-bun`（Linux: WebKitGTK 6，Windows: 预装的 WebView2）。
+
+### 12. `webview.run()` 是阻塞式 FFI 事件循环
+
+与 Bun 的 HTTP server **同线程互斥**：同进程里 server 直接不响应。Worker 方案也不行——**Worker 里 bunfig preload 不生效，`plugin()` 注册也不拦截 worker 的模块解析**（模块列表为空，全部 404）。
+
+**解法**：server 放独立子进程。开发时 spawn `bun src/index.ts`；编译后 spawn 自身加 `--server` 参数，入口按 argv 分流（漏了这个分支会导致无限自 spawn 卡死）。窗口关闭后 `server.kill()`。
+
+### 13. makepkg 的 strip 会毁掉 bun compile 二进制
+
+症状：安装后运行只打印 Bun 帮助文本——strip / debug 分离把二进制尾部的内嵌负载剥掉了。
+
+**解法**：PKGBUILD 加 `options=('!strip' '!debug')`。
+
+### 14. 各平台窗口依赖
+
+- Linux：`webkitgtk-6.0` + `gtk4`（PKGBUILD 已声明 depends）
+- Windows：WebView2（Win10/11 预装），交叉编译 `compile: { target: "bun-windows-x64", windowsIcon, windowsHideConsole: true }`
+- 窗口图标在 Linux 上不来自进程，而来自 `.desktop` 文件 + hicolor 图标，打包时安装到 `/usr/share/icons/hicolor/256x256/apps/`

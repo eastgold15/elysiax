@@ -1,0 +1,25 @@
+# elysiax — Bun + Elysia + htmx 模块化桌面应用
+# 本地试用：makepkg -si    发布 AUR 后：yay -S elysiax-bin
+pkgname=elysiax-bin
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="elysiax modular app (Bun + Elysia + htmx, webview window)"
+arch=('x86_64')
+url="https://github.com/eastgold15/elysiax"
+license=('MIT')
+# webview-bun v2 在 Linux 上基于 WebKitGTK 6
+depends=('webkitgtk-6.0' 'gtk4')
+# bun --compile 的内嵌负载会被 strip/debug 分离破坏，必须禁用
+options=('!strip' '!debug')
+source=("elysiax-app"
+        "elysiax.desktop"
+        "elysiax.png")
+sha256sums=('SKIP' 'SKIP' 'SKIP')
+
+package() {
+  install -Dm755 "$srcdir/elysiax-app" "$pkgdir/usr/bin/elysiax"
+  install -Dm644 "$srcdir/elysiax.desktop" \
+    "$pkgdir/usr/share/applications/elysiax.desktop"
+  install -Dm644 "$srcdir/elysiax.png" \
+    "$pkgdir/usr/share/icons/hicolor/256x256/apps/elysiax.png"
+}

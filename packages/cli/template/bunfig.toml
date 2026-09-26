@@ -1,4 +1,3 @@
-preload = ["./src/plugin.ts"]
 
 [serve.static]
 plugins = ["bun-plugin-tailwind"]

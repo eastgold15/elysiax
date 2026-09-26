@@ -25,7 +25,9 @@
     "noImplicitOverride": true,
 
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      // webview-bun 发布的 .ts 源与当前 bun-types 不兼容，映射到本地最小声明
+      "webview-bun": ["./src/types/webview-bun.d.ts"]
     },
 
     // Some stricter flags (disabled by default)

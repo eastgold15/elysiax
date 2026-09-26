@@ -4,10 +4,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun --hot src/index.ts",
+    "dev": "elysiax dev",
     "start": "bun src/index.ts",
     "build": "bun run build.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "elysiax gen && tsc --noEmit",
+    "gen": "elysiax gen"
   },
   "dependencies": {
     "@elysiax/core": "workspace:*",
@@ -19,6 +20,7 @@
     "@workspace/htmx": "workspace:*"
   },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@elysiax/cli": "workspace:*"
   }
 }

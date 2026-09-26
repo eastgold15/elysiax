@@ -91,3 +91,27 @@ Bun 1.4 的 `Bun.WebView` 是**无头浏览器**（自动化/测试/爬虫，类
 - Linux：`webkitgtk-6.0` + `gtk4`（PKGBUILD 已声明 depends）
 - Windows：WebView2（Win10/11 预装），交叉编译 `compile: { target: "bun-windows-x64", windowsIcon, windowsHideConsole: true }`
 - 窗口图标在 Linux 上不来自进程，而来自 `.desktop` 文件 + hicolor 图标，打包时安装到 `/usr/share/icons/hicolor/256x256/apps/`
+
+## .elysiax/ 代码生成（.next 模式）
+
+### 15. 虚拟插件不如真实生成文件
+
+旧的 `moduleAggregator` Bun 插件 + `modules.gen.ts` stub 方案在四个场景下各踩一次坑（见 #1/#4/#5/#12）：运行时解析、`Bun.build`、`--compile` 二进制、Worker。改成 **codegen 生成真实文件到 `.elysiax/`**（类似 `.next/`）后这些坑全部消失——生成物是普通 TS，所有工具链天然兼容。装配顺序（拓扑排序）与 lazyKey 伴随键也由生成器从依赖声明推导，不再手写。
+
+### 16. `bunx elysiax dev` 跑起来的"应用"是系统里安装的桌面程序
+
+排查 log 与代码对不上时发现：`bunx` 在本地 `node_modules/.bin` 找不到 `elysiax` 就回退到 PATH，命中了之前 `pacman` 安装的 `/usr/bin/elysiax`（桌面二进制，忽略 argv 直接起服务）。**workspace 包的 bin 只有在被某个包依赖时才会链接**——app 需要把 `@elysiax/cli` 加进自己的 devDependencies。这也是一个教训：系统里装过同名命令后要警惕 PATH 遮蔽。
+
+### 17. cerebro 的 execute 返回即退出，后台 watcher 全灭
+
+CLI 的 `dev` 命令里 spawn 了 `bun --hot` 子进程并注册了 `setInterval` watcher，但 `execute()` 一返回 cerebro 就退出进程，watcher 死掉、只剩孤儿 server。症状：文件改了不重新生成。
+
+**解法**：`await new Promise(r => child.on("exit", r))` 把 execute 挂到子进程生命周期上。
+
+### 18. typecheck 依赖代码生成的产出
+
+`.elysiax/` 不入库，clone 后直接 `tsc` 会因找不到 `../.elysiax` 报错。各 app 的 typecheck 脚本改为 `elysiax gen && tsc --noEmit`（turbo 任务图里先生成再检查）。
+
+### 19. webview-bun 发布的是 .ts 源，skipLibCheck 管不到
+
+它的 `Pointer` 类型与当前 bun-types 不兼容（TS2322），而 `skipLibCheck` 只跳过 `.d.ts`。用 tsconfig `paths` 把 `webview-bun` 映射到本地最小声明文件解决（`src/types/webview-bun.d.ts`）。

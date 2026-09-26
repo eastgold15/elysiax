@@ -41,7 +41,12 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
 
 **/.turbo/**
-packaging/pkg/
-packaging/src/
-packaging/elysiax-app
-packaging/*.pkg.tar.zst
+
+# 代码生成产物（elysiax gen 重新生成，勿入库）
+.elysiax/
+
+# Arch 打包产物
+**/packaging/pkg/
+**/packaging/src/
+**/packaging/elysiax-app
+**/packaging/*.pkg.tar.zst

@@ -150,4 +150,73 @@ cli.addCommand({
   },
 });
 
+// ─────────────────────────────────────────────
+// elysiax gen — 生成 .elysiax/（模块清单 + 容器装配）
+// ─────────────────────────────────────────────
+cli.addCommand({
+  name: "gen",
+  description: "扫描 modules/ 与 src/infra.di.ts，生成 .elysiax/ 装配代码",
+  execute: async ({ logger }) => {
+    const { codegen } = await import("@elysiax/core");
+    const files = await codegen(process.cwd());
+    for (const f of files) logger.info(`✅ ${f}`);
+  },
+});
+
+// ─────────────────────────────────────────────
+// elysiax dev — codegen + bun --hot，并 watch 模块声明变化自动重生成
+// ─────────────────────────────────────────────
+cli.addCommand({
+  name: "dev",
+  description: "开发模式：生成 .elysiax/ 后启动 bun --hot，模块声明变化自动重生成",
+  execute: async ({ logger }) => {
+    const { codegen } = await import("@elysiax/core");
+    const { Glob } = await import("bun");
+    const { spawn } = await import("node:child_process");
+
+    await codegen(process.cwd());
+    logger.info("✅ .elysiax/ 已生成");
+
+    const child = spawn("bun", ["--hot", "src/index.ts"], {
+      stdio: "inherit",
+      cwd: process.cwd(),
+    });
+
+    // 轮询模块声明（module.json / *.di.ts / infra.di.ts）变化 → 重新生成，
+    // .elysiax/ 文件变化会触发 bun --hot 重载
+    const snapshot = async () => {
+      const times: string[] = [];
+      for (const pattern of [
+        "modules/*/module.json",
+        "modules/*/*.di.ts",
+        "src/infra.di.ts",
+      ]) {
+        for await (const f of new Glob(pattern).scan({ cwd: process.cwd() })) {
+          times.push(`${f}:${(await Bun.file(f).lastModified)}`);
+        }
+      }
+      return times.join("|");
+    };
+    let last = await snapshot();
+    setInterval(async () => {
+      const now = await snapshot();
+      if (now !== last) {
+        last = now;
+        try {
+          await codegen(process.cwd());
+          logger.info("🔄 模块声明变化，.elysiax/ 已重新生成");
+        } catch (error) {
+          logger.error((error as Error).message);
+        }
+      }
+    }, 500);
+
+    // 保持 CLI 进程存活（否则 execute 返回后 cerebro 退出，watcher 随之死亡）
+    const code = await new Promise<number>((resolve) =>
+      child.on("exit", (c) => resolve(c ?? 0)),
+    );
+    process.exit(code);
+  },
+});
+
 await cli.run();

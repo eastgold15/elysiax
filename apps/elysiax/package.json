@@ -4,10 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun --hot src/index.ts",
+    "dev": "elysiax dev",
     "start": "NODE_ENV=production bun src/index.ts",
     "build": "bun run build.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "elysiax gen && tsc --noEmit",
     "compile": "bun compile.ts",
     "compile:windows": "bun compile-windows.ts"
   },
@@ -21,6 +21,7 @@
     "tailwindcss": "^4.1.11"
   },
   "devDependencies": {
+    "@elysiax/cli": "workspace:*",
     "@types/bun": "latest",
     "webview-bun": "^2.4.0"
   },

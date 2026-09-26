@@ -67,11 +67,13 @@ export function elysiaxAPI<T extends Record<string | symbol, any>>(
   let app = api
   for (const mod of Object.values(modules)) {
     if (mod.controller) {
-      app = app.use(mod.controller);
+      // controller 是 any 泛型的 Elysia（各模块 derive 类型不同），
+      // 挂载结果在框架边界内断言回 api 链类型
+      app = app.use(mod.controller) as unknown as typeof app;
     } else if (mod.ui) {
       const route = mod.manifest.route ?? `/${mod.manifest.name}`;
       const Ui = mod.ui;
-      app = app.use(new Elysia().get(`${route}/ui`, () => Ui({})));
+      app = app.use(new Elysia().get(`${route}/ui`, () => Ui({}))) as unknown as typeof app;
     }
   }
   return app

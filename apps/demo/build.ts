@@ -1,5 +1,6 @@
+import { codegen } from "@elysiax/core";
+await codegen();
 import tailwind from "bun-plugin-tailwind";
-import { moduleAggregator } from "@elysiax/core";
 import { rm } from "node:fs/promises";
 import path from "node:path";
 
@@ -12,8 +13,8 @@ const result = await Bun.build({
   entrypoints,
   outdir,
   target: "bun",
+  plugins: [tailwind],
   compile: 'bun-linux-x64',
-  plugins: [tailwind, moduleAggregator()],
   minify: true,
   sourcemap: "linked",
   define: {

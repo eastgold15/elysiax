@@ -1,25 +1,20 @@
 import { Database } from "bun:sqlite";
+import { drizzle } from "drizzle-orm/bun-sqlite";
+import { migrate } from "drizzle-orm/bun-sqlite/migrator";
+import { appPaths, ensureDirs } from "./paths";
+import { migrationsJournal } from "./migrations";
 
-export const db = new Database("app.db");
+ensureDirs();
 
-db.run(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL
-  );
-`);
+const sqlite = new Database(appPaths.dbFile);
+sqlite.run("PRAGMA journal_mode = WAL;");
+sqlite.run("PRAGMA foreign_keys = ON;");
 
-db.run(`
-  CREATE TABLE IF NOT EXISTS orders (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    amount REAL NOT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id)
-  );
-`);
+// 注意：drizzle rc 的 sqlite config 不再接受 schema（无 db.query），
+// 统一用 db.select()/insert()/update()/delete() 核心 API
+export const db = drizzle({ client: sqlite });
 
-// 种子数据（仅首次）
-if ((db.query("SELECT COUNT(*) AS c FROM users").get() as { c: number }).c === 0) {
-  db.run("INSERT INTO users (name) VALUES ('Alice'), ('Bob')");
-  db.run("INSERT INTO orders (user_id, amount) VALUES (1, 99.5), (1, 12.0), (2, 42.0)");
-}
+// 启动即迁移（同步，桌面工具免交互）
+migrate(db, migrationsJournal);
+
+export type Db = typeof db;

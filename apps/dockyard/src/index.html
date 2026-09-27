@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>elysiax 模块化应用</title>
+  <title>Dockyard</title>
   <link rel="stylesheet" href="./global.css" />
   <script
     src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.11/dist/htmx.min.js"
@@ -11,10 +11,37 @@
     crossorigin="anonymous"
   ></script>
 </head>
-<body class="p-8">
-  <h1 class="text-2xl font-bold mb-6">模块化全栈应用</h1>
-
-  <div hx-get="/api/users/ui" hx-trigger="load" hx-swap="innerHTML"></div>
-  <div hx-get="/api/orders/ui" hx-trigger="load" hx-swap="innerHTML" class="mt-6"></div>
+<body class="flex h-screen overflow-hidden">
+  <aside class="flex w-52 shrink-0 flex-col border-r border-neutral-800 bg-neutral-900">
+    <div class="flex h-14 items-center gap-2 border-b border-neutral-800 px-4 font-semibold tracking-wide">
+      ⚓ Dockyard
+    </div>
+    <nav class="flex flex-col gap-0.5 p-2" id="nav">
+      <a href="#" data-nav
+         class="rounded px-3 py-2 text-sm text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100"
+         hx-get="/api/projects/ui" hx-target="#main" hx-swap="innerHTML">项目</a>
+      <a href="#" data-nav
+         class="rounded px-3 py-2 text-sm text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100"
+         hx-get="/api/canvas/ui" hx-target="#main" hx-swap="innerHTML">画布</a>
+      <a href="#" data-nav
+         class="rounded px-3 py-2 text-sm text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100"
+         hx-get="/api/servers/ui" hx-target="#main" hx-swap="innerHTML">服务器</a>
+    </nav>
+  </aside>
+  <main id="main" class="flex min-w-0 flex-1 flex-col overflow-hidden"
+        hx-get="/api/projects/ui" hx-trigger="load" hx-swap="innerHTML"></main>
+  <div id="modal-root"></div>
+  <script type="module" src="./pages/canvas.ts"></script>
+  <script>
+    // 侧边栏高亮
+    document.getElementById("nav").addEventListener("click", (e) => {
+      const a = e.target.closest("a[data-nav]");
+      if (!a) return;
+      e.preventDefault();
+      for (const el of document.querySelectorAll("a[data-nav]"))
+        el.classList.remove("bg-neutral-800", "text-neutral-100");
+      a.classList.add("bg-neutral-800", "text-neutral-100");
+    });
+  </script>
 </body>
 </html>

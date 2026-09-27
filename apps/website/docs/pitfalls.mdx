@@ -123,3 +123,45 @@ Windows 图标需要 `.ico`，但 Vista 起 ICO 支持 PNG 载荷——写一个
 ### 21. Bun isolated install：workspace 链接不在根 node_modules
 
 Bun 的 isolated 模式把 `@elysiax/*` 的 workspace 符号链接放在**各包的** node_modules 里，根 node_modules 没有。在 monorepo 外测试模板项目时，软链根 node_modules 会找不到 workspace 包，要链到某个 app 的 node_modules。
+
+## Dockyard（部署工具）
+
+### 22. elysia 惰性加载 typebox 是**运行时** require，`bun --compile` 后必死
+
+Elysia 2.x 的 `dist/type/typebox-type.mjs` 不用静态 import，而是首次用时 `import.meta.require ?? createRequire(...)` 执行 `req("typebox/type")`。bundler 无法静态分析这种调用，`bun build --compile` 不会把 typebox 打进去——dev 正常（node_modules 可解析），编译产物在**第一次编译带 schema 的路由**时就抛 `Cannot find module 'typebox/type' from '/$bunfs/...'`；若 controller 在模块顶层调 `t.Numeric()` 等 stub，启动即死。
+
+**解法**（已收进 `@elysiax/core` 的 `start.ts` 模块顶层）：用 elysia 官方逃生口 `setupTypebox` 静态注入，import 会被打进产物、注入后跳过运行时解析：
+
+```ts
+import { setupTypebox } from "elysia";
+import * as typeboxType from "typebox/type";
+import * as typeboxSystem from "typebox/system";
+import * as typeboxValue from "typebox/value";
+import * as typeboxSchema from "typebox/schema";
+import * as typeboxCompile from "typebox/compile";
+
+setupTypebox({ typebox: { type: typeboxType, system: typeboxSystem, value: typeboxValue, schema: typeboxSchema, compile: typeboxCompile } });
+```
+
+三个要点：① 必须在**模块顶层**执行——controller 模块 import 阶段就会触发 stub，放进 `start()` 函数体里太晚；② 谁创建 Elysia 实例谁注入（monorepo 下 elysia 有多个 peer 哈希副本，app 侧注入可能到不了 core 用的那份；不过 bun 打包时会去重成一份）；③ 包裹 `typebox` 必须是直接依赖。调试技巧：给 `resolveNamespaces` 打 `console.trace` 重编译，能看到是谁在 import 阶段触发的加载。
+
+### 23. `gh api` 遇到 304 会以非零码退出
+
+用 `If-None-Match` 做 ETag 轮询时，命中 304 的响应没有 body，`gh api` 解析 JSON 失败报 `unexpected end of JSON input` 并以非零码退出——但响应头（含 `304`）已打印到 stdout。
+
+**解法**：先检查 stdout 首行是否含 `304`（是则视为"无变化"），再判断退出码报错。
+
+### 24. drizzle-orm@rc 的两个 API 变化
+
+- sqlite config **不再接受 `schema`**（`Omit<DrizzleConfig, 'schema'>`）——没有 `db.query.*`，统一用 `db.select()/insert()/update()/delete()` 核心 API
+- 列名默认 **camelCase**（`projectId` 而非 `project_id`）——手写 SQL 迁移会和 schema 对不上，迁移 SQL 必须以 `drizzle-kit generate` 输出为准
+- `bun --compile` 后没有文件系统里的 migrationsFolder：用 `migrate(db, journalArray)` 变体（`{ sql, timestamp, name }[]`），把迁移日志内嵌成纯 TS 模块
+
+### 25. dockerode `container.exec` 的两个挂死点
+
+在容器里跑管理命令（如 `psql` 建库）时：
+
+1. **不能开 `Tty: true`**——psql/mysql 等 CLI 检测到 TTY 会起 pager（less），exec 永远等用户按 q，流不结束。不开 Tty 输出是多路复用的，要用 `docker.modem.demuxStream(stream, stdout, stderr)` 拆流
+2. **`exec.start()` 要传 `{ hijack: true, stdin: false }`**——不传 hijack 时经自定义传输（如 SSH 中继 socket）可能拿不到响应流
+
+另外 postgres 侧：`CREATE DATABASE` 不能与其他语句同处一个隐式事务（单个 `-c` 多语句会包事务），`CREATE USER` 和 `CREATE DATABASE` 必须分两次 exec；上次失败留下的孤儿 role 用 `DROP USER IF EXISTS` 前缀兜底。

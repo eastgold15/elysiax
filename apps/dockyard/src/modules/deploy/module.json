@@ -1,0 +1,7 @@
+{
+  "name": "deploy",
+  "version": "1.0.0",
+  "route": "/deploy",
+  "provides": ["deployService"],
+  "requires": ["serverServiceLazy", "githubServiceLazy"]
+}

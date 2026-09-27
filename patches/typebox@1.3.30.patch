@@ -1,0 +1,62 @@
+diff --git a/package.json b/package.json
+index 6fcb0ab2daf56c38e0293b1729aac19f24b50eef..f5c857644c21a292137e00e13069931caf4f5f18 100644
+--- a/package.json
++++ b/package.json
+@@ -18,39 +18,48 @@
+   "exports": {
+     "./compile": {
+       "import": "./build/compile/index.mjs",
+-      "default": "./build/compile/index.mjs"
++      "default": "./build/compile/index.mjs",
++      "require": "./build/compile/index.mjs"
+     },
+     "./error": {
+       "import": "./build/error/index.mjs",
+-      "default": "./build/error/index.mjs"
++      "default": "./build/error/index.mjs",
++      "require": "./build/error/index.mjs"
+     },
+     "./format": {
+       "import": "./build/format/index.mjs",
+-      "default": "./build/format/index.mjs"
++      "default": "./build/format/index.mjs",
++      "require": "./build/format/index.mjs"
+     },
+     "./guard": {
+       "import": "./build/guard/index.mjs",
+-      "default": "./build/guard/index.mjs"
++      "default": "./build/guard/index.mjs",
++      "require": "./build/guard/index.mjs"
+     },
+     "./schema": {
+       "import": "./build/schema/index.mjs",
+-      "default": "./build/schema/index.mjs"
++      "default": "./build/schema/index.mjs",
++      "require": "./build/schema/index.mjs"
+     },
+     "./system": {
+       "import": "./build/system/index.mjs",
+-      "default": "./build/system/index.mjs"
++      "default": "./build/system/index.mjs",
++      "require": "./build/system/index.mjs"
+     },
+     "./type": {
+       "import": "./build/type/index.mjs",
+-      "default": "./build/type/index.mjs"
++      "default": "./build/type/index.mjs",
++      "require": "./build/type/index.mjs"
+     },
+     "./value": {
+       "import": "./build/value/index.mjs",
+-      "default": "./build/value/index.mjs"
++      "default": "./build/value/index.mjs",
++      "require": "./build/value/index.mjs"
+     },
+     ".": {
+       "import": "./build/index.mjs",
+-      "default": "./build/index.mjs"
++      "default": "./build/index.mjs",
++      "require": "./build/index.mjs"
+     }
+   },
+   "typesVersions": {

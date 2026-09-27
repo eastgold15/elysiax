@@ -1,5 +1,5 @@
 {
-  "name": "bun-elysiax",
+  "name": "dockyard",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -19,6 +19,7 @@
     "@inferdi/inferdi": "^6.1.0",
     "@workspace/htmx": "workspace:*",
     "bun-plugin-tailwind": "^0.1.2",
+    "drizzle-orm": "^1.0.0-rc.4",
     "elysia": "catalog:",
     "tailwindcss": "^4.1.11",
     "webview-bun": "^2.4.0"
@@ -26,6 +27,7 @@
   "devDependencies": {
     "@elysiax/cli": "workspace:*",
     "@types/bun": "latest",
+    "drizzle-kit": "^1.0.0-rc.4",
     "webview-bun": "^2.4.0"
   },
   "peerDependencies": {

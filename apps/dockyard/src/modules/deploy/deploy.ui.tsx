@@ -1,5 +1,6 @@
 import type { Component } from "@workspace/htmx";
 import type { Deployment, DeployTarget, Domain } from "../../shared/schema";
+import type { RepoBrief } from "../github/github.service";
 import { serviceEnvToText, type DetectResult, type DetectedService } from "./detect";
 import { Button, Field } from "../ui-kit/ui-kit.ui";
 
@@ -27,21 +28,71 @@ const Chip: Component<{ tone?: "ok" | "warn" | "muted" }> = ({ tone = "muted", c
   }`}>{children}</span>
 );
 
-// ── 部署 app 向导（Railway/openship 两步式）──
-// Step 1：仓库信息 → 识别；Step 2：识别结果确认（服务/域名/环境变量）→ 创建即部署
-export const NewAppModal: Component<{ nodeId: number; error?: string }> = ({ nodeId, error }) => (
-  <Modal title="部署 app · 1/2 仓库">
-    <form class="flex flex-col gap-3" hx-post="/api/deploy/ui/detect" hx-target="#modal-root" hx-swap="innerHTML">
+/** 右侧抽屉（Railway 式配置面板）。结构与 snippets/sheet.html 一致，配色走 harbor 主题；
+ *  没用原生 <dialog>——htmx 片段直接挂 #modal-root，现有关窗约定（点遮罩/✕）不变 */
+const Drawer: Component<{ title: string; sub?: string }> = ({ title, sub, children }) => (
+  <div class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" onclick="if(event.target===this)this.remove()">
+    <div class="fixed inset-y-0 right-0 left-auto flex h-full w-[36rem] max-w-full flex-col border-l border-harbor-700 bg-harbor-900 shadow-2xl">
+      <div class="flex items-start justify-between border-b border-harbor-800 px-5 py-4">
+        <div class="flex flex-col gap-1">
+          <h3 class="text-sm font-semibold text-neutral-100">{title}</h3>
+          {sub ? <p class="text-xs text-neutral-500">{sub}</p> : null}
+        </div>
+        <button class="text-neutral-500 hover:text-neutral-200" onclick="this.closest('.fixed.inset-0').remove()">✕</button>
+      </div>
+      <div class="flex-1 overflow-y-auto px-5 py-4">{children}</div>
+    </div>
+  </div>
+);
+
+/** 抽屉里的分区标题（Railway 面板的 Settings/Networking/Variables 区块感） */
+const Section: Component<{ title: string; hint?: string }> = ({ title, hint, children }) => (
+  <section class="flex flex-col gap-2">
+    <div class="flex items-baseline justify-between">
+      <h4 class="text-xs font-semibold tracking-wide text-neutral-300 uppercase">{title}</h4>
+      {hint ? <span class="text-[11px] text-neutral-600">{hint}</span> : null}
+    </div>
+    {children}
+  </section>
+);
+
+// ── 部署 app 向导（Railway/openship 两步式，右侧抽屉）──
+// Step 1：gh 仓库选择器 → 识别；Step 2：识别结果确认（服务/域名/变量/打包）→ 创建即部署
+export const NewAppDrawer: Component<{ nodeId: number; repos: RepoBrief[]; error?: string }> = ({ nodeId, repos, error }) => (
+  <Drawer title="部署 app" sub="从 GitHub 仓库部署到这台服务器">
+    <form class="flex flex-col gap-4" hx-post="/api/deploy/ui/detect" hx-target="#modal-root" hx-swap="innerHTML">
       <input type="hidden" name="nodeId" value={String(nodeId)} />
       {error ? <ErrorBanner>{error}</ErrorBanner> : null}
-      <Field label="名称" name="name" placeholder="my-app" required />
-      <Field label="仓库" name="repoUrl" required placeholder="owner/repo 或 https://github.com/owner/repo" />
-      <Field label="分支" name="branch" value="main" />
-      <Field label="远端目录" name="remoteDir" placeholder="~/dockyard/my-app" required />
-      <div class="text-xs text-neutral-500">下一步会克隆仓库并读取 openship.json / compose 自动识别服务与端口。</div>
+      <Section title="仓库" hint={`gh 账号下 ${repos.length} 个`}>
+        <label class="flex flex-col gap-1 text-sm">
+          <span class="text-neutral-400">选择仓库（可输入过滤）</span>
+          <input
+            class="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-neutral-200"
+            type="text"
+            name="repoUrl"
+            list="gh-repos"
+            placeholder="owner/repo"
+            autocomplete="off"
+            required
+          />
+          <datalist id="gh-repos">
+            {repos.map((r) => (
+              <option value={r.fullName}>{`${r.private ? "🔒" : "🌐"} ${r.branch}`}</option>
+            ))}
+          </datalist>
+        </label>
+      </Section>
+      <Section title="基本">
+        <div class="grid grid-cols-2 gap-2">
+          <Field label="名称" name="name" placeholder="my-app" required />
+          <Field label="分支" name="branch" value="main" />
+        </div>
+        <Field label="远端目录" name="remoteDir" placeholder="~/dockyard/my-app" required />
+      </Section>
+      <div class="text-xs text-neutral-500">下一步会克隆仓库并读取 openship.json / compose 自动识别服务、端口与域名。</div>
       <Button label="下一步：识别仓库" type="submit" />
     </form>
-  </Modal>
+  </Drawer>
 );
 
 const inputCls = "rounded-md border border-neutral-700 bg-neutral-900 px-2 py-1 text-neutral-200";
@@ -90,15 +141,15 @@ const ServiceCard: Component<{ svc: DetectedService }> = ({ svc }) => (
   </div>
 );
 
-/** Step 2：识别结果确认。errors 硬阻断（配置文件本身坏了），warnings 只提示 */
+/** Step 2：识别结果确认（右侧抽屉，分区同 Railway 服务面板）。errors 硬阻断，warnings 只提示 */
 export const AppDetectStep: Component<{
   carry: { nodeId: number; name: string; repoUrl: string; branch: string; remoteDir: string };
   detect: DetectResult;
   envText: string;
   error?: string;
 }> = ({ carry, detect, envText, error }) => (
-  <Modal title={`部署 app · 2/2 确认配置 — ${carry.name}`} wide>
-    <form class="flex flex-col gap-4" hx-post="/api/deploy/targets/app" hx-target="#modal-root" hx-swap="innerHTML">
+  <Drawer title={carry.name} sub={`${carry.repoUrl}@${carry.branch}`}>
+    <form class="flex flex-col gap-5" hx-post="/api/deploy/targets/app" hx-target="#modal-root" hx-swap="innerHTML">
       <input type="hidden" name="nodeId" value={String(carry.nodeId)} />
       <input type="hidden" name="name" value={carry.name} />
       <input type="hidden" name="repoUrl" value={carry.repoUrl} />
@@ -110,7 +161,6 @@ export const AppDetectStep: Component<{
         {detect.source === "openship.json" ? <Chip tone="ok">openship.json</Chip>
           : detect.source === "compose" ? <Chip tone="warn">compose 探测</Chip>
           : <Chip tone="warn">未识别</Chip>}
-        <span class="mono text-neutral-600">{detect.composePath}</span>
       </div>
 
       {error ? <ErrorBanner>{error}</ErrorBanner> : null}
@@ -121,33 +171,35 @@ export const AppDetectStep: Component<{
         </div>
       ) : null}
 
-      <label class="flex flex-col gap-1 text-sm">
-        <span class="text-neutral-400">compose 文件路径</span>
-        <input class={`${inputCls} px-3 py-1.5`} type="text" name="composePath" value={detect.composePath} required />
-      </label>
-
       {detect.services.length > 0 ? (
-        <div class="flex flex-col gap-2">
-          <div class="text-xs font-medium text-neutral-400">服务（{detect.services.length}）</div>
+        <Section title="服务" hint={`${detect.services.length} 个 · 端口/域名/资源`}>
           {detect.services.map((svc) => <ServiceCard svc={svc} />)}
-        </div>
+        </Section>
       ) : null}
 
       {envText.trim() ? (
-        <label class="flex flex-col gap-1 text-sm">
-          <span class="text-neutral-400">全局环境变量（compose ${"{VAR}"} 插值用，加密保存）</span>
+        <Section title="变量" hint="compose 插值用 · 加密保存">
           <textarea
             class={`${inputCls} mono h-28 px-3 py-2 text-xs leading-relaxed`}
             name="envText"
             placeholder="KEY=value"
           >{envText}</textarea>
-        </label>
+        </Section>
       ) : null}
 
-      <div class="text-xs text-neutral-500">创建后立即部署并打开日志。</div>
-      <Button label="创建并部署" type="submit" />
+      <Section title="打包" hint="compose 构建与部署">
+        <label class="flex flex-col gap-1 text-sm">
+          <span class="text-neutral-400">compose 文件路径</span>
+          <input class={`${inputCls} px-3 py-1.5`} type="text" name="composePath" value={detect.composePath} required />
+        </label>
+      </Section>
+
+      <div class="flex flex-col gap-2 border-t border-harbor-800 pt-4">
+        <div class="text-xs text-neutral-500">创建后立即部署并打开日志。</div>
+        <Button label="创建并部署" type="submit" />
+      </div>
     </form>
-  </Modal>
+  </Drawer>
 );
 
 // ── 域名管理（绑定 → edge 反代 + 自动证书）──

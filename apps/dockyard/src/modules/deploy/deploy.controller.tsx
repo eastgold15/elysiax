@@ -1,7 +1,8 @@
 import { t } from "elysia";
 import { defineController } from "../../../.elysiax";
-import { AppDetectStep, DeployLog, DomainsModal, InstanceOptions, NewAppModal, NewDbModal } from "./deploy.ui";
+import { AppDetectStep, DeployLog, DomainsModal, InstanceOptions, NewAppDrawer, NewDbModal } from "./deploy.ui";
 import { LOGICAL_DB_SUPPORT, type DbType } from "./db-templates";
+import type { RepoBrief } from "../github/github.service";
 import { detectToEnvText, detectToOverrideCompose, textToEnvMap, type DetectResult, type DetectedService } from "./detect";
 
 /** 向导 step2 的动态行（svcPort_xxx / svcDomain_xxx / svcCpu_xxx / svcMem_xxx）还原成服务列表 */
@@ -38,9 +39,17 @@ function domainsFromServices(services: DetectedService[]) {
 }
 
 export const deployController = defineController({ prefix: "/deploy" })
-  .get("/ui/new-app/:nodeId", { params: t.Object({ nodeId: t.Number() }) }, ({ params }) => (
-    <NewAppModal nodeId={params.nodeId} />
-  ))
+  // 向导 step1：gh CLI 列出账号仓库做选择器（gh 未登录时降级为空列表手填）
+  .get("/ui/new-app/:nodeId", { params: t.Object({ nodeId: t.Number() }) }, async ({ di, params }) => {
+    let repos: RepoBrief[] = [];
+    let ghError: string | undefined;
+    try {
+      repos = await di.get("githubService").listRepos();
+    } catch (e) {
+      ghError = `仓库列表拉取失败（${(e as Error).message}），可手动输入 owner/repo`;
+    }
+    return <NewAppDrawer nodeId={params.nodeId} repos={repos} error={ghError} />;
+  })
   // 向导 step1 → step2：克隆仓库，读 openship.json / compose 自动识别
   .post(
     "/ui/detect",
@@ -58,7 +67,11 @@ export const deployController = defineController({ prefix: "/deploy" })
         const detect = await di.get("deployService").detectRepo(body);
         return <AppDetectStep carry={body} detect={detect} envText={detectToEnvText(detect)} />;
       } catch (e) {
-        return <NewAppModal nodeId={body.nodeId} error={`识别失败：${(e as Error).message}`} />;
+        let repos: RepoBrief[] = [];
+        try {
+          repos = await di.get("githubService").listRepos();
+        } catch {}
+        return <NewAppDrawer nodeId={body.nodeId} repos={repos} error={`识别失败：${(e as Error).message}`} />;
       }
     },
   )

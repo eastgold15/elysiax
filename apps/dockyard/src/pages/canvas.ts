@@ -204,6 +204,8 @@ function renderTarget(target: TargetData) {
       "bg-harbor-800 text-neutral-300 hover:bg-harbor-700",
       async () => {
         await api(`/deploy/targets/${target.id}/deploy`, "POST");
+        // Railway 式体验：点部署即打开日志面板盯着进度（modal 内 1s 轮询到终态）
+        htmx.ajax("GET", `/api/deploy/ui/targets/${target.id}/log`, { target: "#modal-root", swap: "innerHTML" });
         await load(true);
       },
     ),

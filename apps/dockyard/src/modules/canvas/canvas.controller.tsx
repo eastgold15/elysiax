@@ -78,19 +78,24 @@ export const canvasController = defineController({ prefix: "/canvas" })
     if (!latest) return <Empty text="先创建一个项目空间（左侧「项目」）" />;
     return <CanvasShell project={latest} projects={projects} />;
   })
-  .get("/ui/:projectId", async ({ di, params }) => {
+  .get("/ui/:projectId", { params: t.Object({ projectId: t.Number() }) }, async ({ di, params }) => {
     const svc = di.get("projectService");
-    const project = await svc.byId(Number(params.projectId));
+    const project = await svc.byId(params.projectId);
     if (!project) return <Empty text="项目不存在" />;
     return <CanvasShell project={project} projects={await svc.list()} />;
   })
   // 画布数据（canvas.ts 孤岛轮询）
-  .get("/data/:projectId", async ({ di, params }) => canvasData(ctxOf(di), Number(params.projectId)))
+  .get("/data/:projectId", { params: t.Object({ projectId: t.Number() }) }, async ({ di, params }) =>
+    canvasData(ctxOf(di), params.projectId),
+  )
   .post(
     "/projects/:projectId/nodes",
-    { body: t.Object({ serverId: t.Number(), x: t.Number(), y: t.Number() }) },
+    {
+      params: t.Object({ projectId: t.Number() }),
+      body: t.Object({ serverId: t.Number(), x: t.Number(), y: t.Number() }),
+    },
     async ({ di, params, body, set }) => {
-      await ctxOf(di).canvas.addNode(Number(params.projectId), body.serverId, body.x, body.y);
+      await ctxOf(di).canvas.addNode(params.projectId, body.serverId, body.x, body.y);
       set.status = 204;
     },
   )
@@ -98,6 +103,7 @@ export const canvasController = defineController({ prefix: "/canvas" })
   .patch(
     "/nodes/:id",
     {
+      params: t.Object({ id: t.Number() }),
       body: t.Object({
         x: t.Optional(t.Number()),
         y: t.Optional(t.Number()),
@@ -106,11 +112,11 @@ export const canvasController = defineController({ prefix: "/canvas" })
       }),
     },
     async ({ di, params, body, set }) => {
-      await ctxOf(di).canvas.moveNode(Number(params.id), body);
+      await ctxOf(di).canvas.moveNode(params.id, body);
       set.status = 204;
     },
   )
-  .delete("/nodes/:id", async ({ di, params, set }) => {
-    await ctxOf(di).canvas.removeNode(Number(params.id));
+  .delete("/nodes/:id", { params: t.Object({ id: t.Number() }) }, async ({ di, params, set }) => {
+    await ctxOf(di).canvas.removeNode(params.id);
     set.status = 204;
   });

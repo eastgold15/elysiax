@@ -4,11 +4,13 @@ import { NewAppModal, NewDbModal, DeployLog, InstanceOptions } from "./deploy.ui
 import { LOGICAL_DB_SUPPORT, type DbType } from "./db-templates";
 
 export const deployController = defineController({ prefix: "/deploy" })
-  .get("/ui/new-app/:nodeId", ({ params }) => <NewAppModal nodeId={Number(params.nodeId)} />)
-  .get("/ui/new-db/:nodeId", async ({ di, params }) => (
+  .get("/ui/new-app/:nodeId", { params: t.Object({ nodeId: t.Number() }) }, ({ params }) => (
+    <NewAppModal nodeId={params.nodeId} />
+  ))
+  .get("/ui/new-db/:nodeId", { params: t.Object({ nodeId: t.Number() }) }, async ({ di, params }) => (
     <NewDbModal
-      nodeId={Number(params.nodeId)}
-      instances={await di.get("deployService").instancesOfNode(Number(params.nodeId), "postgres")}
+      nodeId={params.nodeId}
+      instances={await di.get("deployService").instancesOfNode(params.nodeId, "postgres")}
     />
   ))
   // dbType 切换时拉取该服务器上可托管的同类型实例（redis 不支持逻辑库）
@@ -80,26 +82,26 @@ export const deployController = defineController({ prefix: "/deploy" })
     },
   )
   .post("/targets/:id/deploy", {
-    query: t.Object({
+    params: t.Object({
       id: t.Number()
     })
-  }, ({ di, query: { id }, set }) => {
-    void di.get("deployService").deploy(id); // 后台跑，画布轮询看状态
+  }, ({ di, params, set }) => {
+    void di.get("deployService").deploy(params.id); // 后台跑，画布轮询看状态
     set.status = 204;
   })
-  .get("/ui/targets/:id/log", async ({ di, params }) => {
+  .get("/ui/targets/:id/log", { params: t.Object({ id: t.Number() }) }, async ({ di, params }) => {
     const svc = di.get("deployService");
-    const target = await svc.targetById(Number(params.id));
+    const target = await svc.targetById(params.id);
     if (!target) throw new Error("部署目标不存在");
     return <DeployLog target={target} dep={await svc.latestDeployment(target.id)} />;
   })
-  .get("/ui/targets/:id/log-body", async ({ di, params }) => {
-    const dep = await di.get("deployService").latestDeployment(Number(params.id));
+  .get("/ui/targets/:id/log-body", { params: t.Object({ id: t.Number() }) }, async ({ di, params }) => {
+    const dep = await di.get("deployService").latestDeployment(params.id);
     return dep?.logText ?? "";
   })
-  .delete("/targets/:id", async ({ di, params, set }) => {
+  .delete("/targets/:id", { params: t.Object({ id: t.Number() }) }, async ({ di, params, set }) => {
     try {
-      await di.get("deployService").removeTarget(Number(params.id));
+      await di.get("deployService").removeTarget(params.id);
     } catch (e) {
       set.status = 409;
       return (e as Error).message;

@@ -12,7 +12,7 @@ export const projectsController = defineController({ prefix: "/projects" })
       return <ProjectList projects={await di.get("projectService").list()} />;
     },
   )
-  .delete("/:id", async ({ di, params }) => {
-    await di.get("projectService").remove(Number(params.id));
+  .delete("/:id", { params: t.Object({ id: t.Number() }) }, async ({ di, params }) => {
+    await di.get("projectService").remove(params.id);
     return <ProjectList projects={await di.get("projectService").list()} />;
   });

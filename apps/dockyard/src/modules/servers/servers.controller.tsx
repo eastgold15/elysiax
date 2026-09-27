@@ -14,8 +14,8 @@ const serverForm = t.Object({
 
 export const serversController = defineController({ prefix: "/servers" })
   .get("/ui", async ({ di }) => <ServerList servers={await di.get("serverService").list()} />)
-  .get("/:id/card", async ({ di, params }) => {
-    const server = await di.get("serverService").byId(Number(params.id));
+  .get("/:id/card", { params: t.Object({ id: t.Number() }) }, async ({ di, params }) => {
+    const server = await di.get("serverService").byId(params.id);
     return <ServerRow server={server!} />;
   })
   .post("/", { body: serverForm }, async ({ di, body }) => {
@@ -26,13 +26,13 @@ export const serversController = defineController({ prefix: "/servers" })
     });
     return <ServerList servers={await di.get("serverService").list()} />;
   })
-  .delete("/:id", async ({ di, params }) => {
-    await di.get("serverService").remove(Number(params.id));
+  .delete("/:id", { params: t.Object({ id: t.Number() }) }, async ({ di, params }) => {
+    await di.get("serverService").remove(params.id);
     return <ServerList servers={await di.get("serverService").list()} />;
   })
-  .post("/:id/check", async ({ di, params }) => {
+  .post("/:id/check", { params: t.Object({ id: t.Number() }) }, async ({ di, params }) => {
     const svc = di.get("serverService");
-    const id = Number(params.id);
+    const id = params.id;
     const result = await svc.check(id);
     const server = (await svc.byId(id))!;
     if (result.ok) return <ServerRow server={server} message={`连接成功，docker ${result.dockerVersion}${result.warning ? `\n⚠️ ${result.warning}` : ""}`} />;
@@ -40,17 +40,20 @@ export const serversController = defineController({ prefix: "/servers" })
       return <TrustPrompt server={server} fingerprint={result.fingerprint} algorithm={result.algorithm} />;
     return <ServerRow server={server} message={result.message} />;
   })
-  .post("/:id/trust", { body: t.Object({ fingerprint: t.String() }) }, async ({ di, params, body }) => {
+  .post(
+    "/:id/trust",
+    { params: t.Object({ id: t.Number() }), body: t.Object({ fingerprint: t.String() }) },
+    async ({ di, params, body }) => {
     const svc = di.get("serverService");
-    const id = Number(params.id);
+    const id = params.id;
     const result = await svc.trust(id, body.fingerprint);
     const server = (await svc.byId(id))!;
     if (result.ok) return <ServerRow server={server} message={`已信任主机，docker ${result.dockerVersion}${result.warning ? `\n⚠️ ${result.warning}` : ""}`} />;
     return <ServerRow server={server} message={"message" in result ? result.message : "信任后检测失败"} />;
   })
-  .post("/:id/install-docker", async ({ di, params }) => {
+  .post("/:id/install-docker", { params: t.Object({ id: t.Number() }) }, async ({ di, params }) => {
     const svc = di.get("serverService");
-    const id = Number(params.id);
+    const id = params.id;
     const { code, output } = await svc.installDocker(id);
     const server = (await svc.byId(id))!;
     return (

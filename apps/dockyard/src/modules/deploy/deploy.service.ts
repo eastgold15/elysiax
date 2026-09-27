@@ -183,6 +183,16 @@ export class DeployService {
     }
   }
 
+  /** SFTP 不做 shell 展开，`~` 是字面路径（No such file）——先解析成绝对路径 */
+  private async resolveRemoteDir(
+    client: { exec(cmd: string): Promise<{ stdout: string }> },
+    dir: string,
+  ): Promise<string> {
+    if (!dir.startsWith("~")) return dir;
+    const { stdout } = await client.exec('printf %s "$HOME"');
+    return `${stdout.trim()}${dir.slice(1)}`;
+  }
+
   // ── 部署前对账：远端同名容器归属校验，绝不动别人的容器 ──
   private async preflightCheck(
     target: DeployTarget,
@@ -348,7 +358,7 @@ export class DeployService {
       await this.preflightCheck(target, serverId, containerNames, log);
 
     const client = await this.serverService.ssh(serverId);
-    const remoteDir = target.remoteDir ?? `~/dockyard/${target.name}`;
+    const remoteDir = await this.resolveRemoteDir(client, target.remoteDir ?? `~/dockyard/${target.name}`);
     await client.exec(`mkdir -p ${remoteDir}`);
     const sftp = await openSftp(client);
     const composeText = await Bun.file(join(repoDir, composePath)).text();
@@ -371,7 +381,7 @@ export class DeployService {
     const serverId = await this.nodeServerId(target);
     await this.preflightCheck(target, serverId, [target.containerName], log);
     const client = await this.serverService.ssh(serverId);
-    const remoteDir = target.remoteDir ?? `~/dockyard/${target.name}`;
+    const remoteDir = await this.resolveRemoteDir(client, target.remoteDir ?? `~/dockyard/${target.name}`);
     await client.exec(`mkdir -p ${remoteDir}`);
     const sftp = await openSftp(client);
     await sftp.write(`${remoteDir}/docker-compose.yml`, rendered.compose);

@@ -243,5 +243,6 @@ export const deployController = defineController({ prefix: "/deploy" })
       set.status = 409;
       return (e as Error).message;
     }
-    set.status = 204;
+    set.headers["HX-Trigger"] = "refresh";
+    return "";
   });

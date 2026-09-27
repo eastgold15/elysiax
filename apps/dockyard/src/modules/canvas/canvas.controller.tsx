@@ -1,7 +1,7 @@
 import { t } from "elysia";
 import { defineController } from "../../../.elysiax";
 import { decryptSecret } from "../../shared/crypto";
-import CanvasShell from "./canvas.ui";
+import CanvasShell, { CanvasCards, type CardModel } from "./canvas.ui";
 import { Empty } from "../ui-kit/ui-kit.ui";
 import type { ProjectService } from "../projects/projects.service";
 import type { ServerService } from "../servers/servers.service";
@@ -19,7 +19,7 @@ interface Ctx {
 async function canvasData(ctx: Ctx, projectId: number) {
   const [nodes, servers] = await Promise.all([ctx.canvas.nodesOf(projectId), ctx.server.list()]);
   const byId = new Map(servers.map((s) => [s.id, s]));
-  const cards = [];
+  const cards: CardModel[] = [];
   for (const node of nodes) {
     const server = byId.get(node.serverId);
     if (!server) continue;
@@ -45,7 +45,6 @@ async function canvasData(ctx: Ctx, projectId: number) {
         id: target.id,
         kind: target.kind,
         name: target.name,
-        dbType: target.dbType,
         logical: Boolean(target.instanceOf),
         url,
         domains,
@@ -93,10 +92,11 @@ export const canvasController = defineController({ prefix: "/canvas" })
     if (!project) return <Empty text="项目不存在" />;
     return <CanvasShell project={project} projects={await svc.list()} />;
   })
-  // 画布数据（canvas.ts 孤岛轮询）
-  .get("/data/:projectId", { params: t.Object({ projectId: t.Number() }) }, async ({ di, params }) =>
-    canvasData(ctxOf(di), params.projectId),
-  )
+  // 卡片片段（#canvas-root 5s 轮询，morph:innerHTML 按 id 合并，不打断拖拽/滚动）
+  .get("/ui/:projectId/cards", { params: t.Object({ projectId: t.Number() }) }, async ({ di, params }) => {
+    const data = await canvasData(ctxOf(di), params.projectId);
+    return <CanvasCards cards={data.cards} servers={data.servers} />;
+  })
   .post(
     "/projects/:projectId/nodes",
     {
@@ -105,7 +105,8 @@ export const canvasController = defineController({ prefix: "/canvas" })
     },
     async ({ di, params, body, set }) => {
       await ctxOf(di).canvas.addNode(params.projectId, body.serverId, body.x, body.y);
-      set.status = 204;
+      set.headers["HX-Trigger"] = "refresh";
+      return "";
     },
   )
   // 拖拽/resize 持久化
@@ -127,5 +128,6 @@ export const canvasController = defineController({ prefix: "/canvas" })
   )
   .delete("/nodes/:id", { params: t.Object({ id: t.Number() }) }, async ({ di, params, set }) => {
     await ctxOf(di).canvas.removeNode(params.id);
-    set.status = 204;
+    set.headers["HX-Trigger"] = "refresh";
+    return "";
   });

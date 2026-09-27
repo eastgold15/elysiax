@@ -115,3 +115,11 @@ CLI 的 `dev` 命令里 spawn 了 `bun --hot` 子进程并注册了 `setInterval
 ### 19. webview-bun 发布的是 .ts 源，skipLibCheck 管不到
 
 它的 `Pointer` 类型与当前 bun-types 不兼容（TS2322），而 `skipLibCheck` 只跳过 `.d.ts`。用 tsconfig `paths` 把 `webview-bun` 映射到本地最小声明文件解决（`src/types/webview-bun.d.ts`）。
+
+### 20. PNG 可以直接包进 ICO，不需要图像工具
+
+Windows 图标需要 `.ico`，但 Vista 起 ICO 支持 PNG 载荷——写一个 22 字节的 ICONDIR/ICONDIRENTRY 头再接 PNG 原始数据即可（宽高从 IHDR 第 16-24 字节读）。CLI 的 Windows 交叉编译因此零外部依赖（不需要 ImageMagick/rsvg）。
+
+### 21. Bun isolated install：workspace 链接不在根 node_modules
+
+Bun 的 isolated 模式把 `@elysiax/*` 的 workspace 符号链接放在**各包的** node_modules 里，根 node_modules 没有。在 monorepo 外测试模板项目时，软链根 node_modules 会找不到 workspace 包，要链到某个 app 的 node_modules。

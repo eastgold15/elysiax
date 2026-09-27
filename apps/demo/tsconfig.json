@@ -25,7 +25,8 @@
     "noImplicitOverride": true,
 
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "webview-bun": ["./src/types/webview-bun.d.ts"]
     },
 
     // Some stricter flags (disabled by default)

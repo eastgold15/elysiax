@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { createCerebro } from "@visulima/cerebro";
 import { errorHandlerPlugin } from "@visulima/cerebro/plugins/error-handler";
-import { existsSync, cpSync, readFileSync, writeFileSync, readdirSync } from "node:fs";
+import { existsSync, cpSync, readFileSync, writeFileSync, readdirSync, mkdirSync } from "node:fs";
 import { resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -50,12 +50,12 @@ cli.addCommand({
 
     cpSync(templateDir, target, { recursive: true });
 
-    // 替换 package.json 里的项目名占位符
-    const pkgPath = resolve(target, "package.json");
-    writeFileSync(
-      pkgPath,
-      readFileSync(pkgPath, "utf8").replaceAll("{{name}}", name),
-    );
+    // 替换项目名占位符（package.json + elysiax.config.ts）
+    for (const f of ["package.json", "elysiax.config.ts"]) {
+      const p = resolve(target, f);
+      if (existsSync(p))
+        writeFileSync(p, readFileSync(p, "utf8").replaceAll("{{name}}", name));
+    }
 
     logger.info(`✅ 项目已创建: ${target}`);
     logger.info(`下一步:`);
@@ -216,6 +216,179 @@ cli.addCommand({
       child.on("exit", (c) => resolve(c ?? 0)),
     );
     process.exit(code);
+  },
+});
+
+// ─────────────────────────────────────────────
+// 构建辅助
+// ─────────────────────────────────────────────
+
+/** 从项目目录解析依赖（CLI 自身不直接依赖这些包） */
+function resolveFrom(root: string, pkg: string): string {
+  return Bun.resolveSync(pkg, root);
+}
+
+/** PNG → ICO（Vista+ 支持 PNG 载荷，纯包装无需外部工具） */
+async function pngToIco(pngPath: string, outPath: string) {
+  const png = new Uint8Array(await Bun.file(pngPath).arrayBuffer());
+  // IHDR 宽高在第 16-24 字节
+  const dv = new DataView(png.buffer, png.byteOffset);
+  const w = dv.getUint32(16) % 256;
+  const h = dv.getUint32(20) % 256;
+  const header = new DataView(new ArrayBuffer(22));
+  header.setUint16(2, 1, true); // type: icon
+  header.setUint16(4, 1, true); // count
+  header.setUint8(6, w);
+  header.setUint8(7, h);
+  header.setUint16(10, 1, true); // planes
+  header.setUint16(12, 32, true); // bitcount
+  header.setUint32(14, png.length, true);
+  header.setUint32(18, 22, true); // offset
+  await Bun.write(outPath, Buffer.concat([Buffer.from(header.buffer), png]));
+}
+
+const BUN_TARGETS = {
+  "linux-x64": "bun-linux-x64",
+  "windows-x64": "bun-windows-x64",
+} as const;
+
+// ─────────────────────────────────────────────
+// elysiax build [--desktop] — 按 elysiax.config.ts 构建二进制
+// ─────────────────────────────────────────────
+cli.addCommand({
+  name: "build",
+  description: "构建二进制（读 elysiax.config.ts 的 build/desktop 配置）",
+  options: [
+    {
+      name: "desktop",
+      alias: "d",
+      type: Boolean,
+      description: "构建桌面应用（webview 窗口版）而非 server",
+    },
+  ],
+  execute: async ({ options, logger }) => {
+    const root = process.cwd();
+    const { codegen, loadConfig } = await import("@elysiax/core");
+    const config = await loadConfig(root);
+    await codegen(root, config);
+
+    const name = config.app?.name ?? "app";
+    const outdir = resolve(root, config.build?.outdir ?? "dist");
+    const targets = config.build?.targets ?? ["linux-x64"];
+    const tailwind = (await import(resolveFrom(root, "bun-plugin-tailwind")))
+      .default;
+
+    let entry: string;
+    if (options.desktop) {
+      if (!config.desktop)
+        throw new Error("elysiax.config.ts 里没有 desktop 配置段");
+      // 逃生口：项目自带 src/desktop.ts 时优先使用，否则用生成的
+      entry = resolve(root, "src/desktop.ts");
+      if (!existsSync(entry)) entry = resolve(root, ".elysiax/desktop.gen.ts");
+    } else {
+      entry = resolve(root, config.build?.entry ?? "src/index.ts");
+    }
+
+    for (const t of targets) {
+      const isWin = t.startsWith("windows");
+      const outfile = resolve(
+        outdir,
+        `${name}${options.desktop ? "-app" : ""}${isWin ? ".exe" : ""}`,
+      );
+      const compile: Record<string, unknown> = {
+        target: BUN_TARGETS[t],
+        outfile,
+      };
+      if (isWin && config.desktop?.icon) {
+        const ico = resolve(outdir, "icon.ico");
+        await pngToIco(resolve(root, config.desktop.icon), ico);
+        compile.windowsIcon = ico;
+        compile.windowsHideConsole = true;
+      }
+      const result = await Bun.build({
+        entrypoints: [entry],
+        target: "bun",
+        plugins: [tailwind],
+        compile,
+      });
+      if (!result.success) {
+        for (const l of result.logs) logger.error(l.message);
+        throw new Error(`构建失败: ${t}`);
+      }
+      logger.info(`✅ ${outfile}`);
+    }
+  },
+});
+
+// ─────────────────────────────────────────────
+// elysiax package — 生成安装包产物（当前：Arch PKGBUILD）
+// ─────────────────────────────────────────────
+cli.addCommand({
+  name: "package",
+  description: "生成安装包产物到 dist/packaging/（当前支持 Arch PKGBUILD）",
+  execute: async ({ logger }) => {
+    const root = process.cwd();
+    const { loadConfig } = await import("@elysiax/core");
+    const config = await loadConfig(root);
+    if (!config.package?.linux?.pkgbuild)
+      throw new Error("elysiax.config.ts 里没有 package.linux.pkgbuild 配置");
+
+    const name = config.app?.name ?? "app";
+    const version = config.app?.version ?? "0.1.0";
+    const outdir = resolve(root, config.build?.outdir ?? "dist");
+    const binary = resolve(outdir, `${name}-app`);
+    if (!existsSync(binary))
+      throw new Error(`未找到 ${binary}，请先运行 elysiax build --desktop`);
+
+    const pkgDir = resolve(outdir, "packaging");
+    mkdirSync(pkgDir, { recursive: true });
+    const { copyFileSync } = await import("node:fs");
+    copyFileSync(binary, resolve(pkgDir, `${name}-app`));
+    const iconName = `${name}.png`;
+    if (config.desktop?.icon)
+      copyFileSync(resolve(root, config.desktop.icon), resolve(pkgDir, iconName));
+
+    writeFileSync(
+      resolve(pkgDir, `${name}.desktop`),
+      [
+        "[Desktop Entry]",
+        "Type=Application",
+        `Name=${name}`,
+        `Comment=${name} (Bun + Elysia + htmx)`,
+        `Exec=${name}`,
+        `Icon=${name}`,
+        "Terminal=false",
+        "Categories=Development;Utility;",
+        "",
+      ].join("\n"),
+    );
+
+    writeFileSync(
+      resolve(pkgDir, "PKGBUILD"),
+      `# 由 elysiax package 生成。本地试用：makepkg -si    发布 AUR 后：yay -S ${name}-bin
+pkgname=${name}-bin
+pkgver=${version}
+pkgrel=1
+pkgdesc="${name} (Bun + Elysia + htmx, webview window)"
+arch=('x86_64')
+license=('MIT')
+depends=('webkitgtk-6.0' 'gtk4')
+# bun --compile 的内嵌负载会被 strip/debug 分离破坏，必须禁用
+options=('!strip' '!debug')
+source=("${name}-app" "${name}.desktop" "${iconName}")
+sha256sums=('SKIP' 'SKIP' 'SKIP')
+
+package() {
+  install -Dm755 "$srcdir/${name}-app" "$pkgdir/usr/bin/${name}"
+  install -Dm644 "$srcdir/${name}.desktop" \\
+    "$pkgdir/usr/share/applications/${name}.desktop"
+  install -Dm644 "$srcdir/${iconName}" \\
+    "$pkgdir/usr/share/icons/hicolor/256x256/apps/${iconName}"
+}
+`,
+    );
+    logger.info(`✅ ${pkgDir}/（PKGBUILD + .desktop + 图标 + 二进制）`);
+    logger.info(`   本地安装: cd ${pkgDir} && makepkg -si`);
   },
 });
 

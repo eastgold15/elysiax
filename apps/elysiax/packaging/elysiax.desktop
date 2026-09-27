@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=Application
-Name=elysiax
-Comment=elysiax modular app (Bun + Elysia + htmx)
-Exec=elysiax
-Icon=elysiax
-Terminal=false
-Categories=Development;Utility;

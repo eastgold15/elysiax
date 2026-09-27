@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ModuleManifest } from "./index";
+import { DEFAULTS, loadConfig, type ElysiaxConfig } from "./config";
 
 /**
  * 模块 DI 声明条目（<name>.di.ts 的 provides 值）：
@@ -28,11 +29,12 @@ export function defineModule<T extends ModuleDi>(di: T): T {
 }
 
 interface LoadedModule {
-  dir: string; // 相对 app 根，如 modules/user
+  dir: string; // 绝对路径
   manifest: ModuleManifest;
   di?: ModuleDi;
   diPath?: string;
-  controller?: string; // 相对 import 路径
+  diVar: string; // import 变量名，如 userDi
+  controller?: string;
   ui?: string;
 }
 
@@ -46,12 +48,21 @@ async function firstExisting(dir: string, base: string) {
   return undefined;
 }
 
+const camel = (s: string) => s.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+const ident = (s: string) => s.replace(/-/g, "_");
+
 /**
- * 扫描 modules/ 与 src/infra.di.ts，把复杂装配生成到 .elysiax/（类 .next 模式）。
+ * 扫描模块目录与 src/infra.di.ts，把复杂装配生成到 .elysiax/（类 .next 模式）。
  * 返回生成文件列表。
  */
-export async function codegen(root = process.cwd()): Promise<string[]> {
-  const mods: LoadedModule[] = [];
+export async function codegen(
+  root = process.cwd(),
+  config?: ElysiaxConfig,
+): Promise<string[]> {
+  config ??= await loadConfig(root);
+  const modulesDir = config.modules ?? DEFAULTS.modules;
+  const entry = config.build?.entry ?? DEFAULTS.entry;
+  const written: string[] = [];
 
   // 基础设施声明（可选）：src/infra.di.ts，永远最先装配
   const infraPath = await firstExisting(join(root, "src"), "infra.di");
@@ -60,11 +71,14 @@ export async function codegen(root = process.cwd()): Promise<string[]> {
     infra = (await import(pathToFileURL(infraPath).href)).default as ModuleDi;
   }
 
-  for await (const m of new Glob("modules/*/module.json").scan({ cwd: root })) {
+  const mods: LoadedModule[] = [];
+  for await (const m of new Glob(`${modulesDir}/*/module.json`).scan({
+    cwd: root,
+  })) {
     const dir = join(root, m, "..");
     const manifest: ModuleManifest = await Bun.file(join(root, m)).json();
     const name = manifest.name;
-    const mod: LoadedModule = { dir, manifest };
+    const mod: LoadedModule = { dir, manifest, diVar: `${ident(name)}Di` };
 
     mod.diPath = await firstExisting(dir, `${name}.di`);
     if (mod.diPath) {
@@ -76,8 +90,7 @@ export async function codegen(root = process.cwd()): Promise<string[]> {
   }
 
   // ── 拓扑排序：dep 的提供者必须先装配 ──
-  // provider: key → 提供它的模块下标（-1 = infra）
-  const provider = new Map<string, number>();
+  const provider = new Map<string, number>(); // key → 模块下标（-1 = infra）
   if (infra) for (const k of Object.keys(infra.provides)) provider.set(k, -1);
   mods.forEach((mod, i) => {
     if (mod.di) for (const k of Object.keys(mod.di.provides)) provider.set(k, i);
@@ -99,7 +112,7 @@ export async function codegen(root = process.cwd()): Promise<string[]> {
         throw new Error(`依赖 "${dep}" 的基键 "${base}" 没有任何模块提供`);
       lazyKeys.set(base, dep);
     } else if (!provider.has(dep)) {
-      throw new Error(`依赖 "${dep}" 没有任何模块提供（检查 module.json / *.di.ts）`);
+      throw new Error(`依赖 "${dep}" 没有任何模块提供（检查 *.di.ts）`);
     }
   }
 
@@ -133,22 +146,22 @@ export async function codegen(root = process.cwd()): Promise<string[]> {
     if (!r.startsWith(".")) r = "./" + r;
     return r.replace(/\.tsx?$/, ""); // .json 扩展必须保留
   };
+  const header = "// 由 elysiax codegen 生成，勿手改（elysiax dev / gen 会重新生成）";
 
   // container.gen.ts：拓扑序的完整类型链
-  const lines: string[] = [
-    "// 由 elysiax codegen 生成，勿手改（elysiax dev / gen 会重新生成）",
-    `import { Container } from "@inferdi/inferdi";`,
-  ];
+  const lines: string[] = [header, `import { Container } from "@inferdi/inferdi";`];
   if (infraPath) lines.push(`import infraDi from "${rel(infraPath)}";`);
   for (const i of order) {
     const mod = mods[i]!;
     if (mod.di && mod.diPath)
-      lines.push(`import ${mod.manifest.name}Di from "${rel(mod.diPath)}";`);
+      lines.push(`import ${mod.diVar} from "${rel(mod.diPath)}";`);
   }
   lines.push("", "export function buildRootContainer() {", "  return new Container()");
   const emit = (diExpr: string, key: string, e: DiEntry) => {
     if ("value" in e) {
-      lines.push(`    .registerValue(${JSON.stringify(key)}, ${diExpr}.provides[${JSON.stringify(key)}].value)`);
+      lines.push(
+        `    .registerValue(${JSON.stringify(key)}, ${diExpr}.provides[${JSON.stringify(key)}].value)`,
+      );
     } else {
       const lazy = lazyKeys.get(key);
       lines.push(
@@ -164,33 +177,28 @@ export async function codegen(root = process.cwd()): Promise<string[]> {
     const mod = mods[i]!;
     if (!mod.di) continue;
     lines.push(`    // ── ${mod.manifest.name} 模块 ──`);
-    for (const [k, e] of Object.entries(mod.di.provides))
-      emit(`${mod.manifest.name}Di`, k, e);
+    for (const [k, e] of Object.entries(mod.di.provides)) emit(mod.diVar, k, e);
   }
   lines.push(";", "}", "");
   writeFileSync(join(outDir, "container.gen.ts"), lines.join("\n") + "\n");
+  written.push(".elysiax/container.gen.ts");
 
-  // modules.gen.ts：真实 import 的模块清单（取代旧的 Bun 虚拟插件）
-  const ml: string[] = [
-    "// 由 elysiax codegen 生成，勿手改",
-    `import type { ModuleEntry } from "@elysiax/core";`,
-  ];
-  const names: string[] = [];
+  // modules.gen.ts：真实 import 的模块清单
+  const ml: string[] = [header, `import type { ModuleEntry } from "@elysiax/core";`];
   for (const mod of mods) {
     const n = mod.manifest.name;
-    const id = n.replace(/-/g, "_");
-    names.push(n);
+    const id = ident(n);
     ml.push(`import ${id}Manifest from "${rel(join(mod.dir, "module.json"))}";`);
     if (mod.controller)
       ml.push(
-        `import { ${n.replace(/-([a-z])/g, (_, c) => c.toUpperCase())}Controller as ${id}Controller } from "${rel(mod.controller)}";`,
+        `import { ${camel(n)}Controller as ${id}Controller } from "${rel(mod.controller)}";`,
       );
     if (mod.ui) ml.push(`import ${id}Ui from "${rel(mod.ui)}";`);
   }
   ml.push("", "export const modules: Record<string, ModuleEntry> = {");
   for (const mod of mods) {
     const n = mod.manifest.name;
-    const id = n.replace(/-/g, "_");
+    const id = ident(n);
     const parts = [`manifest: ${id}Manifest`];
     if (mod.controller) parts.push(`controller: ${id}Controller`);
     if (mod.ui) parts.push(`ui: ${id}Ui`);
@@ -198,19 +206,133 @@ export async function codegen(root = process.cwd()): Promise<string[]> {
   }
   ml.push("};", "");
   writeFileSync(join(outDir, "modules.gen.ts"), ml.join("\n") + "\n");
+  written.push(".elysiax/modules.gen.ts");
 
-  // index.ts：桶文件，app 只需 import * as gen from "../.elysiax"
+  // services.gen.ts：从 di 声明推导 ServiceMap（类型一体化，di 泛型可省）
+  const sl: string[] = [
+    header,
+    `import type { Lazy } from "@inferdi/inferdi";`,
+  ];
+  if (infraPath) sl.push(`import type infraDi from "${rel(infraPath)}";`);
+  for (const i of order) {
+    const mod = mods[i]!;
+    if (mod.di && mod.diPath)
+      sl.push(`import type ${mod.diVar} from "${rel(mod.diPath)}";`);
+  }
+  sl.push(
+    "",
+    "type Provided<E> = E extends { class: infer C }",
+    "  ? C extends new (...args: any[]) => infer I ? I : never",
+    "  : E extends { value: infer V } ? V : never;",
+    "",
+    "type ProvidesOf<D> = D extends { provides: infer P }",
+    "  ? { [K in keyof P]: Provided<P[K]> }",
+    "  : {};",
+    "",
+  );
+  const bases: string[] = [];
+  if (infra) bases.push("ProvidesOf<typeof infraDi>");
+  for (const i of order) {
+    const mod = mods[i]!;
+    if (mod.di) bases.push(`ProvidesOf<typeof ${mod.diVar}>`);
+  }
+  sl.push(`type BaseServices = ${bases.length ? bases.join(" & ") : "{}"};`);
+  const lazyEntries = [...lazyKeys.values()].map((lk) => {
+    const base = lk.slice(0, -4);
+    return `  ${JSON.stringify(lk)}: Lazy<BaseServices[${JSON.stringify(base)}]>;`;
+  });
+  sl.push(
+    "",
+    "/** 全图服务类型：di.get() 的键与返回值由此推导 */",
+    "export type ServiceMap = BaseServices & {",
+    ...lazyEntries,
+    "};",
+    "",
+  );
+  writeFileSync(join(outDir, "services.gen.ts"), sl.join("\n") + "\n");
+  written.push(".elysiax/services.gen.ts");
+
+  // controller.gen.ts：defineController —— di 默认带全图 ServiceMap
   writeFileSync(
-    join(outDir, "index.ts"),
+    join(outDir, "controller.gen.ts"),
     [
-      "// 由 elysiax codegen 生成，勿手改",
-      `export { modules } from "./modules.gen";`,
-      `export { buildRootContainer } from "./container.gen";`,
+      header,
+      `import type { Elysia } from "elysia";`,
+      `import { elysiaxModule } from "@elysiax/core";`,
+      `import type { ServiceMap } from "./services.gen";`,
+      "",
+      "/** 定义模块 controller：di 默认带全图 ServiceMap（可传更窄泛型收敛） */",
+      "export function defineController<",
+      "  S extends Record<string, unknown> = ServiceMap,",
+      ">(options?: ConstructorParameters<typeof Elysia>[0]) {",
+      "  return elysiaxModule<S>(options);",
+      "}",
       "",
     ].join("\n"),
   );
+  written.push(".elysiax/controller.gen.ts");
 
-  return ["container.gen.ts", "modules.gen.ts", "index.ts"].map((f) =>
-    join(".elysiax", f),
+  // desktop.gen.ts：桌面入口（config.desktop 存在时；src/desktop.ts 可覆盖）
+  if (config.desktop) {
+    const d = config.desktop;
+    writeFileSync(
+      join(outDir, "desktop.gen.ts"),
+      [
+        header,
+        `import { Webview, SizeHint } from "webview-bun";`,
+        "",
+        "// server 用独立进程跑：webview.run() 是阻塞式 FFI 事件循环，",
+        "// 与 Bun 的 HTTP 事件循环不能同线程共存。编译后 spawn 自身 + --server。",
+        `if (process.argv.includes("--server")) {`,
+        `  await import(${JSON.stringify(rel(join(root, entry)))});`,
+        "} else {",
+        "  const isCompiled = !import.meta.path.endsWith(\".ts\");",
+        "  const server = Bun.spawn(",
+        "    isCompiled",
+        "      ? [process.execPath, \"--server\"]",
+        `      : [process.execPath, ${JSON.stringify(entry)}],`,
+        "    { stdout: \"inherit\", stderr: \"inherit\" },",
+        "  );",
+        "",
+        `  const port = Number(process.env.PORT ?? ${d.port ?? 3000});`,
+        "  for (;;) {",
+        "    try {",
+        "      if ((await fetch(`http://localhost:${port}/`)).ok) break;",
+        "    } catch {}",
+        "    if (server.exitCode !== null) throw new Error(\"server 进程提前退出\");",
+        "    await Bun.sleep(100);",
+        "  }",
+        "",
+        "  const webview = new Webview(false, {",
+        `    width: ${d.width ?? 1100},`,
+        `    height: ${d.height ?? 720},`,
+        "    hint: SizeHint.NONE,",
+        "  });",
+        `  webview.title = ${JSON.stringify(d.title ?? config.app?.name ?? "elysiax")};`,
+        "  webview.navigate(`http://localhost:${port}/`);",
+        "  webview.run(); // 阻塞直到窗口关闭",
+        "  server.kill();",
+        "  process.exit(0);",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    written.push(".elysiax/desktop.gen.ts");
+  }
+
+  // index.ts：桶文件
+  writeFileSync(
+    join(outDir, "index.ts"),
+    [
+      header,
+      `export { modules } from "./modules.gen";`,
+      `export { buildRootContainer } from "./container.gen";`,
+      `export type { ServiceMap } from "./services.gen";`,
+      `export { defineController } from "./controller.gen";`,
+      "",
+    ].join("\n"),
   );
+  written.push(".elysiax/index.ts");
+
+  return written;
 }

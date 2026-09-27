@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "dev": "elysiax dev",
-    "start": "bun src/index.ts",
-    "build": "bun run build.ts",
-    "typecheck": "elysiax gen && tsc --noEmit"
+    "start": "elysiax gen && bun src/index.ts",
+    "build": "elysiax build",
+    "typecheck": "elysiax gen && tsc --noEmit",
+    "build:desktop": "elysiax build --desktop",
+    "package": "elysiax package"
   },
   "dependencies": {
     "@elysiax/core": "workspace:*",
@@ -16,7 +18,8 @@
     "elysia": "catalog:",
     "tailwindcss": "^4.1.11",
     "@inferdi/elysia": "workspace:*",
-    "@workspace/htmx": "workspace:*"
+    "@workspace/htmx": "workspace:*",
+    "webview-bun": "^2.4.0"
   },
   "devDependencies": {
     "@types/bun": "latest",

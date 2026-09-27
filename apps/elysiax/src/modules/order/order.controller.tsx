@@ -1,10 +1,7 @@
-import { elysiaxModule } from "@elysiax/core";
+import { defineController } from "../../../.elysiax";
 import OrderUi from "./order.ui";
-import type { UserService } from "../user/user.service";
 
-export const orderController = elysiaxModule<{ userService: UserService }>({
-  prefix: "/orders",
-})
+export const orderController = defineController({ prefix: "/orders" })
   .get("/ui", () => <OrderUi />)
   // 跨限界上下文的组合（订单 → 用户名字）放在应用层，service 保持单向依赖
   .get("/:id/user-name", ({ di, params }) => {

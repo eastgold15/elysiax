@@ -7,6 +7,8 @@ export { codegen, defineModule } from "./codegen";
 export type { DiEntry, ModuleDi } from "./codegen";
 export { start } from "./start";
 export type { ElysiaxGenerated } from "./start";
+export { defineConfig, loadConfig } from "./config";
+export type { ElysiaxConfig } from "./config";
 
 /** 模块清单（modules/<name>/module.json） */
 export interface ModuleManifest {

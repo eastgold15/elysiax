@@ -23,6 +23,7 @@
         "bun-plugin-tailwind": "^0.1.2",
         "elysia": "catalog:",
         "tailwindcss": "^4.1.11",
+        "webview-bun": "^2.4.0",
       },
       "devDependencies": {
         "@elysiax/cli": "workspace:*",
@@ -40,6 +41,7 @@
         "bun-plugin-tailwind": "^0.1.2",
         "elysia": "catalog:",
         "tailwindcss": "^4.1.11",
+        "webview-bun": "^2.4.0",
       },
       "devDependencies": {
         "@elysiax/cli": "workspace:*",

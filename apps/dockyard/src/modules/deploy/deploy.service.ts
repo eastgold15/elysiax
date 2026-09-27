@@ -135,34 +135,22 @@ export class DeployService {
     await this.edge.syncServer(await this.nodeServerId(target), log);
   }
 
-  // ── 自动识别：浅克隆 → openship.json（声明覆盖）→ 无则 compose 回退 ──
+  // ── 自动识别：gh contents API 直读文件（不克隆，秒级）→ openship.json 声明覆盖 → compose 回退 ──
   async detectRepo(input: { repoUrl: string; branch: string }): Promise<DetectResult> {
     const ownerRepo = parseOwnerRepo(input.repoUrl);
     const branch = input.branch || "main";
-    const repoDir = join(this.paths.reposDir, `detect-${ownerRepo.replace(/[^\w.-]/g, "_")}`);
-    const authedUrl = await this.github.authedRepoUrl(ownerRepo);
-    const silent: Log = async () => {};
-    if (!existsSync(repoDir)) {
-      await run(["git", "clone", "--depth", "1", "--branch", branch, authedUrl, repoDir], this.paths.reposDir, silent);
-      await run(["git", "remote", "set-url", "origin", `https://github.com/${ownerRepo}.git`], repoDir, silent);
-    } else {
-      await run(["git", "fetch", "--depth", "1", authedUrl, branch], repoDir, silent);
-      await run(["git", "checkout", "FETCH_HEAD"], repoDir, silent);
-    }
+    const read = (path: string) => this.github.fileContent(ownerRepo, path, branch);
 
-    // openship.json 大小写不敏感地找（openship 的 prepare.service 同款宽容）
-    const { readdirSync } = await import("node:fs");
-    const hit = readdirSync(repoDir).find((f) => f.toLowerCase() === "openship.json");
-    if (hit) {
-      const parsed = parseOpenshipConfigJson(await Bun.file(join(repoDir, hit)).text());
+    const openshipText = await read("openship.json");
+    if (openshipText !== null) {
+      const parsed = parseOpenshipConfigJson(openshipText);
       const composePath = parsed.config?.composePath ?? "docker-compose.yml";
-      const composeFile = Bun.file(join(repoDir, composePath));
-      return configToDetect(parsed, (await composeFile.exists()) ? await composeFile.text() : null);
+      return configToDetect(parsed, await read(composePath));
     }
     for (const candidate of ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"]) {
-      const file = Bun.file(join(repoDir, candidate));
-      if (await file.exists()) {
-        const result = detectFromCompose(await file.text());
+      const text = await read(candidate);
+      if (text !== null) {
+        const result = detectFromCompose(text);
         result.composePath = candidate;
         return result;
       }

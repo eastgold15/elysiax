@@ -92,6 +92,23 @@ export class GithubService {
     return repos;
   }
 
+  /** 单文件内容（contents API，base64）。404 → null；识别流程用它免去整库克隆 */
+  async fileContent(ownerRepo: string, path: string, ref: string): Promise<string | null> {
+    const proc = Bun.spawn(
+      ["gh", "api", `repos/${ownerRepo}/contents/${path}?ref=${encodeURIComponent(ref)}`, "--jq", ".content"],
+      { stdout: "pipe", stderr: "pipe" },
+    );
+    const out = await new Response(proc.stdout).text();
+    const code = await proc.exited;
+    if (code !== 0) {
+      const err = await new Response(proc.stderr).text();
+      if (/404|Not Found/i.test(err)) return null;
+      throw new Error(`gh api 读 ${path} 失败: ${err.slice(0, 200)}`);
+    }
+    // base64 里带换行，Buffer.from 容忍；contents API 单文件上限 1MB，openship.json/compose 远低于此
+    return Buffer.from(out.trim(), "base64").toString("utf8");
+  }
+
   /** clone / fetch 用的带 token URL（用完必须重写 remote，见 deploy） */
   async authedRepoUrl(ownerRepo: string): Promise<string> {
     return `https://x-access-token:${await this.token()}@github.com/${ownerRepo}.git`;

@@ -38,3 +38,14 @@
     background-size: 24px 24px;
   }
 }
+
+@layer utilities {
+  /* htmx 请求中的加载态：带 htmx-indicator 的元素平时隐藏，请求时显示 */
+  .htmx-indicator {
+    display: none;
+  }
+  .htmx-request .htmx-indicator,
+  .htmx-request.htmx-indicator {
+    display: inline-block;
+  }
+}

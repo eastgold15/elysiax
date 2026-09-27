@@ -11,7 +11,7 @@ import { start } from "@elysiax/core";
 import * as gen from "../.elysiax";
 import { startUpdatePoller } from "./modules/deploy/update-poller";
 
-await start({ port: 3000, index, gen });
+await start({ port: 3002, index, gen });
 
 // GitHub 更新轮询（替代 webhook）：只提示不自动部署
 startUpdatePoller();

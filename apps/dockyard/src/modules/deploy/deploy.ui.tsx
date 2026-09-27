@@ -56,6 +56,18 @@ const Section: Component<{ title: string; hint?: string }> = ({ title, hint, chi
   </section>
 );
 
+/** 提交按钮（带请求中状态：识别要调 gh API / 部署要克隆，必须给用户即时反馈） */
+const SubmitBtn: Component<{ label: string; busy: string }> = ({ label, busy }) => (
+  <button
+    type="submit"
+    class="inline-flex items-center justify-center gap-2 rounded px-3 py-1.5 text-sm font-semibold transition-colors bg-brass-500 text-harbor-950 hover:bg-brass-600 [.htmx-request_&]:pointer-events-none [.htmx-request_&]:opacity-70"
+  >
+    <span class="htmx-indicator animate-spin">◌</span>
+    <span class="[.htmx-request_&]:hidden">{label}</span>
+    <span class="htmx-indicator">{busy}</span>
+  </button>
+);
+
 // ── 部署 app 向导（Railway/openship 两步式，右侧抽屉）──
 // Step 1：gh 仓库选择器 → 识别；Step 2：识别结果确认（服务/域名/变量/打包）→ 创建即部署
 export const NewAppDrawer: Component<{ nodeId: number; repos: RepoBrief[]; error?: string }> = ({ nodeId, repos, error }) => (
@@ -89,8 +101,8 @@ export const NewAppDrawer: Component<{ nodeId: number; repos: RepoBrief[]; error
         </div>
         <Field label="远端目录" name="remoteDir" placeholder="~/dockyard/my-app" required />
       </Section>
-      <div class="text-xs text-neutral-500">下一步会克隆仓库并读取 openship.json / compose 自动识别服务、端口与域名。</div>
-      <Button label="下一步：识别仓库" type="submit" />
+      <div class="text-xs text-neutral-500">下一步会读取仓库的 openship.json / compose 自动识别服务、端口与域名。</div>
+      <SubmitBtn label="下一步：识别仓库" busy="识别中…（调 GitHub API，通常几秒）" />
     </form>
   </Drawer>
 );
@@ -196,7 +208,7 @@ export const AppDetectStep: Component<{
 
       <div class="flex flex-col gap-2 border-t border-harbor-800 pt-4">
         <div class="text-xs text-neutral-500">创建后立即部署并打开日志。</div>
-        <Button label="创建并部署" type="submit" />
+        <SubmitBtn label="创建并部署" busy="创建中…" />
       </div>
     </form>
   </Drawer>

@@ -1,12 +1,67 @@
 import { t } from "elysia";
 import { defineController } from "../../../.elysiax";
-import { NewAppModal, NewDbModal, DeployLog, InstanceOptions } from "./deploy.ui";
+import { AppDetectStep, DeployLog, DomainsModal, InstanceOptions, NewAppModal, NewDbModal } from "./deploy.ui";
 import { LOGICAL_DB_SUPPORT, type DbType } from "./db-templates";
+import { detectToEnvText, detectToOverrideCompose, textToEnvMap, type DetectResult, type DetectedService } from "./detect";
+
+/** 向导 step2 的动态行（svcPort_xxx / svcDomain_xxx / svcCpu_xxx / svcMem_xxx）还原成服务列表 */
+function servicesFromBody(body: Record<string, unknown>): DetectedService[] {
+  const num = (v: unknown) => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : undefined;
+  };
+  const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+  const services: DetectedService[] = [];
+  for (const key of Object.keys(body)) {
+    const m = key.match(/^svcPort_(.+)$/);
+    if (!m) continue;
+    const name = m[1]!;
+    const port = num(body[key]);
+    services.push({
+      name,
+      exposed: port !== undefined,
+      port,
+      domain: str(body[`svcDomain_${name}`]),
+      cpuCores: num(body[`svcCpu_${name}`]),
+      memoryMb: num(body[`svcMem_${name}`]),
+      env: textToEnvMap(str(body[`svcEnv_${name}`]) ?? ""),
+    });
+  }
+  return services;
+}
+
+/** step2 表单 → 创建参数（域名行 + 资源 override） */
+function domainsFromServices(services: DetectedService[]) {
+  return services
+    .filter((s) => s.domain && s.port)
+    .map((s) => ({ hostname: s.domain!, targetPort: s.port!, serviceName: s.name }));
+}
 
 export const deployController = defineController({ prefix: "/deploy" })
   .get("/ui/new-app/:nodeId", { params: t.Object({ nodeId: t.Number() }) }, ({ params }) => (
     <NewAppModal nodeId={params.nodeId} />
   ))
+  // 向导 step1 → step2：克隆仓库，读 openship.json / compose 自动识别
+  .post(
+    "/ui/detect",
+    {
+      body: t.Object({
+        nodeId: t.Numeric(),
+        name: t.String({ minLength: 1 }),
+        repoUrl: t.String({ minLength: 1 }),
+        branch: t.String({ default: "main" }),
+        remoteDir: t.String({ minLength: 1 }),
+      }),
+    },
+    async ({ di, body }) => {
+      try {
+        const detect = await di.get("deployService").detectRepo(body);
+        return <AppDetectStep carry={body} detect={detect} envText={detectToEnvText(detect)} />;
+      } catch (e) {
+        return <NewAppModal nodeId={body.nodeId} error={`识别失败：${(e as Error).message}`} />;
+      }
+    },
+  )
   .get("/ui/new-db/:nodeId", { params: t.Object({ nodeId: t.Number() }) }, async ({ di, params }) => (
     <NewDbModal
       nodeId={params.nodeId}
@@ -30,21 +85,44 @@ export const deployController = defineController({ prefix: "/deploy" })
         repoUrl: t.String({ minLength: 1 }),
         branch: t.String({ default: "main" }),
         composePath: t.String({ default: "docker-compose.yml" }),
-        serviceName: t.Optional(t.String()),
         remoteDir: t.String({ minLength: 1 }),
-      }),
+        envText: t.Optional(t.String()),
+        // 向导 step2 的动态行 svcPort_/svcDomain_/svcCpu_/svcMem_/svcEnv_<服务名>：
+        // additionalProperties 声明为 Unknown 才会被保留（Elysia 默认 clean 掉 schema 外的键）
+      }, { additionalProperties: t.Unknown() }),
     },
     async ({ di, body, set }) => {
+      const svc = di.get("deployService");
+      const services = servicesFromBody(body as unknown as Record<string, unknown>);
+      let target;
       try {
-        await di.get("deployService").createAppTarget({
-          ...body,
-          serviceName: body.serviceName || undefined,
+        target = await svc.createAppTarget({
+          nodeId: body.nodeId,
+          name: body.name,
+          repoUrl: body.repoUrl,
+          branch: body.branch,
+          composePath: body.composePath,
+          remoteDir: body.remoteDir,
+          envText: body.envText,
+          overrideCompose: detectToOverrideCompose({ services }),
+          domains: domainsFromServices(services),
         });
       } catch (e) {
-        return <NewAppModal nodeId={body.nodeId} error={(e as Error).message} />;
+        // 创建失败回到 step2，保留已填内容
+        const detect: DetectResult = {
+          source: "openship.json",
+          composePath: body.composePath,
+          services,
+          rootEnv: {},
+          errors: [],
+          warnings: [],
+        };
+        return <AppDetectStep carry={body} detect={detect} envText={body.envText ?? ""} error={(e as Error).message} />;
       }
-      set.headers["HX-Trigger"] = "refresh"; // 关 modal（空响应）+ 画布孤岛监听此事件刷新
-      return "";
+      // Railway 式：创建即部署，直接换出日志面板盯进度（无 dep 行也轮询）
+      void svc.deploy(target.id);
+      set.headers["HX-Trigger"] = "refresh";
+      return <DeployLog target={target} dep={undefined} />;
     },
   )
   .post(
@@ -98,6 +176,52 @@ export const deployController = defineController({ prefix: "/deploy" })
   .get("/ui/targets/:id/log-body", { params: t.Object({ id: t.Number() }) }, async ({ di, params }) => {
     const dep = await di.get("deployService").latestDeployment(params.id);
     return dep?.logText ?? "";
+  })
+  // ── 域名绑定 ──
+  .get("/ui/targets/:id/domains", { params: t.Object({ id: t.Number() }) }, async ({ di, params }) => {
+    const svc = di.get("deployService");
+    const target = await svc.targetById(params.id);
+    if (!target) throw new Error("部署目标不存在");
+    return <DomainsModal target={target} domains={await svc.domainsOfTarget(target.id)} />;
+  })
+  .post(
+    "/targets/:id/domains",
+    {
+      params: t.Object({ id: t.Number() }),
+      body: t.Object({ hostname: t.String({ minLength: 1 }), targetPort: t.Numeric() }),
+    },
+    async ({ di, params, body, set }) => {
+      const svc = di.get("deployService");
+      const target = await svc.targetById(params.id);
+      if (!target) throw new Error("部署目标不存在");
+      let error: string | undefined;
+      try {
+        await svc.addDomain(params.id, body);
+        await svc.syncEdge(params.id); // 立即对账（DNS/证书状态回写），失败回显不吞
+      } catch (e) {
+        error = (e as Error).message;
+      }
+      set.headers["HX-Trigger"] = "refresh";
+      return <DomainsModal target={target} domains={await svc.domainsOfTarget(params.id)} error={error} />;
+    },
+  )
+  .delete("/domains/:id", { params: t.Object({ id: t.Number() }) }, async ({ di, params, set }) => {
+    const svc = di.get("deployService");
+    const domain = await svc.domainById(params.id);
+    if (!domain) {
+      set.status = 404;
+      return "域名不存在";
+    }
+    await svc.removeDomain(params.id);
+    let error: string | undefined;
+    try {
+      await svc.syncEdge(domain.targetId);
+    } catch (e) {
+      error = (e as Error).message;
+    }
+    const target = await svc.targetById(domain.targetId);
+    set.headers["HX-Trigger"] = "refresh";
+    return <DomainsModal target={target!} domains={await svc.domainsOfTarget(domain.targetId)} error={error} />;
   })
   .delete("/targets/:id", { params: t.Object({ id: t.Number() }) }, async ({ di, params, set }) => {
     try {

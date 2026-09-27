@@ -62,6 +62,8 @@ export const deployTargets = sqliteTable("deploy_targets", {
   dbType: text({ enum: ["postgres", "mysql", "redis", "mongo"] }),
   // 远端部署目录
   remoteDir: text(),
+  // 资源限制 override compose（识别出的 cpus/mem_limit，部署时 -f 叠加；无秘密故明文）
+  overrideCompose: text(),
   // 环境变量（敏感值 enc1: 加密）
   envJson: text(),
   // 更新轮询状态
@@ -87,8 +89,28 @@ export const deployments = sqliteTable("deployments", {
   finishedAt: integer({ mode: "timestamp" }),
 });
 
+// ── 域名绑定：app target 的自定义域名（edge 反代 + 自动证书的状态机）──
+export const domains = sqliteTable("domains", {
+  id: integer().primaryKey({ autoIncrement: true }),
+  targetId: integer().notNull().references(() => deployTargets.id, { onDelete: "cascade" }),
+  hostname: text().notNull(),
+  // 反代目标：compose 服务名 + 端口（多服务 app 靠它区分 api/admin/www）
+  serviceName: text(),
+  targetPort: integer().notNull(),
+  // DNS 解析状态：unknown | ok（指向本机） | mismatch（解析到别处）
+  dnsStatus: text({ enum: ["unknown", "ok", "mismatch"] }).notNull().default("unknown"),
+  // 证书状态：none | pending（签发中） | active | error
+  sslStatus: text({ enum: ["none", "pending", "active", "error"] }).notNull().default("none"),
+  sslError: text(),
+  createdAt: integer({ mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
+}, (t) => [
+  // 同一 target 下域名唯一；跨 target 重复在 service 层拦（抢别人的域名是大事故）
+  unique().on(t.targetId, t.hostname),
+]);
+
 export type Server = typeof servers.$inferSelect;
 export type Project = typeof projects.$inferSelect;
 export type CanvasNode = typeof canvasNodes.$inferSelect;
 export type DeployTarget = typeof deployTargets.$inferSelect;
 export type Deployment = typeof deployments.$inferSelect;
+export type Domain = typeof domains.$inferSelect;

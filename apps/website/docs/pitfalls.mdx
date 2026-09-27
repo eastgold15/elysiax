@@ -165,3 +165,11 @@ setupTypebox({ typebox: { type: typeboxType, system: typeboxSystem, value: typeb
 2. **`exec.start()` 要传 `{ hijack: true, stdin: false }`**——不传 hijack 时经自定义传输（如 SSH 中继 socket）可能拿不到响应流
 
 另外 postgres 侧：`CREATE DATABASE` 不能与其他语句同处一个隐式事务（单个 `-c` 多语句会包事务），`CREATE USER` 和 `CREATE DATABASE` 必须分两次 exec；上次失败留下的孤儿 role 用 `DROP USER IF EXISTS` 前缀兜底。
+
+### 26. compose 搬运到远端执行的三坑
+
+把用户的 compose 文件上传到其他机器 `up` 时：
+
+1. **`env_file` 相对路径必炸**：`env_file: ../apps/x/.env.production` 相对的是仓库目录树，远端没有 → compose 直接报 "env file not found" 拒绝启动。up 前解析 compose 把每个 env_file 路径造出空占位文件（`[ -f p ] || printf ... > p`，不覆盖已有），真实环境变量由 override compose 的 `environment:` 注入
+2. **`-f` 是指定即唯一**：`docker compose -f a.yml up` 只用 a.yml。要叠加 override 必须 `-f docker-compose.yml -f override.yml` 两个都列；且 override 里**不要写 `name:`**——项目名用 `-p` 定死，override 的 name 会和 `-p` 抢（对账用的容器名全乱）
+3. **端口探测要展开默认值**：`"${API_PORT:-13080}:${API_PORT:-13080}"` 不是纯数字，正则前先 `\$\{[^}]*:-(\d+)\}` → `$1` 替换

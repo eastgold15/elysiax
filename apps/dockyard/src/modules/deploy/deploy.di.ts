@@ -7,7 +7,7 @@ export default defineModule({
     deployRepository: { class: DeployRepository, deps: ["db"] },
     deployService: {
       class: DeployService,
-      deps: ["deployRepository", "serverService", "githubService", "canvasRepository", "appPaths"],
+      deps: ["deployRepository", "serverService", "githubService", "canvasRepository", "appPaths", "edgeService"],
     },
   },
 });

@@ -9,6 +9,11 @@ declare const htmx: {
   ajax(verb: string, url: string, opts: { target: string; swap: string }): void;
 };
 
+interface DomainData {
+  hostname: string;
+  sslStatus: "none" | "pending" | "active" | "error";
+  dnsStatus: "unknown" | "ok" | "mismatch";
+}
 interface TargetData {
   id: number;
   kind: "app" | "db";
@@ -16,6 +21,7 @@ interface TargetData {
   dbType: string | null;
   logical?: boolean; // 逻辑库：不起容器，连接串可复制
   url?: string;
+  domains?: DomainData[];
   updateAvailable: boolean;
   status: "queued" | "building" | "transferring" | "deploying" | "success" | "failed" | null;
   running: boolean;
@@ -196,6 +202,21 @@ function renderTarget(target: TargetData) {
   top.appendChild(badges);
   row.appendChild(top);
 
+  // 域名徽章：ssl 状态着色，点击直达
+  for (const d of target.domains ?? []) {
+    const link = document.createElement("a");
+    const cls =
+      d.sslStatus === "active" ? "text-tide-400 hover:text-tide-300"
+      : d.dnsStatus === "mismatch" ? "text-signal-500 hover:text-signal-400"
+      : "text-brass-500 hover:text-brass-400";
+    link.className = `mt-0.5 block truncate text-[11px] mono transition-colors ${cls}`;
+    link.href = `https://${d.hostname}`;
+    link.target = "_blank";
+    link.rel = "noreferrer";
+    link.textContent = `${d.sslStatus === "active" ? "🔒" : "⏳"} ${d.hostname}`;
+    row.appendChild(link);
+  }
+
   const actions = document.createElement("div");
   actions.className = "mt-1 flex items-center gap-1";
   actions.appendChild(
@@ -215,6 +236,13 @@ function renderTarget(target: TargetData) {
       btn("连接串", "text-tide-400 hover:text-tide-300", async () => {
         await navigator.clipboard.writeText(target.url!);
       }),
+    );
+  }
+  if (target.kind === "app") {
+    actions.appendChild(
+      btn("域名", "text-neutral-500 hover:text-neutral-200", () =>
+        htmx.ajax("GET", `/api/deploy/ui/targets/${target.id}/domains`, { target: "#modal-root", swap: "innerHTML" }),
+      ),
     );
   }
   actions.appendChild(

@@ -33,6 +33,14 @@ async function canvasData(ctx: Ctx, projectId: number) {
           url = (JSON.parse(decryptSecret(target.envJson)) as { url?: string }).url;
         } catch {}
       }
+      // app 的域名绑定（edge 反代 + 证书状态徽章）
+      const domains = target.kind === "app"
+        ? (await ctx.deploy.domainsOfTarget(target.id)).map((d) => ({
+          hostname: d.hostname,
+          sslStatus: d.sslStatus,
+          dnsStatus: d.dnsStatus,
+        }))
+        : [];
       targets.push({
         id: target.id,
         kind: target.kind,
@@ -40,6 +48,7 @@ async function canvasData(ctx: Ctx, projectId: number) {
         dbType: target.dbType,
         logical: Boolean(target.instanceOf),
         url,
+        domains,
         updateAvailable: target.updateAvailable,
         status: dep?.status ?? null,
         running: ctx.deploy.isRunning(target.id),

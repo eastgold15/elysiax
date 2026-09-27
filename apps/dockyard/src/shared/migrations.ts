@@ -22,4 +22,14 @@ export const migrationsJournal: MigrationsJournal = [
     timestamp: 3,
     sql: "ALTER TABLE `deploy_targets` ADD `instanceOf` integer REFERENCES deploy_targets(id);--> statement-breakpoint\nALTER TABLE `deploy_targets` ADD `containerName` text;--> statement-breakpoint\nALTER TABLE `servers` ADD `machineId` text;--> statement-breakpoint\nALTER TABLE `servers` ADD `dockerId` text;--> statement-breakpoint\nPRAGMA foreign_keys=OFF;--> statement-breakpoint\nCREATE TABLE `__new_deploy_targets` (\n\t`id` integer PRIMARY KEY AUTOINCREMENT,\n\t`nodeId` integer NOT NULL,\n\t`kind` text NOT NULL,\n\t`name` text NOT NULL,\n\t`instanceOf` integer,\n\t`containerName` text,\n\t`repoUrl` text,\n\t`branch` text DEFAULT 'main',\n\t`composePath` text DEFAULT 'docker-compose.yml',\n\t`serviceName` text,\n\t`dbType` text,\n\t`remoteDir` text,\n\t`envJson` text,\n\t`lastKnownSha` text,\n\t`etag` text,\n\t`updateAvailable` integer DEFAULT false NOT NULL,\n\t`createdAt` integer NOT NULL,\n\tCONSTRAINT `fk_deploy_targets_nodeId_canvas_nodes_id_fk` FOREIGN KEY (`nodeId`) REFERENCES `canvas_nodes`(`id`) ON DELETE CASCADE,\n\tCONSTRAINT `fk_deploy_targets_instanceOf_deploy_targets_id_fk` FOREIGN KEY (`instanceOf`) REFERENCES `deploy_targets`(`id`),\n\tCONSTRAINT `deploy_targets_nodeId_kind_name_unique` UNIQUE(`nodeId`,`kind`,`name`)\n);\n--> statement-breakpoint\nINSERT INTO `__new_deploy_targets`(`id`, `nodeId`, `kind`, `name`, `repoUrl`, `branch`, `composePath`, `serviceName`, `dbType`, `remoteDir`, `envJson`, `lastKnownSha`, `etag`, `updateAvailable`, `createdAt`) SELECT `id`, `nodeId`, `kind`, `name`, `repoUrl`, `branch`, `composePath`, `serviceName`, `dbType`, `remoteDir`, `envJson`, `lastKnownSha`, `etag`, `updateAvailable`, `createdAt` FROM `deploy_targets`;--> statement-breakpoint\nDROP TABLE `deploy_targets`;--> statement-breakpoint\nALTER TABLE `__new_deploy_targets` RENAME TO `deploy_targets`;--> statement-breakpoint\nPRAGMA foreign_keys=ON;",
   },
+  {
+    name: "0003_domains",
+    timestamp: 4,
+    sql: "CREATE TABLE `domains` (\n\t`id` integer PRIMARY KEY AUTOINCREMENT,\n\t`targetId` integer NOT NULL,\n\t`hostname` text NOT NULL,\n\t`serviceName` text,\n\t`targetPort` integer NOT NULL,\n\t`dnsStatus` text DEFAULT 'unknown' NOT NULL,\n\t`sslStatus` text DEFAULT 'none' NOT NULL,\n\t`sslError` text,\n\t`createdAt` integer NOT NULL,\n\tCONSTRAINT `fk_domains_targetId_deploy_targets_id_fk` FOREIGN KEY (`targetId`) REFERENCES `deploy_targets`(`id`) ON DELETE CASCADE,\n\tCONSTRAINT `domains_targetId_hostname_unique` UNIQUE(`targetId`,`hostname`)\n);",
+  },
+  {
+    name: "0004_override_compose",
+    timestamp: 5,
+    sql: "ALTER TABLE `deploy_targets` ADD `overrideCompose` text;",
+  },
 ];

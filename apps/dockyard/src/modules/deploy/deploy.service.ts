@@ -9,6 +9,14 @@ import type { ServerService } from "../servers/servers.service";
 import type { GithubService } from "../github/github.service";
 import type { CanvasRepository } from "../canvas/canvas.repository";
 import type { DeployRepository } from "./deploy.repository";
+import type { EdgeService } from "../edge/edge.service";
+import {
+  configToDetect,
+  detectFromCompose,
+  envFilePaths,
+  parseOpenshipConfigJson,
+  type DetectResult,
+} from "./detect";
 import {
   containerNameOf,
   dbCompose,
@@ -51,6 +59,7 @@ export class DeployService {
     private readonly github: GithubService,
     private readonly canvasRepo: CanvasRepository,
     private readonly paths: AppPaths,
+    private readonly edge: EdgeService,
   ) { }
 
   targetsOfNode(nodeId: number) {
@@ -76,12 +85,96 @@ export class DeployService {
   async createAppTarget(input: {
     nodeId: number; name: string; repoUrl: string; branch: string;
     composePath: string; serviceName?: string; remoteDir: string;
+    envText?: string; // 识别结果合并出的 .env（enc1: 加密落库）
+    overrideCompose?: string | null; // 资源限制 override（compose -f 叠加）
+    domains?: { hostname: string; serviceName?: string; targetPort: number }[];
   }) {
     parseOwnerRepo(input.repoUrl); // 提前校验
     await this.assertNameFree(input.nodeId, "app", input.name);
-    const target = await this.repo.createTarget({ kind: "app", ...input });
+    const { envText, overrideCompose, domains, ...base } = input;
+    const target = await this.repo.createTarget({ kind: "app", ...base });
     // 逻辑库容器名定死（对账用）；app 的容器名由用户 compose 决定，config 时读
-    return target;
+    if (envText?.trim() || overrideCompose)
+      await this.repo.updateTarget(target.id, {
+        ...(envText?.trim() ? { envJson: encryptSecret(envText) } : {}),
+        // override 含服务级 environment（秘密值），enc1: 加密落库
+        ...(overrideCompose ? { overrideCompose: encryptSecret(overrideCompose) } : {}),
+      });
+    // 域名归 edge 上下文（含抢占检查）；建行后再绑，失败则整单撤掉
+    try {
+      for (const d of domains ?? [])
+        await this.edge.addDomain(target.id, d);
+    } catch (e) {
+      await this.repo.removeTarget(target.id);
+      throw e;
+    }
+    return (await this.repo.targetById(target.id))!;
+  }
+
+  // ── 域名门面：域名归 edge 上下文，deploy 只是转发（画布/控制器不直接碰 edge）──
+  domainsOfTarget(targetId: number) {
+    return this.edge.domainsOfTarget(targetId);
+  }
+
+  domainById(id: number) {
+    return this.edge.domainById(id);
+  }
+
+  addDomain(targetId: number, input: { hostname: string; targetPort: number; serviceName?: string }) {
+    return this.edge.addDomain(targetId, input);
+  }
+
+  removeDomain(id: number) {
+    return this.edge.removeDomain(id);
+  }
+
+  /** 域名变更后的 edge 全量对账（增删域名、手动「重新同步」按钮共用） */
+  async syncEdge(targetId: number, log: Log = async () => {}) {
+    const target = await this.repo.targetById(targetId);
+    if (!target) throw new Error("部署目标不存在");
+    await this.edge.syncServer(await this.nodeServerId(target), log);
+  }
+
+  // ── 自动识别：浅克隆 → openship.json（声明覆盖）→ 无则 compose 回退 ──
+  async detectRepo(input: { repoUrl: string; branch: string }): Promise<DetectResult> {
+    const ownerRepo = parseOwnerRepo(input.repoUrl);
+    const branch = input.branch || "main";
+    const repoDir = join(this.paths.reposDir, `detect-${ownerRepo.replace(/[^\w.-]/g, "_")}`);
+    const authedUrl = await this.github.authedRepoUrl(ownerRepo);
+    const silent: Log = async () => {};
+    if (!existsSync(repoDir)) {
+      await run(["git", "clone", "--depth", "1", "--branch", branch, authedUrl, repoDir], this.paths.reposDir, silent);
+      await run(["git", "remote", "set-url", "origin", `https://github.com/${ownerRepo}.git`], repoDir, silent);
+    } else {
+      await run(["git", "fetch", "--depth", "1", authedUrl, branch], repoDir, silent);
+      await run(["git", "checkout", "FETCH_HEAD"], repoDir, silent);
+    }
+
+    // openship.json 大小写不敏感地找（openship 的 prepare.service 同款宽容）
+    const { readdirSync } = await import("node:fs");
+    const hit = readdirSync(repoDir).find((f) => f.toLowerCase() === "openship.json");
+    if (hit) {
+      const parsed = parseOpenshipConfigJson(await Bun.file(join(repoDir, hit)).text());
+      const composePath = parsed.config?.composePath ?? "docker-compose.yml";
+      const composeFile = Bun.file(join(repoDir, composePath));
+      return configToDetect(parsed, (await composeFile.exists()) ? await composeFile.text() : null);
+    }
+    for (const candidate of ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"]) {
+      const file = Bun.file(join(repoDir, candidate));
+      if (await file.exists()) {
+        const result = detectFromCompose(await file.text());
+        result.composePath = candidate;
+        return result;
+      }
+    }
+    return {
+      source: "none",
+      composePath: "docker-compose.yml",
+      services: [],
+      rootEnv: {},
+      errors: [],
+      warnings: ["仓库里既没有 openship.json 也没有 compose 文件，请手动填写部署参数"],
+    };
   }
 
   /** 该节点上可托管逻辑库的实例（kind=db、同类型、非逻辑库） */
@@ -363,12 +456,31 @@ export class DeployService {
     const sftp = await openSftp(client);
     const composeText = await Bun.file(join(repoDir, composePath)).text();
     await sftp.write(`${remoteDir}/docker-compose.yml`, composeText);
+    // 用户 compose 的 env_file 是相对仓库的路径（远端没有目录树）——放空占位，
+    // 否则 compose up 直接报 "env file not found"；真实值由 override 的 environment 注入
+    for (const p of envFilePaths(composeText)) {
+      await client.exec(
+        `cd ${remoteDir} && mkdir -p "${join(".", p, "..")}" && [ -f "${p}" ] || printf '# dockyard 占位：真实环境变量在 docker-compose.dockyard.yml 的 environment 里\\n' > "${p}"`,
+      );
+    }
     if (target.envJson) await sftp.write(`${remoteDir}/.env`, decryptSecret(target.envJson));
+    // 识别出的资源限制/服务级 environment 以 override compose 叠加（不改用户原 compose）
+    if (target.overrideCompose)
+      await sftp.write(`${remoteDir}/docker-compose.dockyard.yml`, decryptSecret(target.overrideCompose));
     await sftp.close();
     await log("远端 docker compose up -d …");
-    const up = await client.exec(`cd ${remoteDir} && docker compose -p ${project} up -d`);
+    // 注意：-f 一旦指定就只认列出的文件，base 必须一起带上
+    const overrideArg = target.overrideCompose ? " -f docker-compose.yml -f docker-compose.dockyard.yml" : "";
+    const up = await client.exec(`cd ${remoteDir} && docker compose -p ${project}${overrideArg} up -d`);
     await log(up.stdout + up.stderr);
     if (up.code !== 0) throw new Error(`远端 compose up 失败（exit ${up.code}）`);
+
+    // 有域名绑定 → edge 全量对账（路由 + 证书状态回写）
+    const domains = await this.edge.domainsOfTarget(target.id);
+    if (domains.length > 0) {
+      await log("同步 edge 路由与证书 …");
+      await this.edge.syncServer(serverId, log);
+    }
 
     await this.repo.updateTarget(target.id, { lastKnownSha: sha, updateAvailable: false });
   }

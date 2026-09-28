@@ -209,7 +209,7 @@ function Flow({ projectId }: { projectId: number }) {
 
   /** 结构拉取：只在挂载和 HX-Trigger: refresh（结构变更）时调用，不轮询 */
   const fetchBoard = useCallback(async () => {
-    const res = await fetch(routes.canvas.uiByProjectId(projectId));
+    const res = await fetch(routes.canvas.uiByProjectIdBoard(projectId));
     if (!res.ok) return;
     const board = (await res.json()) as BoardModel;
     structureRef.current = board.cards;
@@ -246,7 +246,7 @@ function Flow({ projectId }: { projectId: number }) {
 
   // 实时：SSE——部署 status/running、容器 state，只进 live（不进 nodes）
   useEffect(() => {
-    const es = new EventSource(routes.canvas.uiByProjectId(projectId));
+    const es = new EventSource(routes.canvas.uiByProjectIdEvents(projectId));
     es.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data) as Record<string, unknown>;

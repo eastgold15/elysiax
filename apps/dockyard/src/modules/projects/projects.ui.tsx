@@ -69,7 +69,7 @@ const ProjectList: Component<ProjectListModel> = ({ local, remote, editors, defa
         {local.map((p) => (
           <div
             class="group flex h-12 cursor-pointer items-center gap-4 border-b border-harbor-800/60 px-6 hover:bg-harbor-900"
-            hx-get={routes.canvas.uiByProjectId(encodeURIComponent(p.path))}
+            hx-get={`${routes.canvas.uiLocal()}?path=${encodeURIComponent(p.path)}`}
             hx-target="#main"
             hx-swap="innerHTML"
           >

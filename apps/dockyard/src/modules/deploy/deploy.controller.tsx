@@ -90,6 +90,21 @@ export const deployController = defineController({ prefix: "/deploy" })
     // 项目 = 仓库：预填项目绑定的 repoUrl（仍可改——同一仓库可以多方式部署）
     const node = await di.get("canvasService").byId(params.nodeId);
     const project = node ? await di.get("projectService").byId(node.projectId) : undefined;
+    // 本地文件夹导入：不需要 Git，跳过仓库选择，直接识别本地目录
+    const isLocal = project?.sourceType === "local" || (!!project?.localPath && !project?.repoUrl);
+    if (isLocal && project?.localPath) {
+      const svc = di.get("deployService");
+      const detect = await svc.detectLocal({ localPath: project.localPath, rootDir: project.rootDir ?? undefined });
+      const dbRefs = await svc.dbRefsOfNode(params.nodeId);
+      const carry = {
+        nodeId: params.nodeId,
+        name: project.slug,
+        repoUrl: project.repoUrl ?? "",
+        branch: project.branch ?? "main",
+        remoteDir: `~/dockyard/${project.slug}`,
+      };
+      return <AppDetectStep carry={carry} detect={detect} envText={detectToEnvText(detect)} dbRefs={dbRefs} />;
+    }
     return <NewAppDrawer nodeId={params.nodeId} repos={repos} error={ghError} prefillRepo={project?.repoUrl ?? undefined} />;
   })
   // 向导 step1 → step2：克隆仓库，读 openship.json / compose 自动识别
@@ -138,7 +153,8 @@ export const deployController = defineController({ prefix: "/deploy" })
       body: t.Object({
         nodeId: t.Numeric(),
         name: t.String({ minLength: 1 }),
-        repoUrl: t.String({ minLength: 1 }),
+        // 本地文件夹导入无仓库，repoUrl 可空
+        repoUrl: t.Optional(t.String()),
         branch: t.String({ default: "main" }),
         composePath: t.String({ default: "docker-compose.yml" }),
         remoteDir: t.String({ minLength: 1 }),
@@ -155,7 +171,7 @@ export const deployController = defineController({ prefix: "/deploy" })
         target = await svc.createAppTarget({
           nodeId: body.nodeId,
           name: body.name,
-          repoUrl: body.repoUrl,
+          repoUrl: body.repoUrl?.trim() || undefined,
           branch: body.branch,
           composePath: body.composePath,
           remoteDir: body.remoteDir,

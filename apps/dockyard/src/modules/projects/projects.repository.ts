@@ -17,7 +17,7 @@ export class ProjectRepository {
     return this.db.select().from(projects).where(eq(projects.localPath, localPath)).limit(1).then((r) => r[0]);
   }
 
-  async create(name: string, repoUrl?: string, localPath?: string): Promise<Project> {
+  async create(name: string, repoUrl?: string, localPath?: string, sourceType?: "github" | "local"): Promise<Project> {
     const base =
       name
         .trim()
@@ -29,7 +29,7 @@ export class ProjectRepository {
     for (let i = 2; await this.bySlug(slug); i++) slug = `${base}-${i}`;
     const [row] = await this.db
       .insert(projects)
-      .values({ name, slug, repoUrl: repoUrl || null, localPath: localPath || null })
+      .values({ name, slug, repoUrl: repoUrl || null, localPath: localPath || null, sourceType: sourceType ?? null })
       .returning();
     return row!;
   }

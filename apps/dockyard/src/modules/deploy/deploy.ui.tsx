@@ -196,17 +196,17 @@ export const DbRefPicker: Component<{ refs: DbRef[]; selected: number[] }> = ({ 
 
 /** Step 2：识别结果确认（右侧抽屉，分区同 Railway 服务面板）。errors 硬阻断，warnings 只提示 */
 export const AppDetectStep: Component<{
-  carry: { nodeId: number; name: string; repoUrl: string; branch: string; remoteDir: string };
+  carry: { nodeId: number; name: string; repoUrl?: string; branch: string; remoteDir: string };
   detect: DetectResult;
   envText: string;
   dbRefs: DbRef[];
   error?: string;
 }> = ({ carry, detect, envText, dbRefs, error }) => (
-  <Drawer title={carry.name} sub={`${carry.repoUrl}@${carry.branch}`}>
+  <Drawer title={carry.name} sub={carry.repoUrl ? `${carry.repoUrl}@${carry.branch}` : "本地文件夹导入"}>
     <form class="flex flex-col gap-5" hx-post={routes.deploy.targetsApp()} hx-target="#modal-root" hx-swap="innerHTML">
       <input type="hidden" name="nodeId" value={String(carry.nodeId)} />
       <input type="hidden" name="name" value={carry.name} />
-      <input type="hidden" name="repoUrl" value={carry.repoUrl} />
+      <input type="hidden" name="repoUrl" value={carry.repoUrl ?? ""} />
       <input type="hidden" name="branch" value={carry.branch} />
       <input type="hidden" name="remoteDir" value={carry.remoteDir} />
 

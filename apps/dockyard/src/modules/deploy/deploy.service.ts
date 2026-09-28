@@ -6,7 +6,8 @@ import { openSftp } from "@meitaim/ssh/sftp";
 import type { AppPaths } from "../../shared/paths";
 import { decryptSecret, encryptSecret } from "../../shared/crypto";
 import { events } from "../../shared/events";
-import type { DeployTarget, Deployment, DepEdge, TargetService } from "../../shared/schema";
+import type { DeployTarget, Deployment, DepEdge, Project, TargetService } from "../../shared/schema";
+import type { ProjectRepository } from "../projects/projects.repository";
 import type { ServerService } from "../servers/servers.service";
 import type { GithubService } from "../github/github.service";
 import type { CanvasRepository } from "../canvas/canvas.repository";
@@ -75,7 +76,18 @@ export class DeployService {
     private readonly canvasRepo: CanvasRepository,
     private readonly paths: AppPaths,
     private readonly edge: EdgeService,
+    private readonly projectRepo: ProjectRepository,
   ) { }
+
+  /** 项目导入来源：github = 远端拉代码+服务器构建；local = 本地构建+镜像推送。
+   *  旧数据 sourceType 为 null，按 localPath/repoUrl 推断。 */
+  private async sourceOf(target: DeployTarget): Promise<{ type: "local" | "github"; project?: Project }> {
+    const node = await this.canvasRepo.byId(target.nodeId);
+    const project = node ? await this.projectRepo.byId(node.projectId) : undefined;
+    const type: "local" | "github" =
+      project?.sourceType ?? (project?.localPath && !target.repoUrl ? "local" : "github");
+    return { type, project };
+  }
 
   targetsOfNode(nodeId: number) {
     return this.repo.targetsOfNode(nodeId);
@@ -98,7 +110,7 @@ export class DeployService {
   }
 
   async createAppTarget(input: {
-    nodeId: number; name: string; repoUrl: string; branch: string;
+    nodeId: number; name: string; repoUrl?: string; branch: string;
     composePath: string; serviceName?: string; remoteDir: string;
     envText?: string; // 识别结果合并出的 .env（enc1: 加密落库）
     overrideCompose?: string | null; // 资源限制 override（compose -f 叠加）
@@ -106,7 +118,7 @@ export class DeployService {
     domains?: { hostname: string; serviceName?: string; targetPort: number }[];
     services?: DetectedService[]; // compose 服务清单（画布小卡片；剥离秘密值后明文落库）
   }) {
-    parseOwnerRepo(input.repoUrl); // 提前校验
+    if (input.repoUrl?.trim()) parseOwnerRepo(input.repoUrl); // 提前校验（本地导入可无仓库）
     await this.assertNameFree(input.nodeId, "app", input.name);
     const { envText, overrideCompose, domains, dependsOn, services, ...base } = input;
     const target = await this.repo.createTarget({
@@ -150,7 +162,12 @@ export class DeployService {
     if (target.servicesJson)
       return { project: target.servicesJson.project ?? fallbackProject, services: target.servicesJson.services };
     try {
-      const repoDir = join(this.paths.reposDir, `target-${target.id}`);
+      // 本地导入直接读项目目录；GitHub 导入读本地克隆缓存（远端构建后缓存可能不存在 → 静默降级）
+      const { type, project } = await this.sourceOf(target);
+      const repoDir =
+        type === "local" && project?.localPath
+          ? join(project.localPath, project.rootDir ?? "")
+          : join(this.paths.reposDir, `target-${target.id}`);
       if (!existsSync(repoDir)) return { project: null, services: [] };
       const composePath = target.composePath ?? "docker-compose.yml";
       // env_file 多为 gitignore 的本地秘密（仓库缓存里没有）→ 写占位，否则 compose config 直接报错（同 deployApp 远端做法）
@@ -232,6 +249,37 @@ export class DeployService {
       rootEnv: {},
       errors: [],
       warnings: ["仓库里既没有 openship.json 也没有 compose 文件，请手动填写部署参数"],
+    };
+  }
+
+  /** 本地文件夹导入的识别：直接读本机目录的 openship.json / compose（不走 GitHub API） */
+  async detectLocal(input: { localPath: string; rootDir?: string }): Promise<DetectResult> {
+    const dir = join(input.localPath, input.rootDir ?? "");
+    const read = async (path: string): Promise<string | null> => {
+      const file = Bun.file(join(dir, path));
+      return (await file.exists()) ? file.text() : null;
+    };
+    const openshipText = await read("openship.json");
+    if (openshipText !== null) {
+      const parsed = parseOpenshipConfigJson(openshipText);
+      const composePath = parsed.config?.composePath ?? "docker-compose.yml";
+      return configToDetect(parsed, await read(composePath));
+    }
+    for (const candidate of ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"]) {
+      const text = await read(candidate);
+      if (text !== null) {
+        const result = detectFromCompose(text);
+        result.composePath = candidate;
+        return result;
+      }
+    }
+    return {
+      source: "none",
+      composePath: "docker-compose.yml",
+      services: [],
+      rootEnv: {},
+      errors: [],
+      warnings: ["本地目录里既没有 openship.json 也没有 compose 文件，请手动填写部署参数"],
     };
   }
 
@@ -750,32 +798,33 @@ export class DeployService {
     await log(`连接串：${creds.url.replace(creds.password, "****")}`);
   }
 
-  // ── app：clone → 本地构建 → 传输镜像 → 远端 compose up ──
+  // ── app：按项目来源分派（统一引擎，仅「代码获取 + 镜像构建」分支）──
+  // github = 远端服务器拉代码、服务器上构建镜像；local = 本地客户端构建、推送镜像到服务器
   private async deployApp(
     target: DeployTarget,
     log: Log,
     setStatus: (s: Deployment["status"], p?: Partial<Deployment>) => Promise<unknown>,
   ) {
-    const ownerRepo = parseOwnerRepo(target.repoUrl!);
-    const branch = target.branch ?? "main";
-    const repoDir = join(this.paths.reposDir, `target-${target.id}`);
-    const authedUrl = await this.github.authedRepoUrl(ownerRepo);
-
-    await setStatus("building");
-    if (!existsSync(repoDir)) {
-      await log(`克隆 ${ownerRepo} …`);
-      await run(["git", "clone", authedUrl, repoDir], this.paths.reposDir, log);
-      // token 不落盘：clone 后重写 remote 为无凭据 URL
-      await run(
-        ["git", "remote", "set-url", "origin", `https://github.com/${ownerRepo}.git`],
-        repoDir, log,
-      );
+    const { type, project } = await this.sourceOf(target);
+    if (type === "local") {
+      if (!project?.localPath) throw new Error("本地导入的项目缺少 localPath");
+      return this.deployAppLocalBuild(target, project, log, setStatus);
     }
-    await run(["git", "fetch", authedUrl, branch], repoDir, log);
-    await run(["git", "checkout", "FETCH_HEAD"], repoDir, log);
-    const shaProc = Bun.spawn(["git", "rev-parse", "--short=8", "HEAD"], { cwd: repoDir, stdout: "pipe" });
-    const sha = (await new Response(shaProc.stdout).text()).trim();
-    await log(`构建 ${ownerRepo}@${sha} …`);
+    return this.deployAppRemoteBuild(target, log, setStatus);
+  }
+
+  // ── app · 本地文件夹导入：本地构建 → docker save → 远端 load → compose up ──
+  private async deployAppLocalBuild(
+    target: DeployTarget,
+    proj: Project,
+    log: Log,
+    setStatus: (s: Deployment["status"], p?: Partial<Deployment>) => Promise<unknown>,
+  ) {
+    const repoDir = join(proj.localPath!, proj.rootDir ?? "");
+    await setStatus("building");
+    const shaProc = Bun.spawn(["git", "rev-parse", "--short=8", "HEAD"], { cwd: repoDir, stdout: "pipe", stderr: "ignore" });
+    const sha = ((await new Response(shaProc.stdout).text()).trim()) || `local-${Date.now()}`;
+    await log(`本地构建 ${repoDir} @${sha} …`);
 
     const composePath = target.composePath ?? "docker-compose.yml";
     const composeBase = ["docker", "compose", "-f", composePath];
@@ -850,6 +899,87 @@ export class DeployService {
     if (up.code !== 0) throw new Error(`远端 compose up 失败（exit ${up.code}）`);
 
     // 有域名绑定 → edge 全量对账（路由 + 证书状态回写）
+    const domains = await this.edge.domainsOfTarget(target.id);
+    if (domains.length > 0) {
+      await log("同步 edge 路由与证书 …");
+      await this.edge.syncServer(serverId, log);
+    }
+
+    await this.repo.updateTarget(target.id, { lastKnownSha: sha, updateAvailable: false });
+  }
+
+  // ── app · GitHub 导入：远端服务器拉代码 → 服务器上构建镜像 → compose up（免镜像传输）──
+  private async deployAppRemoteBuild(
+    target: DeployTarget,
+    log: Log,
+    setStatus: (s: Deployment["status"], p?: Partial<Deployment>) => Promise<unknown>,
+  ) {
+    if (!target.repoUrl) throw new Error("GitHub 导入的部署目标缺少 repoUrl");
+    const ownerRepo = parseOwnerRepo(target.repoUrl);
+    const branch = target.branch ?? "main";
+    const serverId = await this.nodeServerId(target);
+    const client = await this.serverService.ssh(serverId);
+    const authedUrl = await this.github.authedRepoUrl(ownerRepo);
+    const srcDir = await this.resolveRemoteDir(client, `~/dockyard/src/${target.id}-${target.name}`);
+    const composePath = target.composePath ?? "docker-compose.yml";
+
+    // 1. 代码获取：远端 clone / fetch（token 不落盘——clone 后立即重写 remote）
+    await setStatus("building");
+    const probe = await client.exec(`[ -d "${srcDir}/.git" ] && echo yes || echo no`);
+    if (probe.stdout.trim() !== "yes") {
+      await log(`远端克隆 ${ownerRepo} …`);
+      await client.exec(`mkdir -p "$(dirname "${srcDir}")"`);
+      const clone = await client.exec(`git clone "${authedUrl}" "${srcDir}"`);
+      if (clone.code !== 0) throw new Error(`远端克隆失败（exit ${clone.code}）\n${clone.stderr}`);
+      await client.exec(`git -C "${srcDir}" remote set-url origin "https://github.com/${ownerRepo}.git"`);
+    }
+    const fetch = await client.exec(`git -C "${srcDir}" fetch "${authedUrl}" "${branch}" && git -C "${srcDir}" checkout FETCH_HEAD`);
+    if (fetch.code !== 0) throw new Error(`远端拉取失败（exit ${fetch.code}）\n${fetch.stderr}`);
+    const sha = (await client.exec(`git -C "${srcDir}" rev-parse --short=8 HEAD`)).stdout.trim();
+    await log(`远端构建 ${ownerRepo}@${sha} …`);
+
+    // 2. env_file 占位（compose config/build 要求文件存在；真实值由 override/.env 注入）
+    const composeText = (await client.exec(`cat "${srcDir}/${composePath}"`)).stdout;
+    for (const p of envFilePaths(composeText)) {
+      await client.exec(
+        `cd "${srcDir}" && mkdir -p "${join(".", p, "..")}" && [ -f "${p}" ] || printf '# dockyard 占位\\n' > "${p}"`,
+      );
+    }
+
+    // 3. 服务器上构建镜像
+    const build = await client.exec(
+      `cd "${srcDir}" && docker compose -f "${composePath}" build ${target.serviceName ?? ""} 2>&1 | tail -50`,
+    );
+    await log(build.stdout);
+    if (build.code !== 0) throw new Error(`远端构建失败（exit ${build.code}）`);
+
+    // 4. 对账 + 环境变量/override 注入 + up
+    await setStatus("deploying", { commitSha: sha });
+    const cfgOut = await client.exec(`cd "${srcDir}" && docker compose -f "${composePath}" config --format json`);
+    if (cfgOut.code !== 0) throw new Error(`远端 compose config 失败：${cfgOut.stderr}`);
+    const cfg = JSON.parse(cfgOut.stdout) as {
+      name?: string;
+      services?: Record<string, { container_name?: string }>;
+    };
+    const projectName = cfg.name ?? `dockyard-${target.id}`;
+    const containerNames = Object.entries(cfg.services ?? {}).map(
+      ([svc, def]) => def.container_name ?? `${projectName}-${svc}-1`,
+    );
+    if (containerNames.length > 0)
+      await this.preflightCheck(target, serverId, containerNames, log);
+
+    const sftp = await openSftp(client);
+    if (target.envJson) await sftp.write(`${srcDir}/.env`, decryptSecret(target.envJson));
+    if (target.overrideCompose)
+      await sftp.write(`${srcDir}/docker-compose.dockyard.yml`, decryptSecret(target.overrideCompose));
+    await sftp.close();
+    await log("远端 docker compose up -d …");
+    const overrideArg = target.overrideCompose ? ` -f "${composePath}" -f docker-compose.dockyard.yml` : ` -f "${composePath}"`;
+    const up = await client.exec(`cd "${srcDir}" && docker compose -p ${projectName}${overrideArg} up -d`);
+    await log(up.stdout + up.stderr);
+    if (up.code !== 0) throw new Error(`远端 compose up 失败（exit ${up.code}）`);
+
+    // 5. 域名绑定 → edge 全量对账
     const domains = await this.edge.domainsOfTarget(target.id);
     if (domains.length > 0) {
       await log("同步 edge 路由与证书 …");

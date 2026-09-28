@@ -1,0 +1,164 @@
+---
+title: elysiax 框架
+description: Bun + Elysia + htmx + React 岛的模块化全栈框架——模块即限界上下文，DI 装配、代码生成、类型化路由、SSE 实时、桌面打包。
+---
+
+# elysiax
+
+Bun + Elysia 2 + htmx（服务端 TSX）+ React 岛的模块化全栈框架。一个模块就是一个 **DDD 限界上下文**：自己的路由、服务、仓库、UI，由 InferDI 容器装配，codegen 负责把所有声明粘成类型安全的整体。
+
+交互模型是混合的：**htmx 管页面和表单**（服务端渲染片段，局部 swap），**React 岛管复杂交互区**（如画布）——两者永远不操作同一个 DOM 元素。
+
+## 特点一览
+
+| 特性 | 说明 |
+| --- | --- |
+| 单文件事实源 | `<name>.di.ts` 声明 route + 服务，没有 module.json，没有散落的注册代码 |
+| 类型化 DI | `provide(Class, [Deps])` 依赖写类引用，类型从构造函数签名推导，写错编译报错 |
+| 代码生成 | 扫描模块目录生成容器/模块/服务/路由类型，改声明自动重生成 |
+| 类型化路由 | `routes.deploy.domainsById(d.id)` —— 改路由时引用处编译报错，不再有裸路径漂移 |
+| `.ui()` 片段路由 | 「取数 + 渲染组件」一步声明 |
+| 校验错误回显 | typebox 校验失败自动给 htmx 返回错误横幅片段（htmx 默认不 swap 4xx） |
+| defineRealtime | 进程内事件总线 + SSE，心跳/快照/断开自动退订 |
+| React 岛 | htmx 与 React 共存：htmx 渲染壳容器，岛内部全归 React |
+| 测试容器 | `createTestContainer(gen, { mock })` 一行起容器，override 换实现 |
+| CLI | 脚手架、dev（codegen + hot）、doctor 体检、`bun build --compile` 桌面打包 |
+
+## 一个模块长什么样
+
+```
+src/modules/<name>/
+  <name>.di.ts          # 唯一事实源：route + 服务声明
+  <name>.controller.tsx # 路由入口（Elysia 实例，di 有类型）
+  <name>.service.ts     # 业务逻辑
+  <name>.repository.ts  # 数据访问
+  <name>.ui.tsx         # 服务端渲染组件（可选）
+  island/               # React 岛（可选，内部全归 React）
+```
+
+## 声明服务：provide / lazy
+
+```ts
+// user.di.ts
+import { defineModule, lazy, provide } from "@elysiax/core";
+
+export default defineModule({
+  route: "/users",
+  provides: {
+    // 键 = camelCase 类名；依赖写类引用，类型从构造函数签名推导
+    userRepository: provide(UserRepository, ["db"]),  // 值服务（db 等）用字符串键
+    userService: provide(UserService, [UserRepository, lazy(OrderService)]),
+    //                                                ↑ 懒加载，Lazy<T> 参数专用
+  },
+});
+```
+
+规则：
+
+- 键与 camelCase 类名不一致会 warn（其他模块按键注入）
+- `lazy(X)` 只允许用在 `Lazy<X>` 类型的构造函数参数上
+- InferDI 不支持双向 Lazy——跨上下文保持单向依赖，组合上移到 controller
+
+## controller 与窄类型
+
+```tsx
+import { defineController, type UserServices } from "../../../.elysiax";
+
+export const userController = defineController<UserServices>({ prefix: "/users" })
+  .get("/:id", ({ di, params }) => di.get("userService").find(params.id));
+```
+
+- `di` 每请求一个 InferDI scope，类型由泛型收敛到模块边界（provides ∪ 直接 deps）
+- 不传泛型则有全图 ServiceMap
+- 返回 JSX 即 `text/html` 响应（框架内置 `html()` autoDetect）
+
+### .ui() 片段路由
+
+```tsx
+.ui("/ui", ProjectList, ({ di }) => listModel(di.get("projectService")))
+// 等价于 .get("/ui", async ({ di }) => <ProjectList {...await listModel(...)} />)
+```
+
+不传 model 即静态片段。模块有 `.ui.tsx` 但无 controller 时，自动挂载 `GET <route>/ui`。
+
+## 类型化路由（routes.gen）
+
+codegen 静态解析 controller 里的字面量路由生成助手，hx-* 里不写裸路径：
+
+```tsx
+import { routes } from "../../../.elysiax";
+
+hx-get={routes.deploy.uiInstances()}
+hx-delete={routes.deploy.domainsById(d.id)}
+// 查询串拼接
+hx-get={`${routes.deploy.uiTargetsByIdLog(id)}?dep=${depId}`}
+```
+
+改路由或前缀时，所有引用处编译报错。
+
+> **注意**：React 岛（浏览器代码）必须 `import { routes } from ".elysiax/routes.gen"` **直接引文件**，不能引 `.elysiax` 桶文件——桶文件会把整个服务端图谱打进浏览器 bundle（bun:sqlite 报错）。
+
+## 表单校验错误回显
+
+typebox 校验失败 + `HX-Request` 头时，`elysiaxAPI` 自动返回 **200 + 错误横幅片段**（htmx 默认不 swap 4xx，所以必须是 200）；非 htmx 请求仍是 JSON 422。
+
+```ts
+elysiaxAPI(root, modules, { validationError: false | ((err) => html) });
+```
+
+## 实时推送：defineRealtime
+
+```ts
+// shared/realtime.ts
+export const rt = defineRealtime<MyEvent>();
+
+// controller：SSE 端点，25s 心跳、断开自动退订、snapshot 首帧即齐
+.get("/events/:id", ({ params }) => rt.stream(`res:${params.id}`, () => snapshotOf(params.id)))
+
+// service / 轮询器
+rt.publish(`res:${id}`, event);
+if (rt.hasSubs(`res:${id}`)) { /* 无观众就跳过昂贵的拉取 */ }
+```
+
+内部是 `Response(ReadableStream)`，不依赖 Elysia 的生成器 handler 检测（Elysia 2 只识别生成器函数，箭头返回 generator 对象会挂起）。
+
+## React 岛约定
+
+画布这类复杂交互区用 React 岛，规则：
+
+- 岛文件第一行必须是 `/** @jsxImportSource react */`（在 import 之前）
+- htmx 只渲染壳容器 `<div id="canvas-island">`，岛内部一切归 React；htmx swap 目标不能包含挂载点
+- 岛里调服务端片段用全局 `htmx.ajax` 桥（模态框等仍走服务端渲染）
+- 岛随 htmx 片段进出 `#main`，在 `htmx:afterSwap` 时挂载/卸载
+
+## 测试
+
+```ts
+import * as gen from "../.elysiax";
+import { createTestContainer } from "@elysiax/core";
+
+const di = createTestContainer(gen, { userRepository: new FakeRepo() });
+di.get("userService"); // 注入的是 FakeRepo（override 必须在任何 get 之前）
+```
+
+## CLI
+
+```sh
+elysiax init [dir]        # 从模板创建项目
+elysiax new module orders # 脚手架模块（di + controller + service），自动重跑 codegen
+elysiax new island canvas # 在模块里脚手架 React 岛
+elysiax add <path>        # 源码安装模块（装完自动装配校验）
+elysiax dev               # codegen + bun --hot，声明变化自动重生成
+elysiax gen               # 手动重生成 .elysiax/
+elysiax doctor            # 体检：DI 图、跨模块路由冲突、React 岛 htmx 边界
+elysiax build [--desktop] # 编译二进制 / webview 桌面应用
+```
+
+## htmx JSX 类型
+
+`hx-*` 属性类型由 `@workspace/htmx` 主入口自动引入（type-only），无需任何 `htmx.d.ts` 或 triple-slash 指令。
+
+## 相关文档
+
+- [elysia2.0](./elysia2.0.md)——Elysia 2 迁移要点（`.error(Class)` 替代 onError、TypeBox 1.3 等）
+- [踩坑记录](./pitfalls.mdx)——Bun 打包、InferDI、webview 落地过程中的非显然问题

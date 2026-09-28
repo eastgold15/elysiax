@@ -1,6 +1,6 @@
 import { t } from "elysia";
 import { defineController } from "../../../.elysiax";
-import { AppDetectStep, DeployLog, DomainsModal, InstanceOptions, NewAppDrawer, NewDbModal } from "./deploy.ui";
+import { AppDetectStep, DeployLog, DomainsModal, EnvDrawer, InstanceOptions, NewAppDrawer, NewDbModal } from "./deploy.ui";
 import { LOGICAL_DB_SUPPORT, type DbType } from "./db-templates";
 import type { RepoBrief } from "../github/github.service";
 import { detectToEnvText, detectToOverrideCompose, textToEnvMap, type DetectResult, type DetectedService } from "./detect";
@@ -29,6 +29,13 @@ function servicesFromBody(body: Record<string, unknown>): DetectedService[] {
     });
   }
   return services;
+}
+
+/** 依赖勾选（depIds 复选框，单个时是 string、多个是数组）→ target id 列表 */
+function depIdsFromBody(body: Record<string, unknown>): number[] {
+  const raw = body.depIds;
+  const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  return list.map(Number).filter((n) => Number.isInteger(n) && n > 0);
 }
 
 /** step2 表单 → 创建参数（域名行 + 资源 override） */
@@ -65,7 +72,8 @@ export const deployController = defineController({ prefix: "/deploy" })
     async ({ di, body }) => {
       try {
         const detect = await di.get("deployService").detectRepo(body);
-        return <AppDetectStep carry={body} detect={detect} envText={detectToEnvText(detect)} />;
+        const dbRefs = await di.get("deployService").dbRefsOfNode(body.nodeId);
+        return <AppDetectStep carry={body} detect={detect} envText={detectToEnvText(detect)} dbRefs={dbRefs} />;
       } catch (e) {
         let repos: RepoBrief[] = [];
         try {
@@ -118,6 +126,7 @@ export const deployController = defineController({ prefix: "/deploy" })
           remoteDir: body.remoteDir,
           envText: body.envText,
           overrideCompose: detectToOverrideCompose({ services }),
+          dependsOn: depIdsFromBody(body as unknown as Record<string, unknown>),
           domains: domainsFromServices(services),
         });
       } catch (e) {
@@ -130,7 +139,8 @@ export const deployController = defineController({ prefix: "/deploy" })
           errors: [],
           warnings: [],
         };
-        return <AppDetectStep carry={body} detect={detect} envText={body.envText ?? ""} error={(e as Error).message} />;
+        const dbRefs = await svc.dbRefsOfNode(body.nodeId);
+        return <AppDetectStep carry={body} detect={detect} envText={body.envText ?? ""} dbRefs={dbRefs} error={(e as Error).message} />;
       }
       // Railway 式：创建即部署，直接换出日志面板盯进度（无 dep 行也轮询）
       void svc.deploy(target.id);
@@ -190,6 +200,42 @@ export const deployController = defineController({ prefix: "/deploy" })
     const dep = await di.get("deployService").latestDeployment(params.id);
     return dep?.logText ?? "";
   })
+  // ── 变量抽屉：已有 app 改 .env + 数据库依赖 ──
+  .get("/ui/targets/:id/env", { params: t.Object({ id: t.Number() }) }, async ({ di, params }) => {
+    const svc = di.get("deployService");
+    const target = await svc.targetById(params.id);
+    if (!target || target.kind !== "app") throw new Error("部署目标不存在");
+    return <EnvDrawer target={target} envText={svc.envTextOf(target)} dbRefs={await svc.dbRefsOfNode(target.nodeId)} />;
+  })
+  .post(
+    "/targets/:id/env",
+    {
+      params: t.Object({ id: t.Number() }),
+      // depIds 复选框是动态键，additionalProperties 声明了才会保留
+      body: t.Object({ envText: t.Optional(t.String()) }, { additionalProperties: t.Unknown() }),
+    },
+    async ({ di, params, body, set }) => {
+      const svc = di.get("deployService");
+      const target = await svc.targetById(params.id);
+      if (!target || target.kind !== "app") throw new Error("部署目标不存在");
+      try {
+        await svc.updateAppEnv(
+          params.id,
+          body.envText ?? "",
+          depIdsFromBody(body as unknown as Record<string, unknown>),
+        );
+      } catch (e) {
+        return <EnvDrawer
+          target={target}
+          envText={body.envText ?? ""}
+          dbRefs={await svc.dbRefsOfNode(target.nodeId)}
+          error={(e as Error).message}
+        />;
+      }
+      set.headers["HX-Trigger"] = "refresh";
+      return "";
+    },
+  )
   // ── 域名绑定 ──
   .get("/ui/targets/:id/domains", { params: t.Object({ id: t.Number() }) }, async ({ di, params }) => {
     const svc = di.get("deployService");

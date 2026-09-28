@@ -23,6 +23,8 @@ export interface TargetModel {
   logical: boolean;
   url?: string; // 逻辑库连接串（复制按钮）
   domains: DomainBadge[];
+  dependsOn: number[]; // 依赖的 db target id（跨卡 → 箭头，同卡 → 行内徽章）
+  depNames: string[];
   updateAvailable: boolean;
   status: "queued" | "building" | "transferring" | "deploying" | "success" | "failed" | null;
   running: boolean;
@@ -67,6 +69,7 @@ const TargetRow: Component<{ t: TargetModel }> = ({ t }) => (
         {t.kind === "db" ? (t.logical ? "⛁" : "🗄") : "📦"} {t.name}
       </span>
       <div class="flex shrink-0 items-center gap-1">
+        {t.depNames.map((n) => <Badge tone="warn">⇠ {n}</Badge>)}
         {t.updateAvailable ? <Badge tone="warn">有更新</Badge> : null}
         {statusBadge(t.status)}
       </div>
@@ -103,10 +106,16 @@ const TargetRow: Component<{ t: TargetModel }> = ({ t }) => (
         >连接串</button>
       ) : null}
       {t.kind === "app" ? (
-        <button
-          class="rounded px-2 py-0.5 text-xs text-neutral-500 transition-colors hover:text-neutral-200"
-          {...modalAttrs(`/api/deploy/ui/targets/${t.id}/domains`)}
-        >域名</button>
+        <>
+          <button
+            class="rounded px-2 py-0.5 text-xs text-neutral-500 transition-colors hover:text-neutral-200"
+            {...modalAttrs(`/api/deploy/ui/targets/${t.id}/env`)}
+          >变量</button>
+          <button
+            class="rounded px-2 py-0.5 text-xs text-neutral-500 transition-colors hover:text-neutral-200"
+            {...modalAttrs(`/api/deploy/ui/targets/${t.id}/domains`)}
+          >域名</button>
+        </>
       ) : null}
       <button
         class="rounded px-2 py-0.5 text-xs text-neutral-500 transition-colors hover:text-neutral-200"
@@ -160,9 +169,60 @@ const DyCard: Component<{ card: CardModel }> = ({ card }) => {
   );
 };
 
+export interface DepLink {
+  from: number; // db 所在卡片 nodeId
+  to: number;   // app 所在卡片 nodeId
+}
+
+/** 依赖连线：db 卡 → app 卡的三次贝塞尔（取两卡最近的水平边，纯服务端几何）。
+ *  拖拽中 morph 被 <dy-card> 拦住，松手 PATCH 后立即 refresh 补一次，箭头随卡走 */
+const DepArrows: Component<{ cards: CardModel[]; links: DepLink[] }> = ({ cards, links }) => {
+  if (links.length === 0) return <></>;
+  const byNode = new Map(cards.map((c) => [c.node.id, c.node]));
+  const W = Math.max(...cards.map((c) => c.node.x + c.node.w), 0) + 200;
+  const H = Math.max(...cards.map((c) => c.node.y + c.node.h), 0) + 200;
+  return (
+    <svg class="pointer-events-none absolute inset-0" width={W} height={H}>
+      <defs>
+        <marker id="dep-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M 0 1 L 9 5 L 0 9 z" fill="#d9a441" />
+        </marker>
+      </defs>
+      {links.map((l) => {
+        const a = byNode.get(l.from);
+        const b = byNode.get(l.to);
+        if (!a || !b) return null;
+        const ay = a.y + a.h / 2;
+        const by = b.y + b.h / 2;
+        const ltr = a.x + a.w / 2 <= b.x + b.w / 2;
+        const fromX = ltr ? a.x + a.w : a.x;
+        const toX = ltr ? b.x : b.x + b.w;
+        const c = Math.max(40, Math.abs(toX - fromX) / 2) * (ltr ? 1 : -1);
+        return (
+          <path
+            id={`dep-${l.from}-${l.to}`}
+            d={`M ${fromX} ${ay} C ${fromX + c} ${ay}, ${toX - c} ${by}, ${toX} ${by}`}
+            fill="none"
+            stroke="#d9a441"
+            stroke-opacity="0.5"
+            stroke-width="1.5"
+            stroke-dasharray="5 3"
+            marker-end="url(#dep-arrow)"
+          />
+        );
+      })}
+    </svg>
+  );
+};
+
 /** 卡片片段：#canvas-root 的轮询目标。servers JSON 供空白处右键「添加服务器」菜单用 */
-export const CanvasCards: Component<{ cards: CardModel[]; servers: { id: number; name: string }[] }> = ({ cards, servers }) => (
+export const CanvasCards: Component<{
+  cards: CardModel[];
+  servers: { id: number; name: string }[];
+  links: DepLink[];
+}> = ({ cards, servers, links }) => (
   <>
+    <DepArrows cards={cards} links={links} />
     {cards.map((c) => <DyCard card={c} />)}
     <script id="canvas-servers" type="application/json">
       {JSON.stringify(servers).replace(/</g, "\\u003c")}

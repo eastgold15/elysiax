@@ -44,3 +44,14 @@ feature.
 | **Feedback**   | Alert · Progress · Skeleton · Toast · Meter · Feed · Status · Lazy Load · Optimistic Toggle · Scroll Progress |
 | **Overlays**   | Dialog · Dropdown Menu · Popover · Tooltip · Alert Dialog · Sheet · Hover Card |
 | **Navigation** | Accordion · Pagination · Tabs · Breadcrumb · Link · Menubar · Tree · Skip Link · Theme Toggle · Split Button · Sidebar · Load More |
+
+
+
+
+
+## 依赖优先原则
+实现任何通用功能前，必须先检查是否有现成的成熟库可用：
+1. 先查 package.json 已有依赖能否满足
+2. 再评估 npm 上的主流包（周下载量、维护状态），优先用 Context7 查其文档
+3. 只有确认现成方案不满足需求时才手写实现，并在回复中说明为什么不用现成库
+通用功能包括但不限于：日期处理、校验、ID 生成、重试/限流、文件监听、CLI 解析、日志等。

@@ -32,4 +32,9 @@ export const migrationsJournal: MigrationsJournal = [
     timestamp: 5,
     sql: "ALTER TABLE `deploy_targets` ADD `overrideCompose` text;",
   },
+  {
+    name: "0005_depends_on",
+    timestamp: 6,
+    sql: "ALTER TABLE `deploy_targets` ADD `dependsOn` text;",
+  },
 ];

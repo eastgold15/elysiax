@@ -9,6 +9,7 @@
 interface Htmx {
   ajax(verb: string, url: string, opts: { target: string; swap: string }): void;
   process(elt: Element): void;
+  trigger(elt: Element, event: string): void;
 }
 declare const htmx: Htmx;
 
@@ -67,6 +68,9 @@ class DyCard extends HTMLElement {
         body: JSON.stringify(patch),
       });
       this.removeAttribute("data-dragging");
+      // 依赖箭头是服务端几何，坐标落地后立即补一次 morph 让箭头跟上来
+      const root = document.getElementById("canvas-root");
+      if (root) htmx.trigger(root, "refresh");
     };
     document.addEventListener("pointermove", onMove);
     document.addEventListener("pointerup", onUp);

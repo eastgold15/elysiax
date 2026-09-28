@@ -143,6 +143,33 @@ export function logicalDbCommands(
 }
 
 /** 逻辑库连接串 */
+/** 实例目标的根连接串：从创建时生成的 env 文本里取密码推导（env 缺密码的类型返回 null） */
+export function instanceUrl(dbType: DbType, host: string, envText: string): string | null {
+  const port = PORTS[dbType];
+  const pick = (key: string) => envText.match(new RegExp(`^${key}=(.+)$`, "m"))?.[1]?.trim();
+  switch (dbType) {
+    case "postgres": {
+      const pw = pick("POSTGRES_PASSWORD");
+      return pw ? `postgres://postgres:${pw}@${host}:${port}/postgres` : null;
+    }
+    case "mysql": {
+      const pw = pick("MYSQL_ROOT_PASSWORD");
+      return pw ? `mysql://root:${pw}@${host}:${port}` : null;
+    }
+    case "redis":
+      return `redis://${host}:${port}`;
+    case "mongo": {
+      const pw = pick("MONGO_INITDB_ROOT_PASSWORD");
+      return pw ? `mongodb://root:${pw}@${host}:${port}` : null;
+    }
+  }
+}
+
+/** 连接串建议注入的环境变量名（app 侧惯例） */
+export function suggestedEnvKey(dbType: DbType): string {
+  return dbType === "redis" ? "REDIS_URL" : "DATABASE_URL";
+}
+
 export function logicalDbUrl(dbType: DbType, host: string, name: string, password: string): string {
   const port = PORTS[dbType];
   switch (dbType) {

@@ -21,13 +21,26 @@ import {
   containerNameOf,
   dbCompose,
   generatePassword,
+  instanceUrl,
   LOGICAL_DB_SUPPORT,
   logicalDbCommands,
   logicalDbUrl,
+  suggestedEnvKey,
   type DbType,
 } from "./db-templates";
 
 type Log = (line: string) => Promise<void>;
+
+/** 可引用的数据库连接（app 依赖选择器的一行） */
+export interface DbRef {
+  id: number;
+  nodeId: number;
+  name: string;
+  dbType: DbType;
+  logical: boolean;
+  url: string;
+  envKey: string; // 建议注入的变量名（DATABASE_URL / REDIS_URL）
+}
 
 /** 流式执行本地命令，输出写入部署日志 */
 async function run(cmd: string[], cwd: string, log: Log): Promise<void> {
@@ -87,12 +100,17 @@ export class DeployService {
     composePath: string; serviceName?: string; remoteDir: string;
     envText?: string; // 识别结果合并出的 .env（enc1: 加密落库）
     overrideCompose?: string | null; // 资源限制 override（compose -f 叠加）
+    dependsOn?: number[]; // 依赖的 db target id（画布连线 + 连接串引用血缘）
     domains?: { hostname: string; serviceName?: string; targetPort: number }[];
   }) {
     parseOwnerRepo(input.repoUrl); // 提前校验
     await this.assertNameFree(input.nodeId, "app", input.name);
-    const { envText, overrideCompose, domains, ...base } = input;
-    const target = await this.repo.createTarget({ kind: "app", ...base });
+    const { envText, overrideCompose, domains, dependsOn, ...base } = input;
+    const target = await this.repo.createTarget({
+      kind: "app",
+      ...base,
+      ...(dependsOn?.length ? { dependsOn } : {}),
+    });
     // 逻辑库容器名定死（对账用）；app 的容器名由用户 compose 决定，config 时读
     if (envText?.trim() || overrideCompose)
       await this.repo.updateTarget(target.id, {
@@ -163,6 +181,56 @@ export class DeployService {
       errors: [],
       warnings: ["仓库里既没有 openship.json 也没有 compose 文件，请手动填写部署参数"],
     };
+  }
+
+  // ── 依赖与连接串引用 ──
+
+  /** 项目空间内可引用的数据库连接（app 向导/变量抽屉的选择器数据） */
+  async dbRefsOfNode(nodeId: number): Promise<DbRef[]> {
+    const node = await this.canvasRepo.byId(nodeId);
+    if (!node) return [];
+    const dbs = await this.repo.dbTargetsOfProject(node.projectId);
+    const refs: DbRef[] = [];
+    for (const db of dbs) {
+      if (!db.dbType || !db.envJson) continue;
+      let url: string | null = null;
+      try {
+        const parsed = JSON.parse(decryptSecret(db.envJson)) as Record<string, unknown>;
+        if (db.instanceOf) {
+          url = typeof parsed.url === "string" ? parsed.url : null; // 逻辑库：凭据创建时生成
+        } else {
+          const server = await this.serverService.byId(await this.nodeServerId(db));
+          url = instanceUrl(db.dbType as DbType, server?.host ?? "", String(parsed.env ?? ""));
+        }
+      } catch { /* 跳过坏记录 */ }
+      if (!url) continue;
+      refs.push({
+        id: db.id, nodeId: db.nodeId, name: db.name,
+        dbType: db.dbType as DbType, logical: Boolean(db.instanceOf),
+        url, envKey: suggestedEnvKey(db.dbType as DbType),
+      });
+    }
+    return refs;
+  }
+
+  /** app 的 .env 明文（变量抽屉回显；enc1: 解密，仅本机控制面） */
+  envTextOf(target: DeployTarget): string {
+    if (!target.envJson) return "";
+    try {
+      return decryptSecret(target.envJson);
+    } catch {
+      return "";
+    }
+  }
+
+  /** 变量抽屉保存：.env（enc1: 加密）+ 依赖血缘（画布连线） */
+  async updateAppEnv(targetId: number, envText: string, dependsOn: number[]) {
+    const target = await this.repo.targetById(targetId);
+    if (!target || target.kind !== "app") throw new Error("部署目标不存在");
+    await this.repo.updateTarget(targetId, {
+      envJson: envText.trim() ? encryptSecret(envText) : null,
+      dependsOn: dependsOn.length ? dependsOn : null,
+    });
   }
 
   /** 该节点上可托管逻辑库的实例（kind=db、同类型、非逻辑库） */

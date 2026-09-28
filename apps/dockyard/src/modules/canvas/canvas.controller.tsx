@@ -48,6 +48,8 @@ async function canvasData(ctx: Ctx, projectId: number) {
         logical: Boolean(target.instanceOf),
         url,
         domains,
+        dependsOn: target.dependsOn ?? [],
+        depNames: [],
         updateAvailable: target.updateAvailable,
         status: dep?.status ?? null,
         running: ctx.deploy.isRunning(target.id),
@@ -60,9 +62,26 @@ async function canvasData(ctx: Ctx, projectId: number) {
       targets,
     });
   }
+  // 依赖连线：app.dependsOn（db target id）→ 所在卡片。跨卡画箭头，同卡在行内徽章体现
+  const nodeOfTarget = new Map<number, number>();
+  const nameOfTarget = new Map<number, string>();
+  for (const c of cards)
+    for (const t of c.targets) {
+      nodeOfTarget.set(t.id, c.node.id);
+      nameOfTarget.set(t.id, t.name);
+    }
+  const links: { from: number; to: number }[] = [];
+  for (const c of cards)
+    for (const t of c.targets)
+      for (const depId of t.dependsOn) {
+        const from = nodeOfTarget.get(depId);
+        if (from !== undefined && from !== c.node.id) links.push({ from, to: c.node.id });
+        t.depNames.push(nameOfTarget.get(depId) ?? `#${depId}`);
+      }
   return {
     servers: servers.map(({ id, name }) => ({ id, name })),
     cards,
+    links,
   };
 }
 
@@ -95,7 +114,7 @@ export const canvasController = defineController({ prefix: "/canvas" })
   // 卡片片段（#canvas-root 5s 轮询，morph:innerHTML 按 id 合并，不打断拖拽/滚动）
   .get("/ui/:projectId/cards", { params: t.Object({ projectId: t.Number() }) }, async ({ di, params }) => {
     const data = await canvasData(ctxOf(di), params.projectId);
-    return <CanvasCards cards={data.cards} servers={data.servers} />;
+    return <CanvasCards cards={data.cards} servers={data.servers} links={data.links} />;
   })
   .post(
     "/projects/:projectId/nodes",

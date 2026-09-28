@@ -1,6 +1,7 @@
 import type { Component } from "@workspace/htmx";
 import type { Deployment, DeployTarget, Domain } from "../../shared/schema";
 import type { RepoBrief } from "../github/github.service";
+import type { DbRef } from "./deploy.service";
 import { serviceEnvToText, type DetectResult, type DetectedService } from "./detect";
 import { Button, Field } from "../ui-kit/ui-kit.ui";
 
@@ -153,13 +154,38 @@ const ServiceCard: Component<{ svc: DetectedService }> = ({ svc }) => (
   </div>
 );
 
+/** 数据库依赖选择器：勾选 = 记录血缘（画布连线）+ 把连接串追加进 envText。
+ *  联动是纯声明式的 onchange 行内脚本：按 data-line 精确增删，取消勾选即移除 */
+export const DbRefPicker: Component<{ refs: DbRef[]; selected: number[] }> = ({ refs, selected }) => (
+  <div class="flex flex-col gap-1.5">
+    {refs.map((r) => (
+      <label class="flex cursor-pointer items-center gap-2 rounded border border-harbor-800 bg-harbor-950/70 px-3 py-2 text-xs text-neutral-300">
+        <input
+          type="checkbox"
+          name="depIds"
+          value={String(r.id)}
+          checked={selected.includes(r.id)}
+          data-line={`${r.envKey}=${r.url}`}
+          onchange="const ta=this.closest('form').querySelector('[name=envText]');if(!ta)return;const ls=ta.value.split('\n').filter(l=>l.trim()&&l!==this.dataset.line);if(this.checked)ls.push(this.dataset.line);ta.value=ls.join('\n')"
+        />
+        <span class="text-neutral-200">{r.logical ? "⛁" : "🗄"} {r.name}</span>
+        <span class="text-neutral-600">
+          {r.dbType}{r.logical ? " · 逻辑库" : ""} → <span class="mono text-tide-400">{r.envKey}</span>
+        </span>
+      </label>
+    ))}
+    <div class="text-[11px] text-neutral-600">勾选即注入连接串到下方变量；取消即移除。多个同类型数据库请自行改变量名。</div>
+  </div>
+);
+
 /** Step 2：识别结果确认（右侧抽屉，分区同 Railway 服务面板）。errors 硬阻断，warnings 只提示 */
 export const AppDetectStep: Component<{
   carry: { nodeId: number; name: string; repoUrl: string; branch: string; remoteDir: string };
   detect: DetectResult;
   envText: string;
+  dbRefs: DbRef[];
   error?: string;
-}> = ({ carry, detect, envText, error }) => (
+}> = ({ carry, detect, envText, dbRefs, error }) => (
   <Drawer title={carry.name} sub={`${carry.repoUrl}@${carry.branch}`}>
     <form class="flex flex-col gap-5" hx-post="/api/deploy/targets/app" hx-target="#modal-root" hx-swap="innerHTML">
       <input type="hidden" name="nodeId" value={String(carry.nodeId)} />
@@ -189,15 +215,19 @@ export const AppDetectStep: Component<{
         </Section>
       ) : null}
 
-      {envText.trim() ? (
-        <Section title="变量" hint="compose 插值用 · 加密保存">
-          <textarea
-            class={`${inputCls} mono h-28 px-3 py-2 text-xs leading-relaxed`}
-            name="envText"
-            placeholder="KEY=value"
-          >{envText}</textarea>
+      {dbRefs.length > 0 ? (
+        <Section title="依赖数据库" hint="画布连线 + 注入连接串">
+          <DbRefPicker refs={dbRefs} selected={[]} />
         </Section>
       ) : null}
+
+      <Section title="变量" hint="compose 插值用 · 加密保存">
+        <textarea
+          class={`${inputCls} mono h-28 px-3 py-2 text-xs leading-relaxed`}
+          name="envText"
+          placeholder="KEY=value"
+        >{envText}</textarea>
+      </Section>
 
       <Section title="打包" hint="compose 构建与部署">
         <label class="flex flex-col gap-1 text-sm">
@@ -262,6 +292,33 @@ export const DomainsModal: Component<{ target: DeployTarget; domains: Domain[]; 
       <div class="text-xs text-neutral-500">域名 A 记录指向服务器 IP 后，证书会自动签发。</div>
     </div>
   </Modal>
+);
+
+/** 已有 app 的变量抽屉：改 .env + 调整数据库依赖（保存后需重新部署生效） */
+export const EnvDrawer: Component<{
+  target: DeployTarget;
+  envText: string;
+  dbRefs: DbRef[];
+  error?: string;
+}> = ({ target, envText, dbRefs, error }) => (
+  <Drawer title={`变量 — ${target.name}`} sub="保存后重新部署生效">
+    <form class="flex flex-col gap-5" hx-post={`/api/deploy/targets/${target.id}/env`} hx-target="#modal-root" hx-swap="innerHTML">
+      {error ? <ErrorBanner>{error}</ErrorBanner> : null}
+      {dbRefs.length > 0 ? (
+        <Section title="依赖数据库" hint="画布连线 + 注入连接串">
+          <DbRefPicker refs={dbRefs} selected={target.dependsOn ?? []} />
+        </Section>
+      ) : null}
+      <Section title="变量" hint="compose 插值用 · 加密保存">
+        <textarea
+          class={`${inputCls} mono h-56 px-3 py-2 text-xs leading-relaxed`}
+          name="envText"
+          placeholder="KEY=value"
+        >{envText}</textarea>
+      </Section>
+      <SubmitBtn label="保存变量" busy="保存中…" />
+    </form>
+  </Drawer>
 );
 
 /** 类型选择后拉取：该服务器上可托管的同类型实例（redis 无逻辑库概念，不显示） */

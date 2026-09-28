@@ -66,6 +66,8 @@ export const deployTargets = sqliteTable("deploy_targets", {
   overrideCompose: text(),
   // 环境变量（敏感值 enc1: 加密）
   envJson: text(),
+  // app 依赖的 db target id 列表（画布连线 + 连接串引用的血缘；不做外键，删 db 仅断线）
+  dependsOn: text({ mode: "json" }).$type<number[]>(),
   // 更新轮询状态
   lastKnownSha: text(),
   etag: text(),

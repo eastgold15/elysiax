@@ -1,6 +1,6 @@
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../../shared/db";
-import { deployments, deployTargets, type Deployment, type DeployTarget } from "../../shared/schema";
+import { canvasNodes, deployments, deployTargets, type Deployment, type DeployTarget } from "../../shared/schema";
 
 export type NewTarget = Omit<typeof deployTargets.$inferInsert, "id" | "createdAt">;
 
@@ -13,6 +13,16 @@ export class DeployRepository {
 
   targetById(id: number): Promise<DeployTarget | undefined> {
     return this.db.select().from(deployTargets).where(eq(deployTargets.id, id)).limit(1).then((r) => r[0]);
+  }
+
+  /** 项目空间内所有 db 目标（依赖连线/连接串引用的候选集） */
+  async dbTargetsOfProject(projectId: number): Promise<DeployTarget[]> {
+    const rows = await this.db
+      .select({ t: deployTargets })
+      .from(deployTargets)
+      .innerJoin(canvasNodes, eq(deployTargets.nodeId, canvasNodes.id))
+      .where(and(eq(canvasNodes.projectId, projectId), eq(deployTargets.kind, "db")));
+    return rows.map((r) => r.t);
   }
 
   appTargets(): Promise<DeployTarget[]> {

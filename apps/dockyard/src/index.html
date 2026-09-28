@@ -36,7 +36,7 @@
   <main id="main" class="flex min-w-0 flex-1 flex-col overflow-hidden"
         hx-get="/api/projects/ui" hx-trigger="load" hx-swap="innerHTML"></main>
   <div id="modal-root"></div>
-  <script type="module" src="./pages/canvas.ts"></script>
+  <script type="module" src="./modules/canvas/island/index.tsx"></script>
   <script>
     // 侧边栏高亮
     document.getElementById("nav").addEventListener("click", (e) => {

@@ -60,6 +60,17 @@ export class DeployRepository {
       .then((r) => r[0]);
   }
 
+  /** 部署历史（新→旧，服务抽屉 Deployments Tab） */
+  deploymentsOfTarget(targetId: number, limit = 10): Promise<Deployment[]> {
+    return this.db.select().from(deployments)
+      .where(eq(deployments.targetId, targetId))
+      .orderBy(desc(deployments.id)).limit(limit);
+  }
+
+  deploymentById(id: number): Promise<Deployment | undefined> {
+    return this.db.select().from(deployments).where(eq(deployments.id, id)).limit(1).then((r) => r[0]);
+  }
+
   latestDeployment(targetId: number): Promise<Deployment | undefined> {
     return this.db
       .select().from(deployments)

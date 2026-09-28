@@ -37,4 +37,24 @@ export const migrationsJournal: MigrationsJournal = [
     timestamp: 6,
     sql: "ALTER TABLE `deploy_targets` ADD `dependsOn` text;",
   },
+  {
+    name: "0006_target_services",
+    timestamp: 7,
+    sql: "ALTER TABLE `deploy_targets` ADD `servicesJson` text;",
+  },
+  {
+    name: "0007_nested_canvas",
+    timestamp: 8,
+    sql: "ALTER TABLE `deploy_targets` ADD `x` integer;--> statement-breakpoint\nALTER TABLE `deploy_targets` ADD `y` integer;--> statement-breakpoint\nALTER TABLE `deploy_targets` ADD `serviceLayout` text;--> statement-breakpoint\nALTER TABLE `deploy_targets` ADD `depEdges` text;--> statement-breakpoint\nALTER TABLE `projects` ADD `repoUrl` text;",
+  },
+  {
+    name: "0008_card_size",
+    timestamp: 9,
+    sql: "ALTER TABLE `deploy_targets` ADD `w` integer;--> statement-breakpoint\nALTER TABLE `deploy_targets` ADD `h` integer;",
+  },
+  {
+    name: "0009_local_path",
+    timestamp: 10,
+    sql: "ALTER TABLE `projects` ADD `localPath` text;",
+  },
 ];

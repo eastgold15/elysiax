@@ -1,34 +1,66 @@
 import { t } from "elysia";
 import { defineController } from "../../../.elysiax";
-import { AppDetectStep, DeployLog, DomainsModal, EnvDrawer, InstanceOptions, NewAppDrawer, NewDbModal } from "./deploy.ui";
+import { AppDetectStep, DeployLog, DomainsModal, EnvDrawer, InstanceOptions, MetricsPanel, NewAppDrawer, NewDbModal, ServiceDrawer, type ServiceTab } from "./deploy.ui";
+import type { DeployService } from "./deploy.service";
+
+/** 服务抽屉各 Tab 按需取数（deployments/env/domains/backups/metrics 只在对应 Tab 拉） */
+async function renderServiceDrawer(
+  svc: DeployService,
+  targetId: number,
+  opts: { svc?: string; tab?: string; notice?: string; error?: string },
+) {
+  const target = await svc.targetById(targetId);
+  if (!target) throw new Error("部署目标不存在");
+  const tab = (["deployments", "logs", "variables", "metrics", "settings", "backups"].includes(opts.tab ?? "")
+    ? opts.tab
+    : "deployments") as ServiceTab;
+  return (
+    <ServiceDrawer
+      target={target}
+      svc={opts.svc || undefined}
+      tab={tab}
+      notice={opts.notice}
+      error={opts.error}
+      deployments={tab === "deployments" ? await svc.deploymentsOfTarget(targetId) : undefined}
+      envText={tab === "variables" && opts.svc ? await svc.serviceEnvText(targetId, opts.svc) : undefined}
+      dbRefs={tab === "variables" && opts.svc ? await svc.dbRefsOfNode(target.nodeId) : undefined}
+      selectedDeps={tab === "variables" && opts.svc
+        ? svc.edgesOfTarget(target).filter((e) => e.service === opts.svc).map((e) => e.db)
+        : undefined}
+      domains={tab === "settings" ? await svc.domainsOfTarget(targetId) : undefined}
+      resources={tab === "settings" && opts.svc ? await svc.serviceResources(targetId, opts.svc) : undefined}
+      backups={tab === "backups" ? await svc.backupsOf(targetId) : undefined}
+      metrics={tab === "metrics" ? await svc.serviceStats(targetId, opts.svc || undefined) : undefined}
+    />
+  );
+}
 import { LOGICAL_DB_SUPPORT, type DbType } from "./db-templates";
 import type { RepoBrief } from "../github/github.service";
 import { detectToEnvText, detectToOverrideCompose, textToEnvMap, type DetectResult, type DetectedService } from "./detect";
 
-/** 向导 step2 的动态行（svcPort_xxx / svcDomain_xxx / svcCpu_xxx / svcMem_xxx）还原成服务列表 */
+/** 向导 step2 的动态行（svcName 隐藏字段枚举 + svcExpose_/svcPort_/…_<服务名>）还原成服务列表。
+ *  未勾「对外」时端口输入被禁用、不随表单提交 → port=undefined = 内部服务 */
 function servicesFromBody(body: Record<string, unknown>): DetectedService[] {
   const num = (v: unknown) => {
     const n = Number(v);
     return Number.isFinite(n) && n > 0 ? n : undefined;
   };
   const str = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
-  const services: DetectedService[] = [];
-  for (const key of Object.keys(body)) {
-    const m = key.match(/^svcPort_(.+)$/);
-    if (!m) continue;
-    const name = m[1]!;
-    const port = num(body[key]);
-    services.push({
+  const rawNames = body.svcName;
+  const names = (Array.isArray(rawNames) ? rawNames : rawNames !== undefined ? [rawNames] : [])
+    .map(String).filter(Boolean);
+  return names.map((name) => {
+    const port = num(body[`svcPort_${name}`]);
+    return {
       name,
-      exposed: port !== undefined,
+      exposed: body[`svcExpose_${name}`] !== undefined && port !== undefined,
       port,
       domain: str(body[`svcDomain_${name}`]),
       cpuCores: num(body[`svcCpu_${name}`]),
       memoryMb: num(body[`svcMem_${name}`]),
       env: textToEnvMap(str(body[`svcEnv_${name}`]) ?? ""),
-    });
-  }
-  return services;
+    };
+  });
 }
 
 /** 依赖勾选（depIds 复选框，单个时是 string、多个是数组）→ target id 列表 */
@@ -55,7 +87,10 @@ export const deployController = defineController({ prefix: "/deploy" })
     } catch (e) {
       ghError = `仓库列表拉取失败（${(e as Error).message}），可手动输入 owner/repo`;
     }
-    return <NewAppDrawer nodeId={params.nodeId} repos={repos} error={ghError} />;
+    // 项目 = 仓库：预填项目绑定的 repoUrl（仍可改——同一仓库可以多方式部署）
+    const node = await di.get("canvasService").byId(params.nodeId);
+    const project = node ? await di.get("projectService").byId(node.projectId) : undefined;
+    return <NewAppDrawer nodeId={params.nodeId} repos={repos} error={ghError} prefillRepo={project?.repoUrl ?? undefined} />;
   })
   // 向导 step1 → step2：克隆仓库，读 openship.json / compose 自动识别
   .post(
@@ -128,6 +163,7 @@ export const deployController = defineController({ prefix: "/deploy" })
           overrideCompose: detectToOverrideCompose({ services }),
           dependsOn: depIdsFromBody(body as unknown as Record<string, unknown>),
           domains: domainsFromServices(services),
+          services,
         });
       } catch (e) {
         // 创建失败回到 step2，保留已填内容
@@ -187,19 +223,155 @@ export const deployController = defineController({ prefix: "/deploy" })
       id: t.Number()
     })
   }, ({ di, params, set }) => {
-    void di.get("deployService").deploy(params.id); // 后台跑，画布轮询看状态
+    void di.get("deployService").deploy(params.id); // 后台跑，状态迁移走 SSE 推到画布
     set.status = 204;
   })
-  .get("/ui/targets/:id/log", { params: t.Object({ id: t.Number() }) }, async ({ di, params }) => {
+  .get(
+    "/ui/targets/:id/log",
+    { params: t.Object({ id: t.Number() }), query: t.Object({ dep: t.Optional(t.Numeric()) }) },
+    async ({ di, params, query }) => {
+      const svc = di.get("deployService");
+      const target = await svc.targetById(params.id);
+      if (!target) throw new Error("部署目标不存在");
+      const dep = query.dep ? await svc.deploymentById(query.dep) : await svc.latestDeployment(target.id);
+      return <DeployLog target={target} dep={dep} />;
+    },
+  )
+  .get(
+    "/ui/targets/:id/log-body",
+    { params: t.Object({ id: t.Number() }), query: t.Object({ dep: t.Optional(t.Numeric()) }) },
+    async ({ di, params, query }) => {
+      const svc = di.get("deployService");
+      const dep = query.dep ? await svc.deploymentById(query.dep) : await svc.latestDeployment(params.id);
+      return dep?.logText ?? "";
+    },
+  )
+  // ── 服务抽屉（Railway Service View）：点画布服务卡/db 卡弹出 ──
+  .get(
+    "/ui/targets/:id/service",
+    {
+      params: t.Object({ id: t.Number() }),
+      query: t.Object({ svc: t.Optional(t.String()), tab: t.Optional(t.String()) }),
+    },
+    async ({ di, params, query }) => renderServiceDrawer(di.get("deployService"), params.id, query),
+  )
+  .get(
+    "/ui/targets/:id/service/metrics",
+    { params: t.Object({ id: t.Number() }), query: t.Object({ svc: t.Optional(t.String()) }) },
+    async ({ di, params, query }) => (
+      <MetricsPanel targetId={params.id} svc={query.svc} stats={await di.get("deployService").serviceStats(params.id, query.svc)} />
+    ),
+  )
+  .post(
+    "/targets/:id/service/restart",
+    { params: t.Object({ id: t.Number() }), body: t.Object({ svc: t.Optional(t.String()) }) },
+    async ({ di, params, body, set }) => {
+      const svc = di.get("deployService");
+      let error: string | undefined;
+      try {
+        await svc.restartService(params.id, body.svc || undefined);
+      } catch (e) {
+        error = (e as Error).message;
+      }
+      // 结构不变（容器状态走 SSE），不 refresh 画布
+      return renderServiceDrawer(svc, params.id, { svc: body.svc, tab: "deployments", notice: error ? undefined : "已发送重启", error });
+    },
+  )
+  .get(
+    "/ui/targets/:id/service/logs",
+    { params: t.Object({ id: t.Number() }), query: t.Object({ svc: t.Optional(t.String()) }) },
+    async ({ di, params, query }) => di.get("deployService").serviceLogs(params.id, query.svc),
+  )
+  .post(
+    "/targets/:id/service/env",
+    { params: t.Object({ id: t.Number() }) },
+    async ({ di, params, body, set }) => {
+      const svc = di.get("deployService");
+      const b = body as Record<string, unknown>;
+      const svcName = String(b.svc ?? "");
+      await svc.setServiceEnv(params.id, svcName, String(b.envText ?? ""));
+      // 依赖勾选同步服务级连线：整组替换该服务的边，app 级/其他服务的边不动
+      const target = await svc.targetById(params.id);
+      if (target) {
+        const kept = svc.edgesOfTarget(target).filter((e) => e.service !== svcName);
+        const added = depIdsFromBody(b).map((db) => ({ service: svcName, db }));
+        await svc.setDependsOn(params.id, [...kept, ...added]);
+      }
+      set.headers["HX-Trigger"] = "refresh";
+      return renderServiceDrawer(svc, params.id, { svc: svcName, tab: "variables", notice: "已保存，重新部署后生效" });
+    },
+  )
+  .post(
+    "/targets/:id/service/resources",
+    {
+      params: t.Object({ id: t.Number() }),
+      body: t.Object({ svc: t.String({ minLength: 1 }), cpuCores: t.Optional(t.String()), memoryMb: t.Optional(t.String()) }),
+    },
+    async ({ di, params, body, set }) => {
+      const svc = di.get("deployService");
+      const num = (v?: string) => {
+        const n = Number(v);
+        return v && Number.isFinite(n) && n > 0 ? n : undefined;
+      };
+      await svc.setServiceResources(params.id, body.svc, num(body.cpuCores), num(body.memoryMb));
+      // 资源限制只写 override compose，画布结构不变，不 refresh
+      return renderServiceDrawer(svc, params.id, { svc: body.svc, tab: "settings", notice: "已保存，重新部署后生效" });
+    },
+  )
+  .post(
+    "/targets/:id/service/domains",
+    {
+      params: t.Object({ id: t.Number() }),
+      body: t.Object({ svc: t.Optional(t.String()), hostname: t.String({ minLength: 1 }), targetPort: t.Numeric() }),
+    },
+    async ({ di, params, body, set }) => {
+      const svc = di.get("deployService");
+      let error: string | undefined;
+      try {
+        await svc.addDomain(params.id, { hostname: body.hostname, targetPort: body.targetPort, serviceName: body.svc || undefined });
+        await svc.syncEdge(params.id);
+      } catch (e) {
+        error = (e as Error).message;
+      }
+      set.headers["HX-Trigger"] = "refresh";
+      return renderServiceDrawer(svc, params.id, { svc: body.svc, tab: "settings", notice: error ? undefined : "已绑定", error });
+    },
+  )
+  .delete(
+    "/targets/:id/service/domains/:domainId",
+    { params: t.Object({ id: t.Number(), domainId: t.Number() }), query: t.Object({ svc: t.Optional(t.String()) }) },
+    async ({ di, params, query, set }) => {
+      const svc = di.get("deployService");
+      await svc.removeDomain(params.domainId);
+      set.headers["HX-Trigger"] = "refresh";
+      return renderServiceDrawer(svc, params.id, { svc: query.svc, tab: "settings", notice: "已解绑" });
+    },
+  )
+  .post("/targets/:id/backup", { params: t.Object({ id: t.Number() }) }, async ({ di, params }) => {
     const svc = di.get("deployService");
-    const target = await svc.targetById(params.id);
-    if (!target) throw new Error("部署目标不存在");
-    return <DeployLog target={target} dep={await svc.latestDeployment(target.id)} />;
+    let file: string | undefined;
+    let error: string | undefined;
+    try {
+      file = await svc.backupNow(params.id);
+    } catch (e) {
+      error = (e as Error).message;
+    }
+    return renderServiceDrawer(svc, params.id, { tab: "backups", notice: file ? `已备份：${file}` : undefined, error });
   })
-  .get("/ui/targets/:id/log-body", { params: t.Object({ id: t.Number() }) }, async ({ di, params }) => {
-    const dep = await di.get("deployService").latestDeployment(params.id);
-    return dep?.logText ?? "";
-  })
+  .get(
+    "/backups/:id/:file",
+    { params: t.Object({ id: t.Number(), file: t.String() }) },
+    async ({ di, params, set }) => {
+      const path = di.get("deployService").backupFilePath(params.id, params.file);
+      if (!path) {
+        set.status = 404;
+        return "备份不存在";
+      }
+      set.headers["content-disposition"] = `attachment; filename="${params.file}"`;
+      set.headers["content-type"] = "application/gzip";
+      return Bun.file(path);
+    },
+  )
   // ── 变量抽屉：已有 app 改 .env + 数据库依赖 ──
   .get("/ui/targets/:id/env", { params: t.Object({ id: t.Number() }) }, async ({ di, params }) => {
     const svc = di.get("deployService");
@@ -234,6 +406,38 @@ export const deployController = defineController({ prefix: "/deploy" })
       }
       set.headers["HX-Trigger"] = "refresh";
       return "";
+    },
+  )
+  // ── 画布拖线建/删依赖：整组覆盖服务级边（React 岛 fetch，非 htmx）──
+  .put(
+    "/targets/:id/deps",
+    {
+      params: t.Object({ id: t.Number() }),
+      body: t.Object({
+        edges: t.Array(t.Object({ service: t.Union([t.String(), t.Null()]), db: t.Number() })),
+      }),
+    },
+    async ({ di, params, body, set }) => {
+      await di.get("deployService").setDependsOn(params.id, body.edges);
+      set.status = 204;
+    },
+  )
+  // ── 画布布局：app/db 卡位置 + 服务卡位置 ──
+  .patch(
+    "/targets/:id/layout",
+    {
+      params: t.Object({ id: t.Number() }),
+      body: t.Object({
+        x: t.Optional(t.Number()),
+        y: t.Optional(t.Number()),
+        w: t.Optional(t.Number()),
+        h: t.Optional(t.Number()),
+        serviceLayout: t.Optional(t.Record(t.String(), t.Object({ x: t.Number(), y: t.Number() }))),
+      }),
+    },
+    async ({ di, params, body, set }) => {
+      await di.get("deployService").setLayout(params.id, body);
+      set.status = 204;
     },
   )
   // ── 域名绑定 ──

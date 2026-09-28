@@ -29,6 +29,10 @@ export const projects = sqliteTable("projects", {
   id: integer().primaryKey({ autoIncrement: true }),
   name: text().notNull(),
   slug: text().notNull().unique(),
+  // 项目 = 仓库：绑定的 GitHub 仓库（可空——允许纯数据库编排的项目空间）
+  repoUrl: text(),
+  // 本地仓库路径（扫描发现/点击落库）；与 repoUrl 可并存——本地目录的 origin 就是那个仓库
+  localPath: text(),
   createdAt: integer({ mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
 });
 
@@ -68,6 +72,18 @@ export const deployTargets = sqliteTable("deploy_targets", {
   envJson: text(),
   // app 依赖的 db target id 列表（画布连线 + 连接串引用的血缘；不做外键，删 db 仅断线）
   dependsOn: text({ mode: "json" }).$type<number[]>(),
+  // compose 服务清单（创建时从 DetectedService 落库，存量惰性补全；无秘密值，明文 JSON）
+  servicesJson: text({ mode: "json" }).$type<TargetServicesDoc>(),
+  // 画布布局：本卡在服务器卡内的位置（null → 岛端自动错位摆放）
+  x: integer(),
+  y: integer(),
+  // 手动拉伸的卡尺寸（null → 按子卡 bounds 自动收敛；有值时作下限，不会被自动收敛压小）
+  w: integer(),
+  h: integer(),
+  // 服务卡位置（key = compose 服务名）
+  serviceLayout: text({ mode: "json" }).$type<Record<string, { x: number; y: number }>>(),
+  // 服务级依赖边（画布真相；dependsOn 是其派生的血缘，双写保持一致）
+  depEdges: text({ mode: "json" }).$type<DepEdge[]>(),
   // 更新轮询状态
   lastKnownSha: text(),
   etag: text(),
@@ -109,6 +125,23 @@ export const domains = sqliteTable("domains", {
   // 同一 target 下域名唯一；跨 target 重复在 service 层拦（抢别人的域名是大事故）
   unique().on(t.targetId, t.hostname),
 ]);
+
+/** compose 单个服务（画布小卡片行）。env/秘密值不进这里——走 envJson/overrideCompose 加密通道 */
+export interface TargetService {
+  name: string;
+  port?: number;  // 对外发布端口（compose config 的 ports[0].published）
+  image?: string; // 惰性补全从 compose config 取；创建路径没有则缺省
+}
+/** servicesJson 列的文档结构：project = compose 项目名（容器标签对账用，规则同部署端 cfg.name ?? dockyard-<id>） */
+export interface TargetServicesDoc {
+  project?: string;
+  services: TargetService[];
+}
+/** 服务级依赖边：service=null 表示 app 整体依赖（旧 dependsOn 数据的等价形态） */
+export interface DepEdge {
+  service: string | null;
+  db: number; // db target id
+}
 
 export type Server = typeof servers.$inferSelect;
 export type Project = typeof projects.$inferSelect;

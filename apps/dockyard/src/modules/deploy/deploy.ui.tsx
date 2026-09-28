@@ -31,9 +31,9 @@ const Chip: Component<{ tone?: "ok" | "warn" | "muted" }> = ({ tone = "muted", c
 
 /** 右侧抽屉（Railway 式配置面板）。结构与 snippets/sheet.html 一致，配色走 harbor 主题；
  *  没用原生 <dialog>——htmx 片段直接挂 #modal-root，现有关窗约定（点遮罩/✕）不变 */
-const Drawer: Component<{ title: string; sub?: string }> = ({ title, sub, children }) => (
+const Drawer: Component<{ title: string; sub?: string; wide?: boolean }> = ({ title, sub, wide, children }) => (
   <div class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" onclick="if(event.target===this)this.remove()">
-    <div class="fixed inset-y-0 right-0 left-auto flex h-full w-[36rem] max-w-full flex-col border-l border-harbor-700 bg-harbor-900 shadow-2xl">
+    <div class={`fixed inset-y-0 right-0 left-auto flex h-full ${wide ? "w-[50vw]" : "w-[36rem]"} max-w-full flex-col border-l border-harbor-700 bg-harbor-900 shadow-2xl`}>
       <div class="flex items-start justify-between border-b border-harbor-800 px-5 py-4">
         <div class="flex flex-col gap-1">
           <h3 class="text-sm font-semibold text-neutral-100">{title}</h3>
@@ -71,7 +71,7 @@ const SubmitBtn: Component<{ label: string; busy: string }> = ({ label, busy }) 
 
 // ── 部署 app 向导（Railway/openship 两步式，右侧抽屉）──
 // Step 1：gh 仓库选择器 → 识别；Step 2：识别结果确认（服务/域名/变量/打包）→ 创建即部署
-export const NewAppDrawer: Component<{ nodeId: number; repos: RepoBrief[]; error?: string }> = ({ nodeId, repos, error }) => (
+export const NewAppDrawer: Component<{ nodeId: number; repos: RepoBrief[]; error?: string; prefillRepo?: string }> = ({ nodeId, repos, error, prefillRepo }) => (
   <Drawer title="部署 app" sub="从 GitHub 仓库部署到这台服务器">
     <form class="flex flex-col gap-4" hx-post="/api/deploy/ui/detect" hx-target="#modal-root" hx-swap="innerHTML">
       <input type="hidden" name="nodeId" value={String(nodeId)} />
@@ -86,6 +86,7 @@ export const NewAppDrawer: Component<{ nodeId: number; repos: RepoBrief[]; error
             list="gh-repos"
             placeholder="owner/repo"
             autocomplete="off"
+            value={prefillRepo ?? ""}
             required
           />
           <datalist id="gh-repos">
@@ -122,13 +123,23 @@ const ServiceCard: Component<{ svc: DetectedService }> = ({ svc }) => (
         </Chip>
       ) : null}
     </div>
+    <input type="hidden" name="svcName" value={svc.name} />
     <div class="grid grid-cols-4 gap-2">
       <label class="flex flex-col gap-0.5">
-        <span class={labelCls}>对外端口</span>
-        <input class={inputCls} type="number" name={`svcPort_${svc.name}`} value={svc.port ? String(svc.port) : ""} placeholder="—" />
+        <span class={labelCls}>
+          <input
+            type="checkbox"
+            name={`svcExpose_${svc.name}`}
+            checked={svc.exposed}
+            class="mr-1 accent-brass-500"
+            {...{ onchange: `const p=this.closest('label').querySelector('input[type=number]');p.disabled=!this.checked` }}
+          />
+          对外端口
+        </span>
+        <input class={`${inputCls} disabled:opacity-40`} type="number" name={`svcPort_${svc.name}`} value={svc.port ? String(svc.port) : ""} placeholder="内部" disabled={!svc.exposed} />
       </label>
       <label class="col-span-3 flex flex-col gap-0.5">
-        <span class={labelCls}>绑定域名（留空 = 不绑）</span>
+        <span class={labelCls}>绑定域名（留空 = 不绑，需先勾对外）</span>
         <input class={inputCls} type="text" name={`svcDomain_${svc.name}`} value={svc.domain ?? ""} placeholder="api.example.com" />
       </label>
       <label class="col-span-2 flex flex-col gap-0.5">
@@ -385,12 +396,266 @@ export const DeployLog: Component<{ target: DeployTarget; dep?: Deployment }> = 
       <pre
         class="mono max-h-96 overflow-auto rounded bg-harbor-950 p-3 text-xs whitespace-pre-wrap text-neutral-300"
         {...(active
-          ? { "hx-get": `/api/deploy/ui/targets/${target.id}/log-body`, "hx-trigger": "every 1s", "hx-swap": "innerHTML" }
+          ? { "hx-get": `/api/deploy/ui/targets/${target.id}/log-body${dep ? `?dep=${dep.id}` : ""}`, "hx-trigger": "every 1s", "hx-swap": "innerHTML" }
           : {})}
       >
         {dep?.logText ?? "尚未部署"}
       </pre>
     </Modal>
+  );
+};
+
+// ── 服务抽屉（Railway Service View）：点画布服务卡/db 卡弹出 ──
+export type ServiceTab = "deployments" | "logs" | "variables" | "metrics" | "settings" | "backups";
+
+const fmtBytes = (n: number) =>
+  n >= 1 << 30 ? `${(n / (1 << 30)).toFixed(1)} GB` : n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB` : `${(n / 1024).toFixed(0)} KB`;
+
+const fmtAgo = (d: Date) => {
+  const s = Math.max(1, Math.round((Date.now() - new Date(d).getTime()) / 1000));
+  if (s < 60) return `${s}s 前`;
+  if (s < 3600) return `${Math.round(s / 60)}m 前`;
+  if (s < 86400) return `${Math.round(s / 3600)}h 前`;
+  return new Date(d).toLocaleDateString("zh-CN");
+};
+
+/** 一次性资源快照（hx 4s 轮询，元素随关窗移除即停） */
+export const MetricsPanel: Component<{
+  targetId: number; svc?: string;
+  stats?: { state: string; cpuPercent: number; memUsage: number; memLimit: number; netRx: number; netTx: number } | null;
+}> = ({ targetId, svc, stats }) => (
+  <div
+    id="svc-metrics"
+    hx-get={`/api/deploy/ui/targets/${targetId}/service/metrics${svc ? `?svc=${encodeURIComponent(svc)}` : ""}`}
+    hx-trigger={`${stats === undefined ? "load, " : ""}every 4s`}
+    hx-swap="innerHTML"
+  >
+    {stats === undefined ? (
+      <div class="rounded bg-harbor-950 px-3 py-2 text-xs text-neutral-500">加载中…</div>
+    ) : !stats ? (
+      <div class="rounded bg-harbor-950 px-3 py-2 text-xs text-neutral-500">指标不可用（容器未运行或服务器离线）</div>
+    ) : stats.state !== "running" ? (
+      <div class="rounded bg-harbor-950 px-3 py-2 text-xs text-neutral-500">容器状态：{stats.state}</div>
+    ) : (
+      <div class="flex flex-col gap-3">
+        {([
+          { label: "CPU", pct: Math.min(100, stats.cpuPercent), text: `${stats.cpuPercent}%` },
+          { label: "内存", pct: stats.memLimit ? Math.min(100, (stats.memUsage / stats.memLimit) * 100) : 0, text: `${fmtBytes(stats.memUsage)} / ${fmtBytes(stats.memLimit)}` },
+        ]).map((m) => (
+          <div class="flex flex-col gap-1">
+            <div class="flex justify-between text-xs text-neutral-400"><span>{m.label}</span><span class="mono">{m.text}</span></div>
+            <div class="h-1.5 overflow-hidden rounded bg-harbor-800">
+              <div class={`h-full rounded ${m.pct > 85 ? "bg-signal-500" : "bg-tide-400"}`} style={`width:${m.pct.toFixed(1)}%`} />
+            </div>
+          </div>
+        ))}
+        <div class="flex justify-between text-xs text-neutral-400">
+          <span>网络</span>
+          <span class="mono">↓ {fmtBytes(stats.netRx)} · ↑ {fmtBytes(stats.netTx)}</span>
+        </div>
+      </div>
+    )}
+  </div>
+);
+
+export const ServiceDrawer: Component<{
+  target: DeployTarget;
+  svc?: string;
+  tab: ServiceTab;
+  deployments?: Deployment[];
+  envText?: string;
+  domains?: Domain[];
+  backups?: { file: string; size: number; at: Date }[];
+  metrics?: { state: string; cpuPercent: number; memUsage: number; memLimit: number; netRx: number; netTx: number } | null;
+  dbRefs?: DbRef[];
+  selectedDeps?: number[];
+  resources?: { cpuCores?: number; memoryMb?: number };
+  notice?: string;
+  error?: string;
+}> = ({ target, svc, tab, deployments, envText, domains, backups, metrics, dbRefs, selectedDeps, resources, notice, error }) => {
+  const isDbInstance = target.kind === "db" && !target.instanceOf;
+  const tabs: { key: ServiceTab; label: string }[] = [
+    { key: "deployments", label: "Deployments" },
+    { key: "logs", label: "Logs" },
+    ...(svc ? [{ key: "variables" as const, label: "Variables" }] : []),
+    { key: "metrics", label: "Metrics" },
+    { key: "settings", label: "Settings" },
+    ...(isDbInstance ? [{ key: "backups" as const, label: "Backups" }] : []),
+  ];
+  const tabUrl = (k: ServiceTab) =>
+    `/api/deploy/ui/targets/${target.id}/service?tab=${k}${svc ? `&svc=${encodeURIComponent(svc)}` : ""}`;
+  const svcField = svc ? <input type="hidden" name="svc" value={svc} /> : null;
+  return (
+    <Drawer wide title={svc ? `${target.name} / ${svc}` : target.name} sub={svc ? "服务" : target.kind === "db" ? "数据库" : "应用"}>
+      <div class="flex flex-col gap-4">
+        {/* Tab 栏（hx 换整抽屉，保留在 #modal-root） */}
+        <div class="flex gap-1 border-b border-harbor-800 pb-2">
+          {tabs.map((tb) => (
+            <button
+              hx-get={tabUrl(tb.key)}
+              hx-target="#modal-root"
+              hx-swap="innerHTML"
+              class={`rounded px-2.5 py-1 text-xs transition-colors ${tab === tb.key ? "bg-brass-500/15 font-medium text-brass-500" : "text-neutral-400 hover:bg-harbor-800 hover:text-neutral-200"}`}
+            >
+              {tb.label}
+            </button>
+          ))}
+        </div>
+
+        {notice ? <div class="rounded bg-tide-400/10 px-3 py-2 text-xs text-tide-400">{notice}</div> : null}
+        {error ? <ErrorBanner>{error}</ErrorBanner> : null}
+
+        {tab === "deployments" ? (
+          <>
+            <div class="flex gap-2">
+              <button
+                class="rounded bg-brass-500 px-3 py-1.5 text-xs font-semibold text-harbor-950 hover:bg-brass-600"
+                {...{ onclick: `htmx.ajax('POST','/api/deploy/targets/${target.id}/deploy',{swap:'none'}).then(()=>htmx.ajax('GET','/api/deploy/ui/targets/${target.id}/log',{target:'#modal-root',swap:'innerHTML'}))` }}
+              >
+                重新部署
+              </button>
+              <form hx-post={`/api/deploy/targets/${target.id}/service/restart`} hx-target="#modal-root" hx-swap="innerHTML">
+                {svcField}
+                <button class="rounded border border-harbor-700 px-3 py-1.5 text-xs text-neutral-300 hover:bg-harbor-800" type="submit">
+                  重启{svc ? "服务" : "容器"}
+                </button>
+              </form>
+            </div>
+            <div class="flex flex-col">
+              {(deployments ?? []).length === 0 ? <div class="py-4 text-center text-xs text-neutral-600">还没有部署记录</div> : null}
+              {(deployments ?? []).map((d) => (
+                <div class="flex items-center gap-3 border-b border-harbor-800/60 py-2 text-xs">
+                  <Chip tone={d.status === "success" ? "ok" : d.status === "failed" ? "warn" : "muted"}>{d.status}</Chip>
+                  <span class="text-neutral-500">#{d.id}</span>
+                  <span class="text-neutral-400">{fmtAgo(d.startedAt)}</span>
+                  {d.finishedAt ? <span class="mono text-neutral-600">{Math.round((new Date(d.finishedAt).getTime() - new Date(d.startedAt).getTime()) / 1000)}s</span> : null}
+                  <button
+                    class="ml-auto text-tide-400 hover:text-tide-300"
+                    hx-get={`/api/deploy/ui/targets/${target.id}/log?dep=${d.id}`}
+                    hx-target="#modal-root"
+                    hx-swap="innerHTML"
+                  >
+                    日志
+                  </button>
+                </div>
+              ))}
+            </div>
+          </>
+        ) : null}
+
+        {tab === "logs" ? (
+          <pre
+            class="mono max-h-[70vh] overflow-auto rounded bg-harbor-950 p-3 text-xs leading-relaxed whitespace-pre-wrap text-neutral-300"
+            hx-get={`/api/deploy/ui/targets/${target.id}/service/logs${svc ? `?svc=${encodeURIComponent(svc)}` : ""}`}
+            hx-trigger="load, every 2s"
+            hx-swap="innerHTML"
+          >
+            加载中…
+          </pre>
+        ) : null}
+
+        {tab === "variables" && svc ? (
+          <form class="flex flex-col gap-3" hx-post={`/api/deploy/targets/${target.id}/service/env`} hx-target="#modal-root" hx-swap="innerHTML">
+            {svcField}
+            <p class="text-xs text-neutral-500">
+              随 override compose 注入该服务容器（enc1: 加密保存在控制面本地，不入 git），重新部署后生效。
+            </p>
+            {(dbRefs ?? []).length > 0 ? (
+              <Section title="引用数据库" hint="勾选 = 画布连线 + 连接串追加进变量">
+                <DbRefPicker refs={dbRefs ?? []} selected={selectedDeps ?? []} />
+              </Section>
+            ) : null}
+            <textarea class={`${inputCls} mono h-56 px-3 py-2 text-xs leading-relaxed`} name="envText" placeholder="KEY=value">{envText ?? ""}</textarea>
+            <SubmitBtn label="保存变量" busy="保存中…" />
+          </form>
+        ) : null}
+
+        {tab === "metrics" ? <MetricsPanel targetId={target.id} svc={svc} stats={metrics} /> : null}
+
+        {tab === "settings" ? (
+          <>
+            {svc ? (
+              <Section title="资源限制" hint="override compose · 重新部署生效">
+                <form class="flex items-end gap-2" hx-post={`/api/deploy/targets/${target.id}/service/resources`} hx-target="#modal-root" hx-swap="innerHTML">
+                  {svcField}
+                  <label class="flex flex-1 flex-col gap-0.5">
+                    <span class={labelCls}>CPU 上限（核）</span>
+                    <input class={inputCls} type="number" step="0.1" min="0" name="cpuCores" value={resources?.cpuCores ? String(resources.cpuCores) : ""} placeholder="不限" />
+                  </label>
+                  <label class="flex flex-1 flex-col gap-0.5">
+                    <span class={labelCls}>内存上限（MB）</span>
+                    <input class={inputCls} type="number" min="0" name="memoryMb" value={resources?.memoryMb ? String(resources.memoryMb) : ""} placeholder="不限" />
+                  </label>
+                  <SubmitBtn label="保存" busy="…" />
+                </form>
+              </Section>
+            ) : null}
+            <Section title="源">
+              <div class="flex flex-col gap-1 rounded border border-harbor-800 bg-harbor-950/70 px-3 py-2.5 text-xs text-neutral-400">
+                {target.repoUrl ? <div class="mono">{target.repoUrl}@{target.branch}</div> : null}
+                {target.kind === "db" ? <div>类型 {target.dbType}{target.instanceOf ? "（逻辑库）" : "（实例）"}</div> : null}
+                {svc ? <div class="mono">compose 服务 {svc} · {target.composePath}</div> : null}
+                <div class="mono text-neutral-600">{target.remoteDir}</div>
+              </div>
+            </Section>
+            <Section title="域名" hint="edge 反代 + 自动证书">
+              <div class="flex flex-col gap-1.5">
+                {(domains ?? []).filter((d) => (svc ? d.serviceName === svc : true)).map((d) => (
+                  <div class="flex items-center gap-2 rounded border border-harbor-800 bg-harbor-950/70 px-3 py-2 text-xs">
+                    <span class="mono text-neutral-200">{d.hostname}</span>
+                    <span class="text-neutral-600">:{d.targetPort}</span>
+                    {dnsChip(d)}{sslChip(d)}
+                    <button
+                      class="ml-auto text-neutral-600 hover:text-signal-500"
+                      hx-delete={`/api/deploy/targets/${target.id}/service/domains/${d.id}${svc ? `?svc=${encodeURIComponent(svc)}` : ""}`}
+                      hx-target="#modal-root"
+                      hx-swap="innerHTML"
+                      hx-confirm={`解绑 ${d.hostname}？`}
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+                <form class="flex items-end gap-2" hx-post={`/api/deploy/targets/${target.id}/service/domains`} hx-target="#modal-root" hx-swap="innerHTML">
+                  {svcField}
+                  <label class="flex flex-1 flex-col gap-0.5">
+                    <span class={labelCls}>域名</span>
+                    <input class={inputCls} type="text" name="hostname" placeholder="api.example.com" required />
+                  </label>
+                  <label class="flex w-20 flex-col gap-0.5">
+                    <span class={labelCls}>端口</span>
+                    <input class={inputCls} type="number" name="targetPort" required />
+                  </label>
+                  <SubmitBtn label="绑定" busy="…" />
+                </form>
+              </div>
+            </Section>
+          </>
+        ) : null}
+
+        {tab === "backups" && isDbInstance ? (
+          <>
+            <form hx-post={`/api/deploy/targets/${target.id}/backup`} hx-target="#modal-root" hx-swap="innerHTML">
+              <SubmitBtn label="立即备份" busy="备份中…（远端 dump → 本地落盘）" />
+            </form>
+            <div class="flex flex-col">
+              {(backups ?? []).length === 0 ? <div class="py-4 text-center text-xs text-neutral-600">还没有备份</div> : null}
+              {(backups ?? []).map((b) => (
+                <div class="flex items-center gap-3 border-b border-harbor-800/60 py-2 text-xs">
+                  <span class="mono text-neutral-300">{b.file}</span>
+                  <span class="text-neutral-600">{fmtBytes(b.size)}</span>
+                  <span class="text-neutral-500">{fmtAgo(b.at)}</span>
+                  <a class="ml-auto text-tide-400 hover:text-tide-300" href={`/api/deploy/backups/${target.id}/${b.file}`} download={b.file}>
+                    下载
+                  </a>
+                </div>
+              ))}
+            </div>
+            <p class="text-[11px] text-neutral-600">备份保存在控制面本地（~/.local/share/dockyard/backups/）。恢复请下载后在服务器上手动执行，避免误覆盖。</p>
+          </>
+        ) : null}
+      </div>
+    </Drawer>
   );
 };
 

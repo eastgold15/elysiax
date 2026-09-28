@@ -1,12 +1,11 @@
-import { Glob } from "bun";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ModuleManifest } from "./index";
 import { DEFAULTS, loadConfig, type ElysiaxConfig } from "./config";
 
 /**
- * 模块 DI 声明条目（<name>.di.ts 的 provides 值）：
+ * 模块 DI 声明条目（<name>.di.ts 的 provides 值，defineModule 归一化后的形态）：
  * - `{ value }`                    → registerValue
  * - `{ class, deps, lifetime? }`   → registerClass
  * 依赖 `xxxLazy` 是约定：自动给 `xxx` 的注册加 lazyKey 伴随键。
@@ -19,13 +18,134 @@ export type DiEntry =
       lifetime?: "singleton" | "transient";
     };
 
+// ── provide / lazy：类引用代替字符串依赖（编译期校验 + 重构可跟随） ──
+
+const lazyBrand: unique symbol = Symbol.for("elysiax.lazy") as any;
+
+/** `lazy(Class)` 的返回物：标记该依赖走 Lazy 伴随键（对应字符串约定 "xxxLazy"） */
+export interface LazyRef<T> {
+  readonly [lazyBrand]: true;
+  readonly cls: abstract new (...args: any[]) => T;
+}
+
+/**
+ * 显式声明一个懒加载依赖，替代 `"xxxLazy"` 字符串约定：
+ *
+ * ```ts
+ * provide(UserService, [UserRepository, lazy(OrderService)])
+ * // 等价于 deps: ["userRepository", "orderServiceLazy"]
+ * ```
+ */
+export function lazy<C extends abstract new (...args: any[]) => any>(
+  cls: C,
+): LazyRef<InstanceType<C>> {
+  return { [lazyBrand]: true, cls } as LazyRef<InstanceType<C>>;
+}
+
+const isLazyRef = (v: unknown): v is LazyRef<unknown> =>
+  typeof v === "object" && v !== null && (v as any)[lazyBrand] === true;
+
+/** 依赖槽位类型：Lazy<X> 参数 → lazy(X)；其他对象 → 类引用；值服务（db 等）→ 字符串键 */
+type DepItem<T> =
+  | ([T] extends [import("@inferdi/inferdi").Lazy<infer U>]
+      ? LazyRef<U>
+      : [T] extends [object]
+        ? abstract new (...args: any[]) => T
+        : never)
+  | (string & {});
+
+/** 从类构造函数签名推导依赖元组：写错类型/顺序直接编译报错 */
+type MapDeps<T extends readonly unknown[]> = { [K in keyof T]: DepItem<T[K]> };
+type DepsOf<C extends new (...args: any[]) => any> = MapDeps<ConstructorParameters<C>>;
+
+export interface ProvideOptions {
+  lifetime?: "singleton" | "transient";
+}
+
+/** defineModule 接受的 provides 值（归一化前） */
+export type DiEntryInput =
+  | DiEntry
+  | (new (...args: any[]) => unknown) // 简写：零依赖的类
+  | {
+      class: new (...args: any[]) => unknown;
+      deps: readonly (string | (abstract new (...args: any[]) => unknown) | LazyRef<unknown>)[];
+      lifetime?: "singleton" | "transient";
+    };
+
+/**
+ * 声明一个服务：依赖写类引用而非字符串，类型从构造函数签名推导。
+ *
+ * ```ts
+ * provide(ProjectRepository)                        // 零依赖
+ * provide(ProjectService, [ProjectRepository])      // 依赖按构造函数顺序
+ * provide(UserService, [UserRepository, lazy(OrderService)])
+ * ```
+ */
+export function provide<C extends new (...args: any[]) => any>(
+  cls: C,
+  opts?: ProvideOptions,
+): { class: C; deps: readonly []; lifetime?: "singleton" | "transient" };
+export function provide<C extends new (...args: any[]) => any>(
+  cls: C,
+  deps: DepsOf<C>,
+  opts?: ProvideOptions,
+): { class: C; deps: DepsOf<C>; lifetime?: "singleton" | "transient" };
+export function provide(cls: any, a?: any, b?: any): any {
+  const deps = Array.isArray(a) ? a : [];
+  const opts = Array.isArray(a) ? b : a;
+  return { class: cls, deps, lifetime: opts?.lifetime };
+}
+
+const lowerFirst = (s: string) => s.charAt(0).toLowerCase() + s.slice(1);
+
+/** 把类引用/lazy 标记归一化成字符串键（camelCase 类名，lazy 加 Lazy 后缀） */
+function normalizeEntry(key: string, e: DiEntryInput): DiEntry {
+  if (typeof e === "function") {
+    if (lowerFirst(e.name) !== key) warnKeyMismatch(key, e.name);
+    return { class: e, deps: [] };
+  }
+  if ("value" in e) return e;
+  const deps: string[] = e.deps.map((d): string => {
+    if (typeof d === "string") return d;
+    if (isLazyRef(d)) return `${lowerFirst(d.cls.name)}Lazy`;
+    return lowerFirst((d as any).name);
+  });
+  if (lowerFirst(e.class.name) !== key) warnKeyMismatch(key, e.class.name);
+  return { class: e.class, deps, lifetime: e.lifetime };
+}
+
+function warnKeyMismatch(key: string, className: string) {
+  console.warn(
+    `[elysiax] provides 键 "${key}" 与类名推导键 "${lowerFirst(className)}" 不一致，` +
+      `其他模块必须用 "${key}" 才能注入`,
+  );
+}
+
+/** codegen 消费的形态：provides 已归一化（deps 全是字符串键） */
 export interface ModuleDi {
+  /** 模块名（默认取目录名）；有 name/route 后 module.json 可整个删掉 */
+  name?: string;
+  /** 路由前缀（默认 `/${name}`） */
+  route?: string;
+  version?: string;
   provides: Record<string, DiEntry>;
 }
 
-/** 声明一个模块（或 infra）向容器提供什么。仅收集声明，装配由 codegen 生成。 */
-export function defineModule<T extends ModuleDi>(di: T): T {
-  return di;
+/** defineModule 的输入形态：deps 可以是类引用 / lazy() / 字符串 */
+export interface ModuleDiInput extends Omit<ModuleDi, "provides"> {
+  provides: Record<string, DiEntryInput>;
+}
+
+/**
+ * 声明一个模块（或 infra）向容器提供什么。仅收集声明，装配由 codegen 生成。
+ * 依赖里的类引用 / lazy() 在声明时归一化成字符串键，codegen 逻辑不变。
+ */
+export function defineModule<T extends ModuleDiInput>(di: T): T {
+  const provides = Object.fromEntries(
+    Object.entries(di.provides).map(([k, e]) => [k, normalizeEntry(k, e)]),
+  );
+  // 运行时归一化成 ModuleDi；类型上保留输入形态供 services.gen 推导
+  return { ...di, provides } as unknown as T;
 }
 
 interface LoadedModule {
@@ -72,20 +192,37 @@ export async function codegen(
   }
 
   const mods: LoadedModule[] = [];
-  for await (const m of new Glob(`${modulesDir}/*/module.json`).scan({
-    cwd: root,
-  })) {
-    const dir = join(root, m, "..");
-    const manifest: ModuleManifest = await Bun.file(join(root, m)).json();
-    const name = manifest.name;
-    const mod: LoadedModule = { dir, manifest, diVar: `${ident(name)}Di` };
+  // module.json 已可选：模块 = 含 <name>.di.ts / <name>.controller.* / <name>.ui.* 的目录
+  const entries = readdirSync(join(root, modulesDir), { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    const dir = join(root, modulesDir, entry.name);
+    const manifestPath = join(dir, "module.json");
+    const manifestJson: Partial<ModuleManifest> = (await Bun.file(manifestPath).exists())
+      ? await Bun.file(manifestPath).json()
+      : {};
+    const name = manifestJson.name ?? entry.name;
+    // 先按清单名找 di，找不到再按目录名兜底（清单可整个不存在）
+    let diPath = await firstExisting(dir, `${name}.di`);
+    diPath ??= await firstExisting(dir, `${entry.name}.di`);
+    const controller = await firstExisting(dir, `${name}.controller`);
+    const ui = await firstExisting(dir, `${name}.ui`);
+    // 目录里什么模块特征都没有 → 不是模块，跳过
+    if (!diPath && !controller && !ui && !manifestJson.name) continue;
 
-    mod.diPath = await firstExisting(dir, `${name}.di`);
-    if (mod.diPath) {
-      mod.di = (await import(pathToFileURL(mod.diPath).href)).default as ModuleDi;
+    let di: ModuleDi | undefined;
+    if (diPath) {
+      di = (await import(pathToFileURL(diPath).href)).default as ModuleDi;
     }
-    mod.controller = await firstExisting(dir, `${name}.controller`);
-    mod.ui = await firstExisting(dir, `${name}.ui`);
+    // di 声明优先，module.json 兜底，最后默认值
+    const manifest: ModuleManifest = {
+      name: di?.name ?? name,
+      version: di?.version ?? manifestJson.version ?? "0.0.0",
+      route: di?.route ?? manifestJson.route,
+      provides: manifestJson.provides,
+      requires: manifestJson.requires,
+    };
+    const mod: LoadedModule = { dir, manifest, di, diPath, diVar: `${ident(manifest.name)}Di`, controller, ui };
     mods.push(mod);
   }
 
@@ -188,7 +325,17 @@ export async function codegen(
   for (const mod of mods) {
     const n = mod.manifest.name;
     const id = ident(n);
-    ml.push(`import ${id}Manifest from "${rel(join(mod.dir, "module.json"))}";`);
+    // module.json 可选：文件在就 import，不在就内联清单字面量
+    const manifestPath = join(mod.dir, "module.json");
+    if (await Bun.file(manifestPath).exists()) {
+      ml.push(`import ${id}Manifest from "${rel(manifestPath)}";`);
+    } else {
+      ml.push(
+        `const ${id}Manifest = { name: ${JSON.stringify(n)}, version: ${JSON.stringify(mod.manifest.version)}` +
+          (mod.manifest.route ? `, route: ${JSON.stringify(mod.manifest.route)}` : "") +
+          ` };`,
+      );
+    }
     if (mod.controller)
       ml.push(
         `import { ${camel(n)}Controller as ${id}Controller } from "${rel(mod.controller)}";`,
@@ -223,7 +370,8 @@ export async function codegen(
     "",
     "type Provided<E> = E extends { class: infer C }",
     "  ? C extends new (...args: any[]) => infer I ? I : never",
-    "  : E extends { value: infer V } ? V : never;",
+    "  : E extends { value: infer V } ? V",
+    "  : E extends new (...args: any[]) => infer I ? I : never;",
     "",
     "type ProvidesOf<D> = D extends { provides: infer P }",
     "  ? { [K in keyof P]: Provided<P[K]> }",
@@ -249,6 +397,20 @@ export async function codegen(
     "};",
     "",
   );
+
+  // 每模块窄类型：<Name>Services = 本模块 provides ∪ 直接 deps，
+  // defineController<ProjectsServices> 可把 di 收敛到模块声明的边界内
+  for (const mod of mods) {
+    if (!mod.di) continue;
+    const keys = new Set<string>(Object.keys(mod.di.provides));
+    for (const dep of depsOf(mod.di)) keys.add(dep);
+    const typeName = `${mod.manifest.name.charAt(0).toUpperCase()}${ident(mod.manifest.name).slice(1)}Services`;
+    sl.push(
+      `/** ${mod.manifest.name} 模块的窄 ServiceMap：defineController<${typeName}> 收敛 di */`,
+      `export type ${typeName} = Pick<ServiceMap, ${[...keys].map((k) => JSON.stringify(k)).join(" | ")}>;`,
+      "",
+    );
+  }
   writeFileSync(join(outDir, "services.gen.ts"), sl.join("\n") + "\n");
   written.push(".elysiax/services.gen.ts");
 
@@ -261,7 +423,7 @@ export async function codegen(
       `import { elysiaxModule } from "@elysiax/core";`,
       `import type { ServiceMap } from "./services.gen";`,
       "",
-      "/** 定义模块 controller：di 默认带全图 ServiceMap（可传更窄泛型收敛） */",
+      "/** 定义模块 controller：di 默认带全图 ServiceMap；传 services.gen 的 <Name>Services 窄泛型可收敛到模块边界 */",
       "export function defineController<",
       "  S extends Record<string, unknown> = ServiceMap,",
       ">(options?: ConstructorParameters<typeof Elysia>[0]) {",
@@ -327,7 +489,7 @@ export async function codegen(
       header,
       `export { modules } from "./modules.gen";`,
       `export { buildRootContainer } from "./container.gen";`,
-      `export type { ServiceMap } from "./services.gen";`,
+      `export type * from "./services.gen"; // ServiceMap + 每模块窄类型 <Name>Services`,
       `export { defineController } from "./controller.gen";`,
       "",
     ].join("\n"),

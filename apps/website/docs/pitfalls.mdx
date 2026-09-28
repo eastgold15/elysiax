@@ -17,7 +17,7 @@ elysiax 落地过程中遇到的非显然问题与最终解法，按主题分组
 
 ### 2. `Bun.Glob` 只匹配文件，不匹配目录
 
-`new Glob("modules/*/")` 扫不到任何东西。要扫模块目录就直接匹配里面的文件：`modules/*/module.json`。
+`new Glob("modules/*/")` 扫不到任何东西。要扫模块目录用 `readdirSync(withFileTypes)` 判 `isDirectory()`（codegen 现行做法），或匹配目录里的具体文件。
 
 ### 3. bunfig.toml 的 `preload` 必须放在文件顶部
 

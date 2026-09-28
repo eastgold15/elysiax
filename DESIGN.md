@@ -1,5 +1,10 @@
 # ElysiaX 模块化框架 · 完整构想文档
 
+> **2026-09 更新**：`module.json` 已废弃 —— 模块的 name/route 收编进 `<name>.di.ts`
+> （`defineModule({ route, provides })`），依赖声明改用 `provide(Class, [Dep, lazy(Dep)])`
+> 类引用写法（编译期校验）。模块发现改为目录扫描（readdirSync），不再以 module.json 为依据。
+> 现行 API 见 `packages/core/README.md`，本文的 module.json / 字符串 deps 描述是历史设计脉络。
+>
 > 本文档由 readme2 → readme6 的思考过程融合而成，以最终形态（readme6）为准。
 > 过程脉络：**命名与目录约定（2）→ 源码安装模块市场（3）→ Tailwind + shadcn-htmx 样式体系（4）→ InferDI 依赖注入（5）→ 完整可运行示例（6）**。
 

@@ -1,3 +1,4 @@
+/// <reference path="./htmx.d.ts" />
 import { createElement } from './h'
 
 export * from './html'

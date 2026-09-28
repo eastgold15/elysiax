@@ -66,6 +66,122 @@ cli.addCommand({
 });
 
 // ─────────────────────────────────────────────
+// elysiax new module <name> / new island <module> — 脚手架
+// ─────────────────────────────────────────────
+
+const pascal = (s: string) =>
+  s.replace(/(^|[-_])([a-z])/g, (_, __, c) => c.toUpperCase());
+const camel = (s: string) => {
+  const p = pascal(s);
+  return p.charAt(0).toLowerCase() + p.slice(1);
+};
+
+async function scaffoldModule(name: string, logger: { info: (m: string) => void }) {
+  if (!/^[a-z][a-z0-9-]*$/.test(name))
+    throw new Error(`模块名须为 kebab-case: ${name}`);
+
+  const root = process.cwd();
+  const { loadConfig, codegen } = await import("@elysiax/core");
+  const config = await loadConfig(root);
+  const modulesDir = config.modules ?? "src/modules";
+  const dir = resolve(root, modulesDir, name);
+  if (existsSync(dir)) throw new Error(`模块已存在: ${dir}`);
+
+  // 模块目录到 .elysiax/ 的相对深度（如 src/modules/user → ../../../）
+  const up = "../".repeat(modulesDir.split("/").length + 1);
+  const P = pascal(name);
+  const C = camel(name);
+
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    resolve(dir, `${name}.service.ts`),
+    `export class ${P}Service {
+  // 依赖在构造函数里声明，${name}.di.ts 的 provide() 按顺序给类引用：
+  // constructor(private readonly db: Db) {}
+}
+`,
+  );
+  writeFileSync(
+    resolve(dir, `${name}.di.ts`),
+    `import { defineModule, provide } from "@elysiax/core";
+import { ${P}Service } from "./${name}.service";
+
+export default defineModule({
+  route: "/${name}",
+  provides: {
+    // 键 = camelCase 类名；依赖写类引用（编译期校验），懒加载用 lazy(Class)
+    ${C}Service: provide(${P}Service),
+  },
+});
+`,
+  );
+  writeFileSync(
+    resolve(dir, `${name}.controller.tsx`),
+    `import { defineController } from "${up}.elysiax";
+
+export const ${C}Controller = defineController({ prefix: "/${name}" })
+  .get("/", ({ di }) => di.get("${C}Service"));
+  // 返回 JSX 即 text/html 响应：.get("/ui", ({ di }) => <${P}Ui />)
+`,
+  );
+
+  await codegen(root, config);
+  logger.info(`✅ 模块已创建: ${modulesDir}/${name}/（.elysiax/ 已重新生成）`);
+  logger.info(`   路由前缀: /${name}，服务键: ${C}Service`);
+}
+
+async function scaffoldIsland(mod: string, logger: { info: (m: string) => void }) {
+  const root = process.cwd();
+  const { loadConfig } = await import("@elysiax/core");
+  const modulesDir = (await loadConfig(root)).modules ?? "src/modules";
+  const dir = resolve(root, modulesDir, mod, "island");
+  if (!existsSync(resolve(root, modulesDir, mod)))
+    throw new Error(`模块不存在: ${modulesDir}/${mod}（先 elysiax new module ${mod}）`);
+  if (existsSync(dir)) throw new Error(`岛已存在: ${dir}`);
+
+  const P = pascal(mod);
+  mkdirSync(dir, { recursive: true });
+  // 岛需要 react / react-dom，没装就直接报错提示（避免生成后类型检查挂）
+  const pkgPath = resolve(root, "package.json");
+  const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+  const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+  if (!deps["react-dom"])
+    throw new Error(`岛需要 react + react-dom，请先 bun add react react-dom`);
+  writeFileSync(
+    resolve(dir, "index.tsx"),
+    `import { createRoot } from "react-dom/client";
+
+// 边界规则：htmx 只渲染容器 <div id="${mod}-island" />，容器内部全归 React 管，
+// 两边不要操作同一个 DOM 元素。
+function ${P}Island() {
+  return <div>${P} island</div>;
+}
+
+const el = document.getElementById("${mod}-island");
+if (el) createRoot(el).render(<${P}Island />);
+`,
+  );
+  logger.info(`✅ 岛已创建: ${modulesDir}/${mod}/island/index.tsx`);
+  logger.info(`   下一步: 在 ${mod}.ui.tsx 渲染 <div id="${mod}-island" />，并在 index.html 里 <script type="module" src=".../island/index.tsx">`);
+}
+
+cli.addCommand({
+  name: "new",
+  description: "脚手架：new module <name> 生成模块；new island <module> 生成 React 岛",
+  arguments: [
+    { name: "kind", description: "module | island", type: String },
+    { name: "name", description: "模块名（island 时为目标模块）", type: String },
+  ],
+  execute: async ({ argument, logger }) => {
+    const [kind, name] = argument;
+    if (!name) throw new Error("用法: elysiax new module <name> | elysiax new island <module>");
+    if (kind === "module") return scaffoldModule(name, logger);
+    if (kind === "island") return scaffoldIsland(name, logger);
+    throw new Error(`未知类型 "${kind}"：支持 module | island`);
+  },
+});
+
+// ─────────────────────────────────────────────
 // elysiax add <source> — 源码安装一个模块（本地路径）
 // ─────────────────────────────────────────────
 cli.addCommand({
@@ -73,7 +189,7 @@ cli.addCommand({
   description: "源码安装模块：把模块源码复制到 ./modules/<name>/",
   argument: {
     name: "source",
-    description: "模块源码目录（本地路径，需含 module.json）",
+    description: "模块源码目录（本地路径；module.json 可选，名字取目录名）",
     type: String,
   },
   options: [
@@ -84,20 +200,24 @@ cli.addCommand({
       description: "目标已存在时直接覆盖（跳过确认）",
     },
   ],
-  execute: ({ argument, options, logger }) => {
+  execute: async ({ argument, options, logger }) => {
     const source = resolve(process.cwd(), argument[0] ?? "");
     if (!existsSync(source)) {
       throw new Error(`源码目录不存在: ${source}`);
     }
 
-    let manifest: ModuleManifest;
+    // module.json 可选：模块名取清单名或目录名，装配正确性由 gen/codegen 校验
+    let manifest: ModuleManifest | undefined;
     try {
       manifest = readManifest(source);
-    } catch (error) {
-      throw new Error((error as Error).message);
+    } catch {
+      manifest = undefined;
     }
+    const name = manifest?.name ?? basename(source);
 
-    const target = resolve(process.cwd(), "modules", manifest.name);
+    const { loadConfig } = await import("@elysiax/core");
+    const modulesDir = (await loadConfig(process.cwd())).modules ?? "src/modules";
+    const target = resolve(process.cwd(), modulesDir, name);
 
     if (source === target) {
       throw new Error(`源和目标相同: ${source}`);
@@ -105,19 +225,21 @@ cli.addCommand({
 
     if (existsSync(target) && !options.force) {
       throw new Error(
-        `modules/${manifest.name} 已存在。源码安装原则：不做静默覆盖。请先手动 diff，或用 --force 覆盖。`,
+        `${modulesDir}/${name} 已存在。源码安装原则：不做静默覆盖。请先手动 diff，或用 --force 覆盖。`,
       );
     }
 
     cpSync(source, target, { recursive: true });
-    logger.info(
-      `✅ 已安装 ${manifest.name}@${manifest.version} → modules/${manifest.name}/`,
-    );
-    if (manifest.route) logger.info(`   路由前缀: ${manifest.route}`);
-    if (manifest.provides?.length)
-      logger.info(`   provides: ${manifest.provides.join(", ")}`);
-    if (manifest.requires?.length)
-      logger.info(`   requires: ${manifest.requires.join(", ")}`);
+    logger.info(`✅ 已安装 ${name} → ${modulesDir}/${name}/`);
+    if (manifest?.route) logger.info(`   路由前缀: ${manifest.route}`);
+    // 装配校验（依赖是否都有提供者）交给 gen，错误会在那里集中报出
+    const { codegen } = await import("@elysiax/core");
+    try {
+      await codegen(process.cwd());
+      logger.info(`   .elysiax/ 已重新生成，依赖校验通过`);
+    } catch (error) {
+      logger.error(`   装配校验失败: ${(error as Error).message}`);
+    }
   },
 });
 
@@ -128,10 +250,14 @@ cli.addCommand({
   name: "list",
   alias: "ls",
   description: "列出 ./modules/ 下已安装的模块",
-  execute: ({ logger }) => {
-    const modulesDir = resolve(process.cwd(), "modules");
+  execute: async ({ logger }) => {
+    const { loadConfig } = await import("@elysiax/core");
+    const modulesDir = resolve(
+      process.cwd(),
+      (await loadConfig(process.cwd())).modules ?? "src/modules",
+    );
     if (!existsSync(modulesDir)) {
-      logger.warn("当前目录没有 modules/ 文件夹");
+      logger.warn(`当前目录没有 ${modulesDir}/ 文件夹`);
       return;
     }
 
@@ -144,7 +270,8 @@ cli.addCommand({
             (manifest.route ? `  route=${manifest.route}` : ""),
         );
       } catch {
-        logger.warn(`${entry.name}/  （缺少 module.json，已跳过）`);
+        // module.json 可选：没有清单就按目录名列出
+        logger.info(`${entry.name}`);
       }
     }
   },
@@ -170,14 +297,18 @@ cli.addCommand({
   name: "dev",
   description: "开发模式：生成 .elysiax/ 后启动 bun --hot，模块声明变化自动重生成",
   execute: async ({ logger }) => {
-    const { codegen } = await import("@elysiax/core");
+    const { codegen, loadConfig } = await import("@elysiax/core");
     const { Glob } = await import("bun");
     const { spawn } = await import("node:child_process");
 
-    await codegen(process.cwd());
+    const config = await loadConfig(process.cwd());
+    const modulesDir = config.modules ?? "src/modules";
+    const entry = config.build?.entry ?? "src/index.ts";
+
+    await codegen(process.cwd(), config);
     logger.info("✅ .elysiax/ 已生成");
 
-    const child = spawn("bun", ["--hot", "src/index.ts"], {
+    const child = spawn("bun", ["--hot", entry], {
       stdio: "inherit",
       cwd: process.cwd(),
     });
@@ -187,8 +318,8 @@ cli.addCommand({
     const snapshot = async () => {
       const times: string[] = [];
       for (const pattern of [
-        "modules/*/module.json",
-        "modules/*/*.di.ts",
+        `${modulesDir}/*/module.json`,
+        `${modulesDir}/*/*.di.ts`,
         "src/infra.di.ts",
       ]) {
         for await (const f of new Glob(pattern).scan({ cwd: process.cwd() })) {
@@ -203,7 +334,7 @@ cli.addCommand({
       if (now !== last) {
         last = now;
         try {
-          await codegen(process.cwd());
+          await codegen(process.cwd(), config);
           logger.info("🔄 模块声明变化，.elysiax/ 已重新生成");
         } catch (error) {
           logger.error((error as Error).message);

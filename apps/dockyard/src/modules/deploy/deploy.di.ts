@@ -4,6 +4,8 @@ import { GithubService } from "../github/github.service";
 import { ServerService } from "../servers/servers.service";
 import { EdgeService } from "../edge/edge.service";
 import { ProjectRepository } from "../projects/projects.repository";
+import { ResourceRepository } from "../resources/resources.repository";
+import { ResourceService } from "../resources/resources.service";
 import { DeployRepository } from "./deploy.repository";
 import { DeployService } from "./deploy.service";
 
@@ -19,6 +21,7 @@ export default defineModule({
       "appPaths",
       EdgeService,
       ProjectRepository,
+      ResourceService,
     ]),
   },
 });

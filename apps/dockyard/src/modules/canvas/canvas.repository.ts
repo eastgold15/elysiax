@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "../../shared/db";
-import { canvasNodes, type CanvasNode } from "../../shared/schema";
+import { canvasNodes, serviceGroups, type CanvasNode, type ServiceGroup } from "../../shared/schema";
 
 export class CanvasRepository {
   constructor(private readonly db: Db) {}
@@ -25,5 +25,23 @@ export class CanvasRepository {
 
   remove(id: number) {
     return this.db.delete(canvasNodes).where(eq(canvasNodes.id, id));
+  }
+
+  // ── 服务分组（服务器卡内的命名容器）──
+  groupsOf(nodeId: number): Promise<ServiceGroup[]> {
+    return this.db.select().from(serviceGroups).where(eq(serviceGroups.nodeId, nodeId)).orderBy(serviceGroups.id);
+  }
+
+  async addGroup(nodeId: number, name: string): Promise<ServiceGroup> {
+    const [row] = await this.db.insert(serviceGroups).values({ nodeId, name }).returning();
+    return row!;
+  }
+
+  updateGroup(id: number, patch: Partial<Pick<ServiceGroup, "name" | "x" | "y" | "w" | "h">>) {
+    return this.db.update(serviceGroups).set(patch).where(eq(serviceGroups.id, id));
+  }
+
+  removeGroup(id: number) {
+    return this.db.delete(serviceGroups).where(eq(serviceGroups.id, id));
   }
 }

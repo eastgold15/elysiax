@@ -433,7 +433,7 @@ export const DeployLog: Component<{ target: DeployTarget; dep?: Deployment }> = 
 };
 
 // ── 服务抽屉（Railway Service View）：点画布服务卡/db 卡弹出 ──
-export type ServiceTab = "deployments" | "logs" | "variables" | "metrics" | "settings" | "backups";
+export type ServiceTab = "deployments" | "source" | "hardware" | "network" | "env" | "monitor" | "console" | "backups";
 
 const fmtBytes = (n: number) =>
   n >= 1 << 30 ? `${(n / (1 << 30)).toFixed(1)} GB` : n >= 1 << 20 ? `${(n / (1 << 20)).toFixed(1)} MB` : `${(n / 1024).toFixed(0)} KB`;
@@ -495,18 +495,23 @@ export const ServiceDrawer: Component<{
   backups?: { file: string; size: number; at: Date }[];
   metrics?: { state: string; cpuPercent: number; memUsage: number; memLimit: number; netRx: number; netTx: number } | null;
   dbRefs?: DbRef[];
+  /** 服务器共享变量（Env Tab 下拉引用） */
+  sharedEnv?: { resourceId: number; name: string; dbType: string; envKey: string; url: string }[];
   selectedDeps?: number[];
   resources?: { cpuCores?: number; memoryMb?: number };
   notice?: string;
   error?: string;
-}> = ({ target, svc, tab, deployments, envText, domains, backups, metrics, dbRefs, selectedDeps, resources, notice, error }) => {
+}> = ({ target, svc, tab, deployments, envText, domains, backups, metrics, dbRefs, sharedEnv, selectedDeps, resources, notice, error }) => {
   const isDbInstance = target.kind === "db" && !target.instanceOf;
+  // Openship 六 Tab（Source/Hardware/Network/Env/Monitor/Console）+ 部署历史/备份
   const tabs: { key: ServiceTab; label: string }[] = [
+    { key: "source", label: "Source" },
+    ...(svc ? [{ key: "hardware" as const, label: "Hardware" }] : []),
+    { key: "network", label: "Network" },
+    ...(svc ? [{ key: "env" as const, label: "Env" }] : []),
+    { key: "monitor", label: "Monitor" },
+    { key: "console", label: "Console" },
     { key: "deployments", label: "Deployments" },
-    { key: "logs", label: "Logs" },
-    ...(svc ? [{ key: "variables" as const, label: "Variables" }] : []),
-    { key: "metrics", label: "Metrics" },
-    { key: "settings", label: "Settings" },
     ...(isDbInstance ? [{ key: "backups" as const, label: "Backups" }] : []),
   ];
   const tabUrl = (k: ServiceTab) =>
@@ -570,23 +575,51 @@ export const ServiceDrawer: Component<{
           </>
         ) : null}
 
-        {tab === "logs" ? (
-          <pre
-            class="mono max-h-[70vh] overflow-auto rounded bg-harbor-950 p-3 text-xs leading-relaxed whitespace-pre-wrap text-neutral-300"
-            hx-get={`${routes.deploy.uiTargetsByIdServiceLogs(target.id)}${svc ? `?svc=${encodeURIComponent(svc)}` : ""}`}
-            hx-trigger="load, every 2s"
-            hx-swap="innerHTML"
-          >
-            加载中…
-          </pre>
+        {tab === "monitor" ? (
+          <>
+            <MetricsPanel targetId={target.id} svc={svc} stats={metrics} />
+            <Section title="日志" hint="2s 轮询">
+              <pre
+                class="mono max-h-[40vh] overflow-auto rounded bg-harbor-950 p-3 text-xs leading-relaxed whitespace-pre-wrap text-neutral-300"
+                hx-get={`${routes.deploy.uiTargetsByIdServiceLogs(target.id)}${svc ? `?svc=${encodeURIComponent(svc)}` : ""}`}
+                hx-trigger="load, every 2s"
+                hx-swap="innerHTML"
+              >
+                加载中…
+              </pre>
+            </Section>
+          </>
         ) : null}
 
-        {tab === "variables" && svc ? (
+        {tab === "console" ? (
+          <div class="flex flex-col gap-2">
+            <p class="text-xs text-neutral-500">进入{svc ? `服务 ${svc}` : "容器"}的交互式终端（docker exec）。关闭抽屉即断开。</p>
+            <div
+              class="h-[55vh] overflow-hidden rounded border border-harbor-800 bg-[#0b0f14] p-1"
+              {...{ "data-console-target": String(target.id), "data-console-service": svc ?? "" }}
+            />
+          </div>
+        ) : null}
+
+        {tab === "env" && svc ? (
           <form class="flex flex-col gap-3" hx-post={routes.deploy.targetsByIdServiceEnv(target.id)} hx-target="#modal-root" hx-swap="innerHTML">
             {svcField}
             <p class="text-xs text-neutral-500">
               随 override compose 注入该服务容器（enc1: 加密保存在控制面本地，不入 git），重新部署后生效。
             </p>
+            {(sharedEnv ?? []).length > 0 ? (
+              <Section title="服务器共享变量" hint="选择即追加连接串到下方变量">
+                <select
+                  class={`${inputCls} px-2 py-1.5`}
+                  {...{ onchange: "const ta=this.closest('form').querySelector('[name=envText]');if(ta&&this.value){ta.value=(ta.value.trim()?ta.value.trim()+'\\n':'')+this.value;this.selectedIndex=0}" }}
+                >
+                  <option value="">选择共享变量…</option>
+                  {sharedEnv!.map((s) => (
+                    <option value={`${s.envKey}=${s.url}`}>{s.name}（{s.dbType}）→ {s.envKey}</option>
+                  ))}
+                </select>
+              </Section>
+            ) : null}
             {(dbRefs ?? []).length > 0 ? (
               <Section title="引用数据库" hint="勾选 = 画布连线 + 连接串追加进变量">
                 <DbRefPicker refs={dbRefs ?? []} selected={selectedDeps ?? []} />
@@ -597,34 +630,68 @@ export const ServiceDrawer: Component<{
           </form>
         ) : null}
 
-        {tab === "metrics" ? <MetricsPanel targetId={target.id} svc={svc} stats={metrics} /> : null}
+        {tab === "hardware" && svc ? (
+          <Section title="资源限制" hint="override compose · 重新部署生效">
+            <form class="flex items-end gap-2" hx-post={routes.deploy.targetsByIdServiceResources(target.id)} hx-target="#modal-root" hx-swap="innerHTML">
+              {svcField}
+              <label class="flex flex-1 flex-col gap-0.5">
+                <span class={labelCls}>CPU 上限（核）</span>
+                <input class={inputCls} type="number" step="0.1" min="0" name="cpuCores" value={resources?.cpuCores ? String(resources.cpuCores) : ""} placeholder="不限" />
+              </label>
+              <label class="flex flex-1 flex-col gap-0.5">
+                <span class={labelCls}>内存上限（MB）</span>
+                <input class={inputCls} type="number" min="0" name="memoryMb" value={resources?.memoryMb ? String(resources.memoryMb) : ""} placeholder="不限" />
+              </label>
+              <SubmitBtn label="保存" busy="…" />
+            </form>
+          </Section>
+        ) : null}
 
-        {tab === "settings" ? (
+        {tab === "source" ? (
           <>
-            {svc ? (
-              <Section title="资源限制" hint="override compose · 重新部署生效">
-                <form class="flex items-end gap-2" hx-post={routes.deploy.targetsByIdServiceResources(target.id)} hx-target="#modal-root" hx-swap="innerHTML">
-                  {svcField}
-                  <label class="flex flex-1 flex-col gap-0.5">
-                    <span class={labelCls}>CPU 上限（核）</span>
-                    <input class={inputCls} type="number" step="0.1" min="0" name="cpuCores" value={resources?.cpuCores ? String(resources.cpuCores) : ""} placeholder="不限" />
+            {target.kind === "db" ? (
+              <Section title="源">
+                <div class="rounded border border-harbor-800 bg-harbor-950/70 px-3 py-2.5 text-xs text-neutral-400">
+                  类型 {target.dbType}{target.instanceOf ? "（逻辑库）" : "（实例）"} · <span class="mono text-neutral-600">{target.remoteDir}</span>
+                </div>
+              </Section>
+            ) : (
+              <Section title="来源配置" hint="下次部署生效">
+                <form class="flex flex-col gap-2" hx-post={`/api/deploy/targets/${target.id}/source`} hx-target="#modal-root" hx-swap="innerHTML">
+                  <label class="flex flex-col gap-0.5">
+                    <span class={labelCls}>GitHub 仓库（本地文件夹导入可留空）</span>
+                    <input class={inputCls} type="text" name="repoUrl" value={target.repoUrl ?? ""} placeholder="owner/repo" />
                   </label>
-                  <label class="flex flex-1 flex-col gap-0.5">
-                    <span class={labelCls}>内存上限（MB）</span>
-                    <input class={inputCls} type="number" min="0" name="memoryMb" value={resources?.memoryMb ? String(resources.memoryMb) : ""} placeholder="不限" />
+                  <div class="grid grid-cols-2 gap-2">
+                    <label class="flex flex-col gap-0.5">
+                      <span class={labelCls}>分支</span>
+                      <input class={inputCls} type="text" name="branch" value={target.branch ?? "main"} />
+                    </label>
+                    <label class="flex flex-col gap-0.5">
+                      <span class={labelCls}>compose 路径</span>
+                      <input class={inputCls} type="text" name="composePath" value={target.composePath ?? "docker-compose.yml"} />
+                    </label>
+                  </div>
+                  <label class="flex flex-col gap-0.5">
+                    <span class={labelCls}>远端目录</span>
+                    <input class={inputCls} type="text" name="remoteDir" value={target.remoteDir ?? ""} placeholder="~/dockyard/my-app" />
                   </label>
-                  <SubmitBtn label="保存" busy="…" />
+                  <div><SubmitBtn label="保存" busy="…" /></div>
                 </form>
               </Section>
+            )}
+            {svc ? (
+              <Section title="服务">
+                <div class="mono rounded border border-harbor-800 bg-harbor-950/70 px-3 py-2.5 text-xs text-neutral-400">
+                  compose 服务 {svc} · {target.composePath}
+                </div>
+              </Section>
             ) : null}
-            <Section title="源">
-              <div class="flex flex-col gap-1 rounded border border-harbor-800 bg-harbor-950/70 px-3 py-2.5 text-xs text-neutral-400">
-                {target.repoUrl ? <div class="mono">{target.repoUrl}@{target.branch}</div> : null}
-                {target.kind === "db" ? <div>类型 {target.dbType}{target.instanceOf ? "（逻辑库）" : "（实例）"}</div> : null}
-                {svc ? <div class="mono">compose 服务 {svc} · {target.composePath}</div> : null}
-                <div class="mono text-neutral-600">{target.remoteDir}</div>
-              </div>
-            </Section>
+          </>
+        ) : null}
+
+        {tab === "network" ? (
+          <>
             <Section title="域名" hint="edge 反代 + 自动证书">
               <div class="flex flex-col gap-1.5">
                 {(domains ?? []).filter((d) => (svc ? d.serviceName === svc : true)).map((d) => (

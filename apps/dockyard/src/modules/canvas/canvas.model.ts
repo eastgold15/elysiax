@@ -39,9 +39,17 @@ export interface TargetModel {
   domains: DomainBadge[]; // 无 serviceName 归属的域名（有归属的下沉到 services 行）
   services: ServiceRow[]; // kind=app 有效；空数组 → 前端按行式渲染降级
   edges: DepEdgeModel[];  // 服务级依赖边（岛端派生 React Flow 边）
-  x: number | null; y: number | null; // 卡在服务器卡内的位置（null → 岛端自动摆）
+  groupId: number | null; // 所属服务分组（null = 直接挂服务器卡）
+  x: number | null; y: number | null; // 卡在父容器（服务器卡/分组）内的位置（null → 岛端自动摆）
   w: number | null; h: number | null; // 手动拉伸的卡尺寸（null → 按子卡 bounds 收敛；有值作下限）
   updateAvailable: boolean;
+}
+
+/** 服务分组：服务器卡内的命名容器（Railway Service Group） */
+export interface GroupModel {
+  id: number;
+  name: string;
+  x: number; y: number; w: number; h: number;
 }
 
 export interface CardModel {
@@ -51,6 +59,7 @@ export interface CardModel {
     dockerStatus: "unknown" | "ok" | "missing"; dockerVersion: string | null;
   };
   targets: TargetModel[];
+  groups: GroupModel[]; // 服务器卡内的服务分组容器
 }
 
 /** /board 载荷：结构 + 布局（无实时）——实时状态见 /events（SSE） */

@@ -11,7 +11,7 @@ async function renderServiceDrawer(
 ) {
   const target = await svc.targetById(targetId);
   if (!target) throw new Error("部署目标不存在");
-  const tab = (["deployments", "logs", "variables", "metrics", "settings", "backups"].includes(opts.tab ?? "")
+  const tab = (["deployments", "source", "hardware", "network", "env", "monitor", "console", "backups"].includes(opts.tab ?? "")
     ? opts.tab
     : "deployments") as ServiceTab;
   return (
@@ -22,15 +22,16 @@ async function renderServiceDrawer(
       notice={opts.notice}
       error={opts.error}
       deployments={tab === "deployments" ? await svc.deploymentsOfTarget(targetId) : undefined}
-      envText={tab === "variables" && opts.svc ? await svc.serviceEnvText(targetId, opts.svc) : undefined}
-      dbRefs={tab === "variables" && opts.svc ? await svc.dbRefsOfNode(target.nodeId) : undefined}
-      selectedDeps={tab === "variables" && opts.svc
+      envText={tab === "env" && opts.svc ? await svc.serviceEnvText(targetId, opts.svc) : undefined}
+      dbRefs={tab === "env" && opts.svc ? await svc.dbRefsOfNode(target.nodeId) : undefined}
+      sharedEnv={tab === "env" ? await svc.sharedEnvOfTarget(targetId) : undefined}
+      selectedDeps={tab === "env" && opts.svc
         ? svc.edgesOfTarget(target).filter((e) => e.service === opts.svc).map((e) => e.db)
         : undefined}
-      domains={tab === "settings" ? await svc.domainsOfTarget(targetId) : undefined}
-      resources={tab === "settings" && opts.svc ? await svc.serviceResources(targetId, opts.svc) : undefined}
+      domains={tab === "network" ? await svc.domainsOfTarget(targetId) : undefined}
+      resources={tab === "hardware" && opts.svc ? await svc.serviceResources(targetId, opts.svc) : undefined}
       backups={tab === "backups" ? await svc.backupsOf(targetId) : undefined}
-      metrics={tab === "metrics" ? await svc.serviceStats(targetId, opts.svc || undefined) : undefined}
+      metrics={tab === "monitor" ? await svc.serviceStats(targetId, opts.svc || undefined) : undefined}
     />
   );
 }
@@ -97,6 +98,9 @@ function domainsFromServices(services: DetectedService[]) {
     .filter((s) => s.domain && s.port)
     .map((s) => ({ hostname: s.domain!, targetPort: s.port!, serviceName: s.name }));
 }
+
+/** Console 会话：ws 连接 → docker exec TTY 流（close 时必须 end，否则远端 sh 残留） */
+const consoleSessions = new Map<unknown, { exec: { resize(dims: { h: number; w: number }): Promise<unknown> }; stream: { write(d: string): unknown; end(): unknown; on(ev: string, fn: (c: Buffer) => void): unknown } }>();
 
 export const deployController = defineController({ prefix: "/deploy" })
   // 向导 step1：gh CLI 列出账号仓库做选择器（gh 未登录时降级为空列表手填）
@@ -349,7 +353,7 @@ export const deployController = defineController({ prefix: "/deploy" })
         await svc.setDependsOn(params.id, [...kept, ...added]);
       }
       set.headers["HX-Trigger"] = "refresh";
-      return renderServiceDrawer(svc, params.id, { svc: svcName, tab: "variables", notice: "已保存，重新部署后生效" });
+      return renderServiceDrawer(svc, params.id, { svc: svcName, tab: "env", notice: "已保存，重新部署后生效" });
     },
   )
   .post(
@@ -366,7 +370,7 @@ export const deployController = defineController({ prefix: "/deploy" })
       };
       await svc.setServiceResources(params.id, body.svc, num(body.cpuCores), num(body.memoryMb));
       // 资源限制只写 override compose，画布结构不变，不 refresh
-      return renderServiceDrawer(svc, params.id, { svc: body.svc, tab: "settings", notice: "已保存，重新部署后生效" });
+      return renderServiceDrawer(svc, params.id, { svc: body.svc, tab: "hardware", notice: "已保存，重新部署后生效" });
     },
   )
   .post(
@@ -385,7 +389,7 @@ export const deployController = defineController({ prefix: "/deploy" })
         error = (e as Error).message;
       }
       set.headers["HX-Trigger"] = "refresh";
-      return renderServiceDrawer(svc, params.id, { svc: body.svc, tab: "settings", notice: error ? undefined : "已绑定", error });
+      return renderServiceDrawer(svc, params.id, { svc: body.svc, tab: "network", notice: error ? undefined : "已绑定", error });
     },
   )
   .delete(
@@ -395,9 +399,73 @@ export const deployController = defineController({ prefix: "/deploy" })
       const svc = di.get("deployService");
       await svc.removeDomain(params.domainId);
       set.headers["HX-Trigger"] = "refresh";
-      return renderServiceDrawer(svc, params.id, { svc: query.svc, tab: "settings", notice: "已解绑" });
+      return renderServiceDrawer(svc, params.id, { svc: query.svc, tab: "network", notice: "已解绑" });
     },
   )
+  // Source Tab：来源配置（GitHub 仓库/分支/compose 路径；本地导入显示本地路径）
+  .post(
+    "/targets/:id/source",
+    {
+      params: t.Object({ id: t.Number() }),
+      body: t.Object({
+        repoUrl: t.Optional(t.String()),
+        branch: t.Optional(t.String()),
+        composePath: t.Optional(t.String()),
+        remoteDir: t.Optional(t.String()),
+      }),
+    },
+    async ({ di, params, body }) => {
+      const svc = di.get("deployService");
+      let error: string | undefined;
+      try {
+        await svc.updateSource(params.id, body);
+      } catch (e) {
+        error = (e as Error).message;
+      }
+      return renderServiceDrawer(svc, params.id, { tab: "source", notice: error ? undefined : "已保存，下次部署生效", error });
+    },
+  )
+  // Console Tab：容器交互式终端（xterm ←→ WS ←→ docker exec TTY）
+  .ws("/console/:id", {
+    query: t.Object({ svc: t.Optional(t.String()) }),
+    async open(ws) {
+      // Elysia 2.0：ws handler 收到的是上下文与 socket 方法的合并对象（无 .data 层）
+      const ctx = ws as unknown as {
+        di: { get(name: string): any };
+        params: { id: string };
+        query: { svc?: string };
+        send(d: string): unknown;
+        close(): unknown;
+      };
+      try {
+        const session = await ctx.di.get("deployService").openConsole(Number(ctx.params.id), ctx.query.svc || undefined);
+        consoleSessions.set(ws, session);
+        session.stream.on("data", (chunk: Buffer) => ctx.send(chunk.toString("utf8")));
+        session.stream.on("end", () => ctx.close());
+        session.stream.on("error", () => ctx.close());
+      } catch (e) {
+        ctx.send(`\r\n\x1b[31m连接失败：${(e as Error).message}\x1b[0m\r\n`);
+        ctx.close();
+      }
+    },
+    message(ws, raw) {
+      const session = consoleSessions.get(ws);
+      if (!session) return;
+      try {
+        const msg = JSON.parse(typeof raw === "string" ? raw : String(raw)) as
+          | { type: "input"; data: string }
+          | { type: "resize"; cols: number; rows: number };
+        if (msg.type === "input") session.stream.write(msg.data);
+        else if (msg.type === "resize" && msg.cols > 0 && msg.rows > 0)
+          session.exec.resize({ h: msg.rows, w: msg.cols }).catch(() => {});
+      } catch { /* 坏帧忽略 */ }
+    },
+    close(ws) {
+      const session = consoleSessions.get(ws);
+      consoleSessions.delete(ws);
+      session?.stream.end();
+    },
+  })
   .post("/targets/:id/backup", { params: t.Object({ id: t.Number() }) }, async ({ di, params }) => {
     const svc = di.get("deployService");
     let file: string | undefined;
@@ -483,6 +551,7 @@ export const deployController = defineController({ prefix: "/deploy" })
         y: t.Optional(t.Number()),
         w: t.Optional(t.Number()),
         h: t.Optional(t.Number()),
+        groupId: t.Optional(t.Union([t.Number(), t.Null()])),
         serviceLayout: t.Optional(t.Record(t.String(), t.Object({ x: t.Number(), y: t.Number() }))),
       }),
     },

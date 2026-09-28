@@ -18,6 +18,8 @@
     "@meitaim/ssh": "^1.0.0",
     "@types/dotenv": "^8.2.3",
     "@workspace/htmx": "workspace:*",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "@xyflow/react": "^12.12.0",
     "bun-plugin-tailwind": "^0.1.2",
     "dockerode": "^5.0.1",

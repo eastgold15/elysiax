@@ -66,6 +66,7 @@ async function canvasData(ctx: Ctx, projectId: number) {
           ...(target.serviceLayout?.[s.name] ?? {}),
         })),
         edges: [], // 下方知道全部 target 名字后回填
+        groupId: target.groupId,
         x: target.x,
         y: target.y,
         w: target.w,
@@ -74,10 +75,14 @@ async function canvasData(ctx: Ctx, projectId: number) {
       });
     }
     const { id, name, user, host, port, dockerStatus, dockerVersion } = server;
+    const groups = (await ctx.canvas.groupsOf(node.id)).map((g) => ({
+      id: g.id, name: g.name, x: g.x, y: g.y, w: g.w, h: g.h,
+    }));
     cards.push({
       node: { id: node.id, x: node.x, y: node.y, w: node.w, h: node.h },
       server: { id, name, user, host, port, dockerStatus, dockerVersion },
       targets,
+      groups,
     });
   }
   // 服务级依赖边（岛端派生 React Flow 边）；存量 dependsOn 由门面惰性派生为 service=null 的边
@@ -172,6 +177,42 @@ export const canvasController = defineController({ prefix: "/canvas" })
   )
   .delete("/nodes/:id", { params: t.Object({ id: t.Number() }) }, async ({ di, params, set }) => {
     await ctxOf(di).canvas.removeNode(params.id);
+    set.headers["HX-Trigger"] = "refresh";
+    return "";
+  })
+  // ── 服务分组：服务器卡内的命名容器（Railway Service Group）──
+  .post(
+    "/nodes/:id/groups",
+    { params: t.Object({ id: t.Number() }), body: t.Object({ name: t.String({ minLength: 1 }) }) },
+    async ({ di, params, body, set }) => {
+      await ctxOf(di).canvas.addGroup(params.id, body.name);
+      set.headers["HX-Trigger"] = "refresh";
+      return "";
+    },
+  )
+  .patch(
+    "/groups/:id",
+    {
+      params: t.Object({ id: t.Number() }),
+      body: t.Object({
+        name: t.Optional(t.String()),
+        x: t.Optional(t.Number()),
+        y: t.Optional(t.Number()),
+        w: t.Optional(t.Number()),
+        h: t.Optional(t.Number()),
+      }),
+    },
+    async ({ di, params, body, set }) => {
+      await ctxOf(di).canvas.updateGroup(params.id, body);
+      set.status = 204;
+      if (body.name !== undefined) set.headers["HX-Trigger"] = "refresh";
+      return "";
+    },
+  )
+  // 删除分组：组内目标回落到服务器卡（deploy 上下文清 groupId）
+  .delete("/groups/:id", { params: t.Object({ id: t.Number() }) }, async ({ di, params, set }) => {
+    await di.get("deployService").clearGroup(params.id);
+    await ctxOf(di).canvas.removeGroup(params.id);
     set.headers["HX-Trigger"] = "refresh";
     return "";
   });

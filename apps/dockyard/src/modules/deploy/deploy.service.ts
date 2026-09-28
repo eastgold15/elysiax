@@ -8,6 +8,7 @@ import { decryptSecret, encryptSecret } from "../../shared/crypto";
 import { events } from "../../shared/events";
 import type { DeployTarget, Deployment, DepEdge, Project, TargetService } from "../../shared/schema";
 import type { ProjectRepository } from "../projects/projects.repository";
+import type { ResourceService, SharedEnv } from "../resources/resources.service";
 import type { ServerService } from "../servers/servers.service";
 import type { GithubService } from "../github/github.service";
 import type { CanvasRepository } from "../canvas/canvas.repository";
@@ -77,6 +78,7 @@ export class DeployService {
     private readonly paths: AppPaths,
     private readonly edge: EdgeService,
     private readonly projectRepo: ProjectRepository,
+    private readonly resourceService: ResourceService,
   ) { }
 
   /** 项目导入来源：github = 远端拉代码+服务器构建；local = 本地构建+镜像推送。
@@ -317,6 +319,62 @@ export class DeployService {
     return refs;
   }
 
+  /** 目标所在服务器的共享变量（Env Tab 下拉引用；url 已解密，仅本机控制面） */
+  async sharedEnvOfTarget(targetId: number): Promise<SharedEnv[]> {
+    const target = await this.repo.targetById(targetId);
+    if (!target) return [];
+    return this.resourceService.sharedEnvOf(await this.nodeServerId(target));
+  }
+
+  /** Source Tab：更新来源配置（仓库/分支/compose 路径/远端目录） */
+  async updateSource(
+    targetId: number,
+    patch: { repoUrl?: string; branch?: string; composePath?: string; remoteDir?: string },
+  ) {
+    const target = await this.repo.targetById(targetId);
+    if (!target || target.kind !== "app") throw new Error("部署目标不存在");
+    if (patch.repoUrl?.trim()) parseOwnerRepo(patch.repoUrl);
+    await this.repo.updateTarget(targetId, {
+      ...(patch.repoUrl !== undefined ? { repoUrl: patch.repoUrl.trim() || null } : {}),
+      ...(patch.branch?.trim() ? { branch: patch.branch.trim() } : {}),
+      ...(patch.composePath?.trim() ? { composePath: patch.composePath.trim() } : {}),
+      ...(patch.remoteDir?.trim() ? { remoteDir: patch.remoteDir.trim() } : {}),
+    });
+  }
+
+  /** Console Tab：容器交互式终端（docker exec TTY，调用方负责桥接 WS 与关闭流） */
+  async openConsole(targetId: number, svcName?: string) {
+    const target = await this.repo.targetById(targetId);
+    if (!target) throw new Error("部署目标不存在");
+    const serverId = await this.nodeServerId(target);
+    const remote = await this.serverService.docker(serverId);
+
+    let containerName: string;
+    if (target.kind === "db") {
+      if (!target.containerName) throw new Error("数据库目标缺少容器名");
+      containerName = target.containerName;
+    } else {
+      const { project, services } = await this.servicesOfTarget(target);
+      const svc = svcName || services[0]?.name;
+      if (!svc) throw new Error("没有可进入的服务（先部署，或指定服务名）");
+      containerName = `${project ?? `dockyard-${target.id}`}-${svc}-1`;
+    }
+    const containers = await remote.listContainers();
+    const hit = containers.find((c) => c.Names.includes(`/${containerName}`));
+    if (!hit) throw new Error(`容器 ${containerName} 未在运行`);
+    const container = remote.getContainer(hit.Id);
+    const exec = await container.exec({
+      Cmd: ["/bin/sh", "-c", "command -v bash >/dev/null 2>&1 && exec bash || exec sh"],
+      Tty: true,
+      AttachStdin: true,
+      AttachStdout: true,
+      AttachStderr: true,
+      Env: ["TERM=xterm-256color", "COLORTERM=truecolor"],
+    });
+    const stream = await exec.start({ hijack: true, stdin: true, Tty: true });
+    return { exec, stream };
+  }
+
   /** app 的 .env 明文（变量抽屉回显；enc1: 解密，仅本机控制面） */
   envTextOf(target: DeployTarget): string {
     if (!target.envJson) return "";
@@ -355,8 +413,13 @@ export class DeployService {
   }
 
   /** 画布布局持久化：app/db 卡位置 + 服务卡位置（serviceLayout 全量覆盖，岛端合并后传） */
-  async setLayout(targetId: number, patch: { x?: number; y?: number; w?: number; h?: number; serviceLayout?: Record<string, { x: number; y: number }> }) {
+  async setLayout(targetId: number, patch: { x?: number; y?: number; w?: number; h?: number; groupId?: number | null; serviceLayout?: Record<string, { x: number; y: number }> }) {
     await this.repo.updateTarget(targetId, patch);
+  }
+
+  /** 删除分组：组内目标回落到服务器卡 */
+  async clearGroup(groupId: number) {
+    await this.repo.clearGroup(groupId);
   }
 
   // ── 服务抽屉（Railway Service View）：部署历史 / 容器操作 / 服务变量 / 指标 / 备份 ──

@@ -27,6 +27,13 @@ export const persistServerSize = (nodeId: number, w: number, h: number) =>
     body: JSON.stringify({ w: Math.round(w), h: Math.round(h) }),
   });
 
+export const persistGroupSize = (groupId: number, w: number, h: number) =>
+  fetch(routes.canvas.groupsById(groupId), {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ w: Math.round(w), h: Math.round(h) }),
+  });
+
 export const persistTargetSize = (targetId: number, w: number, h: number) =>
   fetch(routes.deploy.targetsByIdLayout(targetId), {
     method: "PATCH",

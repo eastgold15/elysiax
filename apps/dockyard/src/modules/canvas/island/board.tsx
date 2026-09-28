@@ -9,13 +9,13 @@ import {
 import "@xyflow/react/dist/style.css";
 import type { BoardModel, CardModel, TargetModel } from "../canvas.model";
 import {
-  AppNodeView, DbNodeView, ServerNodeView, ServiceNodeView,
+  AppNodeView, DbNodeView, GroupNodeView, ServerNodeView, ServiceNodeView,
   type CanvasFlowNode,
 } from "./nodes";
 import { openModal } from "./actions";
 import { applyLiveEvent, emptyLive, LiveContext, type LiveState } from "./live";
 
-const nodeTypes = { server: ServerNodeView, app: AppNodeView, service: ServiceNodeView, db: DbNodeView };
+const nodeTypes = { server: ServerNodeView, app: AppNodeView, service: ServiceNodeView, db: DbNodeView, group: GroupNodeView };
 
 const DEP_EDGE = {
   style: { stroke: "#d9a441", strokeOpacity: 0.6, strokeWidth: 1.5, strokeDasharray: "5 3" },
@@ -31,11 +31,14 @@ const APP_TAIL_H = 46;    // 服务块之后的按钮区
 const DB_H = 84;
 const PAD = 14, HEADER_H = 56, GAP = 12; // 服务器卡：内边距/标题/子卡间距
 const SVC_W = CHILD_W - 28;
+const GROUP_HEADER_H = 30;   // 分组卡标题高度
+const GROUP_MIN_W = 220, GROUP_MIN_H = 120;
 
 const srvId = (nodeId: number) => `srv-${nodeId}`;
 const appId = (targetId: number) => `app-${targetId}`;
 const svcId = (targetId: number, name: string) => `svc-${targetId}-${name}`;
 const dbId = (targetId: number) => `db-${targetId}`;
+const grpId = (groupId: number) => `grp-${groupId}`;
 
 /** 服务卡高 = 名称行 + 域名行数 */
 const svcHeight = (s: TargetModel["services"][number]) => SVC_H + s.domains.length * SVC_DOMAIN_H;
@@ -83,6 +86,7 @@ function fitParents(ns: CanvasFlowNode[], resizingIds?: ReadonlySet<string>): Ca
   };
   return ns.map((n) =>
     n.type === "app" ? grow(n, CHILD_W, APP_MIN_H, PAD, APP_TAIL_H)
+    : n.type === "group" ? grow(n, GROUP_MIN_W, GROUP_MIN_H, PAD, PAD)
     : n.type === "server" ? grow(n, PAD + CHILD_W + PAD, HEADER_H + APP_MIN_H + PAD, PAD, PAD)
     : n
   );
@@ -98,14 +102,20 @@ function deriveNodes(cards: CardModel[], local: Map<string, CanvasFlowNode>): Ca
   for (const card of cards) {
     const sid = srvId(card.node.id);
     const serverLocal = local.get(sid);
-    // 先摆子卡，得到服务器卡的尺寸
+    // 先摆子卡，得到服务器卡/分组的尺寸
     const children: CanvasFlowNode[] = [];
+    const targetNodes: CanvasFlowNode[] = [];
     let cursor = HEADER_H;
     let contentRight = PAD + CHILD_W;
     let contentBottom = HEADER_H;
+    const groupAuto = new Map<number, number>(); // 分组内自动摆放游标
+    const groupBounds = new Map<number, { right: number; bottom: number }>();
     for (const t of card.targets) {
       const id = t.kind === "app" ? appId(t.id) : dbId(t.id);
-      const auto = { x: PAD, y: cursor };
+      const parentId = t.groupId ? grpId(t.groupId) : sid;
+      let auto: { x: number; y: number };
+      if (t.groupId) auto = { x: PAD, y: groupAuto.get(t.groupId) ?? GROUP_HEADER_H + 6 };
+      else auto = { x: PAD, y: cursor };
       const pos = t.x !== null && t.y !== null ? { x: t.x, y: t.y } : auto;
       const localNode = local.get(id);
       const position = localNode?.dragging ? localNode.position : pos;
@@ -140,10 +150,10 @@ function deriveNodes(cards: CardModel[], local: Map<string, CanvasFlowNode>): Ca
           svcCursor += sh + SVC_GAP;
         }
       }
-      children.push({
+      targetNodes.push({
         id,
         type: t.kind,
-        parentId: sid,
+        parentId,
         position,
         width: w,
         height: h,
@@ -151,11 +161,41 @@ function deriveNodes(cards: CardModel[], local: Map<string, CanvasFlowNode>): Ca
         dragging: localNode?.dragging,
         data: { t },
       } as CanvasFlowNode);
-      children.push(...svcNodes);
-      contentRight = Math.max(contentRight, position.x + w);
-      contentBottom = Math.max(contentBottom, position.y + h);
-      cursor += h + GAP;
+      targetNodes.push(...svcNodes);
+      if (t.groupId) {
+        const b = groupBounds.get(t.groupId) ?? { right: 0, bottom: 0 };
+        b.right = Math.max(b.right, position.x + w);
+        b.bottom = Math.max(b.bottom, position.y + h);
+        groupBounds.set(t.groupId, b);
+        groupAuto.set(t.groupId, (groupAuto.get(t.groupId) ?? GROUP_HEADER_H + 6) + h + GAP);
+      } else {
+        contentRight = Math.max(contentRight, position.x + w);
+        contentBottom = Math.max(contentBottom, position.y + h);
+        cursor += h + GAP;
+      }
     }
+    // 分组卡（服务器卡的子、app/db 卡的父；尺寸 = 手动值 ∪ 组内子卡 bounds）
+    for (const g of card.groups ?? []) {
+      const gid = grpId(g.id);
+      const gLocal = local.get(gid);
+      const b = groupBounds.get(g.id);
+      const w = Math.max(GROUP_MIN_W, g.w ?? 0, (b?.right ?? 0) + PAD);
+      const h = Math.max(GROUP_MIN_H, g.h ?? 0, (b?.bottom ?? 0) + PAD);
+      children.push({
+        id: gid,
+        type: "group",
+        parentId: sid,
+        position: gLocal?.dragging ? gLocal.position : { x: g.x, y: g.y },
+        width: w,
+        height: h,
+        selected: gLocal?.selected ?? false,
+        dragging: gLocal?.dragging,
+        data: { g },
+      } as CanvasFlowNode);
+      contentRight = Math.max(contentRight, g.x + w);
+      contentBottom = Math.max(contentBottom, g.y + h);
+    }
+    children.push(...targetNodes);
     nodes.push({
       id: sid,
       type: "server",
@@ -192,8 +232,9 @@ function deriveEdges(cards: CardModel[], keepSelected: Set<string>): Edge[] {
 
 interface Menu {
   x: number; y: number;
-  kind: "pane" | "server";
+  kind: "pane" | "server" | "group";
   nodeId?: number;
+  groupId?: number;
   flowX: number; flowY: number;
 }
 
@@ -205,6 +246,8 @@ function Flow({ projectId }: { projectId: number }) {
   const [edges, setEdges] = useState<Edge[]>([]);
   const [menu, setMenu] = useState<Menu | null>(null);
   const structureRef = useRef<CardModel[]>([]);
+  const nodesRef = useRef<CanvasFlowNode[]>([]);
+  useEffect(() => { nodesRef.current = nodes; }, [nodes]);
   const { screenToFlowPosition } = useReactFlow();
 
   /** 结构拉取：只在挂载和 HX-Trigger: refresh（结构变更）时调用，不轮询 */
@@ -354,6 +397,23 @@ function Flow({ projectId }: { projectId: number }) {
     interactingRef.current = true;
   }, []);
 
+  // 服务器卡内绝对坐标（app/db 的 parent 可能是分组，position 是相对父的）
+  const absInServer = useCallback((node: CanvasFlowNode): { x: number; y: number; serverId: string } => {
+    let x = node.position.x, y = node.position.y;
+    let parent = node.parentId;
+    let cur = node;
+    const all = nodesRef.current;
+    while (parent) {
+      const p = all.find((n) => n.id === parent);
+      if (!p) break;
+      x += p.position.x;
+      y += p.position.y;
+      cur = p;
+      parent = p.parentId;
+    }
+    return { x, y, serverId: cur.type === "server" ? cur.id : "" };
+  }, []);
+
   const onNodeDragStop = useCallback((_e: unknown, node: CanvasFlowNode) => {
     setTimeout(() => { draggedRef.current = false; }, 0);
     interactingRef.current = false;
@@ -365,8 +425,36 @@ function Flow({ projectId }: { projectId: number }) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ x, y }),
       });
+    } else if (node.type === "group") {
+      void fetch(routes.canvas.groupsById(Number(node.id.replace("grp-", ""))), {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ x, y }),
+      });
     } else if (node.type === "app" || node.type === "db") {
-      void patchLayout(Number(node.id.replace(/^(app|db)-/, "")), { x, y });
+      const targetId = Number(node.id.replace(/^(app|db)-/, ""));
+      // 分组命中测试：卡片中心落在哪个分组矩形内（无 → 直属服务器卡）
+      const abs = absInServer(node);
+      const cx = abs.x + (node.width ?? 0) / 2, cy = abs.y + (node.height ?? 0) / 2;
+      const groups = nodesRef.current.filter((g) => g.type === "group" && g.parentId === abs.serverId);
+      const hit = groups.find((g) => {
+        const ga = absInServer(g);
+        return cx >= ga.x && cx <= ga.x + (g.width ?? 0) && cy >= ga.y && cy <= ga.y + (g.height ?? 0);
+      });
+      const curGroup = node.parentId?.startsWith("grp-") ? Number(node.parentId.slice(4)) : null;
+      const newGroup = hit ? Number(hit.id.slice(4)) : null;
+      if (newGroup !== curGroup) {
+        // 换父：坐标换算成新父内相对值，结构变化走 refetch
+        const rel = hit
+          ? (() => { const ga = absInServer(hit); return { x: Math.round(abs.x - ga.x), y: Math.round(abs.y - ga.y) }; })()
+          : { x: Math.round(abs.x), y: Math.round(abs.y) };
+        void (async () => {
+          await patchLayout(targetId, { groupId: newGroup, ...rel });
+          await refetch();
+        })();
+      } else {
+        void patchLayout(targetId, { x, y });
+      }
     } else if (node.type === "service") {
       const data = node.data as { t: TargetModel; s: { name: string } };
       // serviceLayout 全量覆盖：已知服务位置合并本次移动
@@ -378,7 +466,7 @@ function Flow({ projectId }: { projectId: number }) {
       void patchLayout(data.t.id, { serviceLayout: merged });
     }
     flushPendingRefetch();
-  }, [flushPendingRefetch]);
+  }, [flushPendingRefetch, absInServer, refetch]);
 
   const closeMenu = () => setMenu(null);
 
@@ -420,8 +508,11 @@ function Flow({ projectId }: { projectId: number }) {
         }}
         onNodeContextMenu={(e, node) => {
           e.preventDefault();
-          if (node.type !== "server") return; // app/db 卡的操作在卡片按钮上
-          setMenu({ x: e.clientX, y: e.clientY, kind: "server", nodeId: Number(node.id.replace("srv-", "")), flowX: 0, flowY: 0 });
+          if (node.type === "server")
+            setMenu({ x: e.clientX, y: e.clientY, kind: "server", nodeId: Number(node.id.replace("srv-", "")), flowX: 0, flowY: 0 });
+          else if (node.type === "group")
+            setMenu({ x: e.clientX, y: e.clientY, kind: "group", groupId: Number(node.id.replace("grp-", "")), flowX: 0, flowY: 0 });
+          // app/db 卡的操作在卡片按钮上
         }}
         onPaneClick={closeMenu}
         onMoveStart={closeMenu}
@@ -435,10 +526,48 @@ function Flow({ projectId }: { projectId: number }) {
           style={{ left: menu.x, top: menu.y }}
           onClick={closeMenu}
         >
-          {menu.kind === "server" && menu.nodeId != null ? (
+          {menu.kind === "group" && menu.groupId != null ? (
+            <>
+              <MenuItem
+                label="重命名分组"
+                onClick={async () => {
+                  const name = prompt("分组名称");
+                  if (!name?.trim()) return;
+                  await fetch(routes.canvas.groupsById(menu.groupId!), {
+                    method: "PATCH",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ name: name.trim() }),
+                  });
+                  await refetch();
+                }}
+              />
+              <MenuItem
+                label="删除分组"
+                danger
+                onClick={async () => {
+                  if (!confirm("删除分组？组内服务卡会回落到服务器卡（部署不动）")) return;
+                  await fetch(routes.canvas.groupsById(menu.groupId!), { method: "DELETE" });
+                  await refetch();
+                }}
+              />
+            </>
+          ) : menu.kind === "server" && menu.nodeId != null ? (
             <>
               <MenuItem label="部署本仓库" onClick={() => openModal(routes.deploy.uiNewAppByNodeId(menu.nodeId!))} />
               <MenuItem label="添加数据库" onClick={() => openModal(routes.deploy.uiNewDbByNodeId(menu.nodeId!))} />
+              <MenuItem
+                label="新建分组"
+                onClick={async () => {
+                  const name = prompt("分组名称", "group");
+                  if (!name?.trim()) return;
+                  await fetch(routes.canvas.nodesByIdGroups(menu.nodeId!), {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ name: name.trim() }),
+                  });
+                  await refetch();
+                }}
+              />
               <MenuItem
                 label="移除卡片"
                 danger

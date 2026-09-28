@@ -7,15 +7,16 @@ import { routes } from "../../../../.elysiax/routes.gen";
  */
 import { memo } from "react";
 import { Handle, NodeResizer, Position, type Node, type NodeProps } from "@xyflow/react";
-import type { CardModel, DomainBadge, ServiceRow, TargetModel } from "../canvas.model";
-import { deployTarget, openModal, persistServerSize, persistTargetSize, removeTarget } from "./actions";
+import type { CardModel, DomainBadge, GroupModel, ServiceRow, TargetModel } from "../canvas.model";
+import { deployTarget, openModal, persistGroupSize, persistServerSize, persistTargetSize, removeTarget } from "./actions";
 import { useServiceState, useTargetLive } from "./live";
 
 export type ServerFlowNode = Node<{ server: CardModel["server"] }, "server">;
 export type AppFlowNode = Node<{ t: TargetModel }, "app">;
 export type ServiceFlowNode = Node<{ t: TargetModel; s: ServiceRow }, "service">;
 export type DbFlowNode = Node<{ t: TargetModel }, "db">;
-export type CanvasFlowNode = ServerFlowNode | AppFlowNode | ServiceFlowNode | DbFlowNode;
+export type GroupFlowNode = Node<{ g: GroupModel }, "group">;
+export type CanvasFlowNode = ServerFlowNode | AppFlowNode | ServiceFlowNode | DbFlowNode | GroupFlowNode;
 
 const STATUS_LABEL: Record<string, string> = {
   queued: "排队", building: "构建中", transferring: "传输中",
@@ -94,6 +95,26 @@ export const ServerNodeView = memo(({ data, selected }: NodeProps<ServerFlowNode
       </div>
       <div className="mono px-3 py-1 text-[11px] text-neutral-600">
         {server.user}@{server.host}:{server.port}
+      </div>
+    </div>
+  );
+});
+
+// ── 服务分组（服务器卡内的命名容器）：虚线边界 + 标题；app/db 卡可拖入 ──
+export const GroupNodeView = memo(({ data, selected }: NodeProps<GroupFlowNode>) => {
+  const { g } = data;
+  return (
+    <div className="flex h-full w-full flex-col rounded-md border border-dashed border-harbor-500/70 bg-harbor-800/30">
+      <NodeResizer
+        isVisible={selected}
+        minWidth={220}
+        minHeight={120}
+        lineClassName="!border-brass-500/60"
+        handleClassName="!h-2.5 !w-2.5 !rounded-sm !border-brass-500 !bg-harbor-950"
+        onResizeEnd={(_e, p) => persistGroupSize(g.id, p.width, p.height)}
+      />
+      <div className="cursor-move px-2.5 py-1 text-[11px] font-medium tracking-wide text-neutral-400 uppercase select-none">
+        ▸ {g.name}
       </div>
     </div>
   );

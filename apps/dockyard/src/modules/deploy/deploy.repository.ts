@@ -46,6 +46,11 @@ export class DeployRepository {
     return this.db.delete(deployTargets).where(eq(deployTargets.id, id));
   }
 
+  /** 删除分组前：组内目标回落到服务器卡（不连带删部署） */
+  clearGroup(groupId: number) {
+    return this.db.update(deployTargets).set({ groupId: null }).where(eq(deployTargets.groupId, groupId));
+  }
+
   async createDeployment(targetId: number): Promise<Deployment> {
     const [row] = await this.db.insert(deployments).values({ targetId }).returning();
     return row!;

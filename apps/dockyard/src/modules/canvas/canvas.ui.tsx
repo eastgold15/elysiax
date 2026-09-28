@@ -174,8 +174,24 @@ export interface DepLink {
   to: number;   // app 所在卡片 nodeId
 }
 
-/** 依赖连线：db 卡 → app 卡的三次贝塞尔（取两卡最近的水平边，纯服务端几何）。
- *  拖拽中 morph 被 <dy-card> 拦住，松手 PATCH 后立即 refresh 补一次，箭头随卡走 */
+/** 连线几何（pages/canvas.ts 里有一份客户端副本，拖拽实时重算用——改公式要同步两边） */
+function depPath(a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }, self: boolean): string {
+  if (self) {
+    // 同卡依赖：左缘自环（出卡再回卡，箭头朝回卡方向）
+    const y1 = a.y + a.h / 2 - 18;
+    const y2 = a.y + a.h / 2 + 18;
+    return `M ${a.x} ${y1} C ${a.x - 44} ${y1}, ${a.x - 44} ${y2}, ${a.x} ${y2}`;
+  }
+  const ay = a.y + a.h / 2;
+  const by = b.y + b.h / 2;
+  const ltr = a.x + a.w / 2 <= b.x + b.w / 2;
+  const fromX = ltr ? a.x + a.w : a.x;
+  const toX = ltr ? b.x : b.x + b.w;
+  const c = Math.max(40, Math.abs(toX - fromX) / 2) * (ltr ? 1 : -1);
+  return `M ${fromX} ${ay} C ${fromX + c} ${ay}, ${toX - c} ${by}, ${toX} ${by}`;
+}
+
+/** 依赖连线：db 卡 → app 卡（同卡画左缘自环）。data-from/data-to 供 <dy-card> 拖拽时实时重算 */
 const DepArrows: Component<{ cards: CardModel[]; links: DepLink[] }> = ({ cards, links }) => {
   if (links.length === 0) return <></>;
   const byNode = new Map(cards.map((c) => [c.node.id, c.node]));
@@ -192,19 +208,15 @@ const DepArrows: Component<{ cards: CardModel[]; links: DepLink[] }> = ({ cards,
         const a = byNode.get(l.from);
         const b = byNode.get(l.to);
         if (!a || !b) return null;
-        const ay = a.y + a.h / 2;
-        const by = b.y + b.h / 2;
-        const ltr = a.x + a.w / 2 <= b.x + b.w / 2;
-        const fromX = ltr ? a.x + a.w : a.x;
-        const toX = ltr ? b.x : b.x + b.w;
-        const c = Math.max(40, Math.abs(toX - fromX) / 2) * (ltr ? 1 : -1);
         return (
           <path
             id={`dep-${l.from}-${l.to}`}
-            d={`M ${fromX} ${ay} C ${fromX + c} ${ay}, ${toX - c} ${by}, ${toX} ${by}`}
+            data-from={String(l.from)}
+            data-to={String(l.to)}
+            d={depPath(a, b, l.from === l.to)}
             fill="none"
             stroke="#d9a441"
-            stroke-opacity="0.5"
+            stroke-opacity="0.6"
             stroke-width="1.5"
             stroke-dasharray="5 3"
             marker-end="url(#dep-arrow)"

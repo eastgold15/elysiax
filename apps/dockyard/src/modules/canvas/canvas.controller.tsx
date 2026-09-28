@@ -62,7 +62,7 @@ async function canvasData(ctx: Ctx, projectId: number) {
       targets,
     });
   }
-  // 依赖连线：app.dependsOn（db target id）→ 所在卡片。跨卡画箭头，同卡在行内徽章体现
+  // 依赖连线：app.dependsOn（db target id）→ 所在卡片。跨卡画箭头，同卡画左缘自环
   const nodeOfTarget = new Map<number, number>();
   const nameOfTarget = new Map<number, string>();
   for (const c of cards)
@@ -75,7 +75,7 @@ async function canvasData(ctx: Ctx, projectId: number) {
     for (const t of c.targets)
       for (const depId of t.dependsOn) {
         const from = nodeOfTarget.get(depId);
-        if (from !== undefined && from !== c.node.id) links.push({ from, to: c.node.id });
+        if (from !== undefined) links.push({ from, to: c.node.id });
         t.depNames.push(nameOfTarget.get(depId) ?? `#${depId}`);
       }
   return {

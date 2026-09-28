@@ -39,6 +39,7 @@ export interface DbRef {
   dbType: DbType;
   logical: boolean;
   url: string;
+  displayUrl: string; // 脱敏预览（密码段 •••），选择器里展示用
   envKey: string; // 建议注入的变量名（DATABASE_URL / REDIS_URL）
 }
 
@@ -207,7 +208,9 @@ export class DeployService {
       refs.push({
         id: db.id, nodeId: db.nodeId, name: db.name,
         dbType: db.dbType as DbType, logical: Boolean(db.instanceOf),
-        url, envKey: suggestedEnvKey(db.dbType as DbType),
+        url,
+        displayUrl: url.replace(/(\/\/[^:/@]+:)[^@]+(@)/, "$1•••$2"),
+        envKey: suggestedEnvKey(db.dbType as DbType),
       });
     }
     return refs;

@@ -159,18 +159,22 @@ const ServiceCard: Component<{ svc: DetectedService }> = ({ svc }) => (
 export const DbRefPicker: Component<{ refs: DbRef[]; selected: number[] }> = ({ refs, selected }) => (
   <div class="flex flex-col gap-1.5">
     {refs.map((r) => (
-      <label class="flex cursor-pointer items-center gap-2 rounded border border-harbor-800 bg-harbor-950/70 px-3 py-2 text-xs text-neutral-300">
+      <label class="flex cursor-pointer items-center gap-2 rounded border border-harbor-800 bg-harbor-950/70 px-3 py-2 text-xs text-neutral-300 transition-colors has-checked:border-brass-500/60 has-checked:bg-brass-500/5">
         <input
           type="checkbox"
           name="depIds"
           value={String(r.id)}
           checked={selected.includes(r.id)}
+          class="accent-brass-500"
           data-line={`${r.envKey}=${r.url}`}
-          onchange="const ta=this.closest('form').querySelector('[name=envText]');if(!ta)return;const ls=ta.value.split('\n').filter(l=>l.trim()&&l!==this.dataset.line);if(this.checked)ls.push(this.dataset.line);ta.value=ls.join('\n')"
+          onchange="const ta=this.closest('form').querySelector('[name=envText]');if(!ta)return;const ls=ta.value.split('\n').filter(l=>l.trim()&&l!==this.dataset.line);if(this.checked){ls.push(this.dataset.line);ta.scrollTop=ta.scrollHeight}ta.value=ls.join('\n')"
         />
-        <span class="text-neutral-200">{r.logical ? "⛁" : "🗄"} {r.name}</span>
-        <span class="text-neutral-600">
-          {r.dbType}{r.logical ? " · 逻辑库" : ""} → <span class="mono text-tide-400">{r.envKey}</span>
+        <span class="shrink-0 text-neutral-200">{r.logical ? "⛁" : "🗄"} {r.name}</span>
+        <span class="flex min-w-0 flex-col">
+          <span class="text-neutral-600">
+            {r.dbType}{r.logical ? " · 逻辑库" : ""} → <span class="mono text-tide-400">{r.envKey}</span>
+          </span>
+          <span class="mono truncate text-[10px] text-neutral-700">{r.displayUrl}</span>
         </span>
       </label>
     ))}

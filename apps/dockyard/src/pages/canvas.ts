@@ -13,6 +13,35 @@ interface Htmx {
 }
 declare const htmx: Htmx;
 
+// ── 依赖箭头实时重算（几何公式与 canvas.ui.tsx 的 depPath 保持一致）──
+interface Rect { x: number; y: number; w: number; h: number }
+function depPath(a: Rect, b: Rect, self: boolean): string {
+  if (self) {
+    const y1 = a.y + a.h / 2 - 18;
+    const y2 = a.y + a.h / 2 + 18;
+    return `M ${a.x} ${y1} C ${a.x - 44} ${y1}, ${a.x - 44} ${y2}, ${a.x} ${y2}`;
+  }
+  const ay = a.y + a.h / 2;
+  const by = b.y + b.h / 2;
+  const ltr = a.x + a.w / 2 <= b.x + b.w / 2;
+  const fromX = ltr ? a.x + a.w : a.x;
+  const toX = ltr ? b.x : b.x + b.w;
+  const c = Math.max(40, Math.abs(toX - fromX) / 2) * (ltr ? 1 : -1);
+  return `M ${fromX} ${ay} C ${fromX + c} ${ay}, ${toX - c} ${by}, ${toX} ${by}`;
+}
+function rectOf(el: HTMLElement): Rect {
+  return { x: parseFloat(el.style.left), y: parseFloat(el.style.top), w: el.offsetWidth, h: el.offsetHeight };
+}
+/** 拖拽/resize 时重算与这张卡相连的所有箭头（morph 被拦期间箭头也跟手） */
+function rerouteArrows(root: HTMLElement, nodeId: string) {
+  for (const path of root.querySelectorAll<SVGPathElement>(`path[data-from="${nodeId}"], path[data-to="${nodeId}"]`)) {
+    const fromEl = root.querySelector<HTMLElement>(`dy-card[data-node-id="${path.dataset.from}"]`);
+    const toEl = root.querySelector<HTMLElement>(`dy-card[data-node-id="${path.dataset.to}"]`);
+    if (!fromEl || !toEl) continue;
+    path.setAttribute("d", depPath(rectOf(fromEl), rectOf(toEl), path.dataset.from === path.dataset.to));
+  }
+}
+
 // ── <dy-card>：拖拽/resize 隔离单元 ──
 class DyCard extends HTMLElement {
   connectedCallback() {
@@ -38,6 +67,9 @@ class DyCard extends HTMLElement {
       w: this.offsetWidth,
       h: this.offsetHeight,
     };
+    const root = this.closest<HTMLElement>("#canvas-root");
+    const prevZ = this.style.zIndex;
+    this.style.zIndex = "10"; // 拖动中的卡片浮在其他卡上面
 
     const onMove = (ev: PointerEvent) => {
       const dx = ev.clientX - startX;
@@ -51,10 +83,12 @@ class DyCard extends HTMLElement {
         this.style.left = `${orig.left + dx}px`;
         this.style.top = `${orig.top + dy}px`;
       }
+      if (root && this.dataset.nodeId) rerouteArrows(root, this.dataset.nodeId);
     };
     const onUp = async (ev: PointerEvent) => {
       document.removeEventListener("pointermove", onMove);
       document.removeEventListener("pointerup", onUp);
+      this.style.zIndex = prevZ;
       const dx = ev.clientX - startX;
       const dy = ev.clientY - startY;
       if (dx === 0 && dy === 0) return;

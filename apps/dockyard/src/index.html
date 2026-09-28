@@ -5,6 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Dockyard</title>
   <link rel="stylesheet" href="./global.css" />
+  <script>
+    // ResizeObserver loop 报错是良性警告：RO 回调里改了尺寸→同帧又排一次通知，
+    // 浏览器丢帧保护性报错，功能无损。过滤掉避免控制台刷屏（只过滤这一条精确消息）。
+    window.addEventListener("error", (e) => {
+      if (e.message && e.message.includes("ResizeObserver loop")) {
+        e.stopImmediatePropagation();
+        e.preventDefault();
+      }
+    });
+  </script>
   <script
     src="https://cdn.jsdelivr.net/npm/htmx.org@2.0.11/dist/htmx.min.js"
     integrity="sha384-2OatzQy1H+Zd/IIrjr1TcuDGqLXeHhbooAyJY1KdQMKnr4LZ22k31GBLdYKHmVjg"

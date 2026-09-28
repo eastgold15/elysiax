@@ -270,7 +270,13 @@ function Flow({ projectId }: { projectId: number }) {
         if (c.type === "dimensions") {
           if (c.resizing) resizingRef.current.add(c.id);
           else resizingRef.current.delete(c.id);
-          dimBufferRef.current.push(c);
+          // 尺寸取整：NodeResizer 产生小数像素，state→style→RO 测量回读 round-trip
+          // 出亚像素抖动，同帧互踢就是 ResizeObserver loop（取整后 style 与测量值收敛）
+          dimBufferRef.current.push(
+            c.dimensions
+              ? { ...c, dimensions: { width: Math.round(c.dimensions.width), height: Math.round(c.dimensions.height) } }
+              : c,
+          );
         } else {
           immediate.push(c);
         }

@@ -1,14 +1,15 @@
-import { defineModule } from "@elysiax/core";
-import { SshPool } from "./ssh-pool";
+import { defineModule, provide } from "@elysiax/core";
 import { DockerRelay } from "./docker-relay";
 import { ServerRepository } from "./servers.repository";
 import { ServerService } from "./servers.service";
+import { SshPool } from "./ssh-pool";
 
 export default defineModule({
+  route: "/servers",
   provides: {
-    sshPool: { class: SshPool, deps: [] },
-    dockerRelay: { class: DockerRelay, deps: [] },
-    serverRepository: { class: ServerRepository, deps: ["db"] },
-    serverService: { class: ServerService, deps: ["serverRepository", "sshPool", "dockerRelay"] },
+    sshPool: provide(SshPool),
+    dockerRelay: provide(DockerRelay),
+    serverRepository: provide(ServerRepository, ["db"]),
+    serverService: provide(ServerService, [ServerRepository, SshPool, DockerRelay]),
   },
 });

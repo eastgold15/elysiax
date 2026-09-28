@@ -1,7 +1,0 @@
-{
-  "name": "edge",
-  "version": "1.0.0",
-  "route": "/edge",
-  "provides": ["edgeService"],
-  "requires": ["serverServiceLazy"]
-}

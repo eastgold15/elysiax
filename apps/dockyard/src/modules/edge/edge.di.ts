@@ -1,13 +1,12 @@
-import { defineModule } from "@elysiax/core";
+import { defineModule, provide } from "@elysiax/core";
+import { ServerService } from "../servers/servers.service";
 import { EdgeRepository } from "./edge.repository";
 import { EdgeService } from "./edge.service";
 
 export default defineModule({
+  route: "/edge",
   provides: {
-    edgeRepository: { class: EdgeRepository, deps: ["db"] },
-    edgeService: {
-      class: EdgeService,
-      deps: ["edgeRepository", "serverService"],
-    },
+    edgeRepository: provide(EdgeRepository, ["db"]),
+    edgeService: provide(EdgeService, [EdgeRepository, ServerService]),
   },
 });

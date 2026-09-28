@@ -1,8 +1,9 @@
-import { defineModule } from "@elysiax/core";
+import { defineModule, provide } from "@elysiax/core";
 import { GithubService } from "./github.service";
 
 export default defineModule({
+  route: "/github",
   provides: {
-    githubService: { class: GithubService, deps: [] },
+    githubService: provide(GithubService),
   },
 });

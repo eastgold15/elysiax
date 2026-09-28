@@ -1,7 +1,0 @@
-{
-  "name": "servers",
-  "version": "1.0.0",
-  "route": "/servers",
-  "provides": ["serverService"],
-  "requires": []
-}

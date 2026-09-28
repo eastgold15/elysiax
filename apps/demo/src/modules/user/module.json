@@ -1,7 +1,0 @@
-{
-  "name": "user",
-  "version": "1.0.0",
-  "route": "/users",
-  "provides": ["userService"],
-  "requires": ["orderServiceLazy"]
-}

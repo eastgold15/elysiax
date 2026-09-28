@@ -1,7 +1,0 @@
-{
-  "name": "projects",
-  "version": "1.0.0",
-  "route": "/projects",
-  "provides": ["projectService", "localService"],
-  "requires": []
-}

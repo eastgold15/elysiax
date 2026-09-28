@@ -1,10 +1,11 @@
-import { defineModule } from "@elysiax/core";
+import { defineModule, provide } from "@elysiax/core";
 import { CanvasRepository } from "./canvas.repository";
 import { CanvasService } from "./canvas.service";
 
 export default defineModule({
+  route: "/canvas",
   provides: {
-    canvasRepository: { class: CanvasRepository, deps: ["db"] },
-    canvasService: { class: CanvasService, deps: ["canvasRepository"] },
+    canvasRepository: provide(CanvasRepository, ["db"]),
+    canvasService: provide(CanvasService, [CanvasRepository]),
   },
 });

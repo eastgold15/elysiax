@@ -1,5 +1,5 @@
 /** @jsxImportSource react */
-import { routes } from "../../../../.elysiax";
+import { routes } from "../../../../.elysiax/routes.gen";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ReactFlow, ReactFlowProvider, Background, applyEdgeChanges, applyNodeChanges,

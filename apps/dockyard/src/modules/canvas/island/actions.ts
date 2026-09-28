@@ -1,4 +1,4 @@
-import { routes } from "../../../../.elysiax";
+import { routes } from "../../../../.elysiax/routes.gen";
 /**
  * 岛 → 服务端片段的桥：模态框（变量/域名/日志/新建目标）仍是 htmx 服务端渲染，
  * 岛里按钮只是调全局 htmx.ajax 把片段灌进 #modal-root。

@@ -1,5 +1,5 @@
 /** @jsxImportSource react */
-import { routes } from "../../../../.elysiax";
+import { routes } from "../../../../.elysiax/routes.gen";
 /**
  * 嵌套卡片（React Flow subflow）：服务器卡 → app 卡（compose 项目）→ 服务卡；db 卡直属服务器卡。
  * 父子关系只表达归属与布局，边连在叶子上：db 卡 source handle，服务卡/app 卡 target handle。

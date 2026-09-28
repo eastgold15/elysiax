@@ -333,6 +333,20 @@ cli.addCommand({
       if (!entry.isDirectory()) continue;
       const dir = resolve(root, modulesDir, entry.name);
       if (!existsSync(resolve(dir, "island"))) continue;
+      // 岛是浏览器代码：import .elysiax 桶文件会把服务端图谱（modules.gen → controller
+      // → service → bun:sqlite）打进浏览器 bundle，必须直接引 .elysiax/routes.gen
+      for (const f of readdirSync(resolve(dir, "island"))) {
+        if (!/\.tsx?$/.test(f)) continue;
+        const src = readFileSync(resolve(dir, "island", f), "utf8");
+        if (/from\s+["'][^"']*\.elysiax["']/.test(src)) {
+          logger.error(
+            `❌ ${entry.name}/island/${f}: 岛（浏览器代码）import 了 .elysiax 桶文件，` +
+              `会把服务端图谱打进浏览器 bundle——routes 请从 .elysiax/routes.gen 直接引`,
+          );
+          islandIssues++;
+          errors++;
+        }
+      }
       for (const f of readdirSync(dir)) {
         if (!/\.ui\.tsx$/.test(f)) continue;
         const src = readFileSync(resolve(dir, f), "utf8");

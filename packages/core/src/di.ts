@@ -120,11 +120,13 @@ export function elysiaxAPI<T extends Record<string | symbol, any>>(
   if (options.validationError !== false) {
     const banner = options.validationError ?? defaultValidationBanner;
     // Elysia 2：错误处理器按错误类注册（.error(Class, handler)）
-    (api as any).error(ValidationError, ({ error, request, set }: any) => {
+    (api as any).error(ValidationError, ({ error, request }: any) => {
       if (!request.headers.has("HX-Request")) return; // 非 htmx 走默认 JSON 422
-      set.status = 200; // htmx 默认不 swap 4xx，片段必须能吃进 target
-      set.headers["content-type"] = "text/html; charset=utf-8";
-      return banner(error);
+      // 显式 200 Response：htmx 默认不 swap 4xx，片段必须能吃进 target
+      return new Response(banner(error), {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
     });
   }
 

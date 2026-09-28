@@ -1,5 +1,3 @@
-import { sse } from "elysia";
-
 export interface RealtimeOptions<T> {
   /** 心跳间隔（SSE ping），默认 25s；0 关闭 */
   heartbeatMs?: number;
@@ -53,41 +51,69 @@ export function defineRealtime<T>(options: RealtimeOptions<T> = {}) {
     subscribe,
 
     /**
-     * Elysia 路由 handler：async generator → text/event-stream。
-     * 推送式队列 + 心跳；客户端断开时（generator return）自动退订清心跳。
+     * Elysia 路由 handler：返回 text/event-stream Response（普通箭头函数直接 return 即可，
+     * 不依赖 Elysia 的生成器 handler 检测）。推送式队列 + 心跳；
+     * 客户端断开（ReadableStream cancel）自动退订清心跳。
      * snapshot 可挂在总线上（options.snapshot）或按订阅传（依赖运行时参数时）。
      */
-    stream: async function* (
-      ch: string,
-      snapshot?: () => T[] | Promise<T[]>,
-    ) {
-      type Item = T | "ping";
-      const snap = snapshot ?? (options.snapshot ? () => options.snapshot!(ch) : undefined);
-      const queue: Item[] = snap ? await snap() : [];
-      let wake: (() => void) | null = null;
-      const push = (d: Item) => {
-        queue.push(d);
-        wake?.();
-      };
-      const unsub = subscribe(ch, push);
-      const hb = heartbeatMs > 0 ? setInterval(() => push("ping"), heartbeatMs) : null;
-      try {
-        while (true) {
-          while (queue.length) {
-            const item = queue.shift()!;
-            yield item === "ping"
-              ? sse({ event: "ping", data: "{}" })
-              : sse({ event: "message", data: JSON.stringify(item) });
+    stream(ch: string, snapshot?: () => T[] | Promise<T[]>): Response {
+      const encode = new TextEncoder();
+      const frame = (event: string, data: string) =>
+        encode.encode(`event: ${event}\ndata: ${data}\n\n`);
+
+      // 内部 async generator 产出 SSE 帧；Response cancel 时 return() 触发 finally 清理
+      const frames = (async function* () {
+        type Item = T | "ping";
+        const snap =
+          snapshot ?? (options.snapshot ? () => options.snapshot!(ch) : undefined);
+        const queue: Item[] = snap ? await snap() : [];
+        let wake: (() => void) | null = null;
+        const push = (d: Item) => {
+          queue.push(d);
+          wake?.();
+        };
+        const unsub = subscribe(ch, push);
+        const hb = heartbeatMs > 0 ? setInterval(() => push("ping"), heartbeatMs) : null;
+        try {
+          while (true) {
+            while (queue.length) {
+              const item = queue.shift()!;
+              yield item === "ping"
+                ? frame("ping", "{}")
+                : frame("message", JSON.stringify(item));
+            }
+            await new Promise<void>((resolve) => {
+              wake = resolve;
+            });
+            wake = null;
           }
-          await new Promise<void>((resolve) => {
-            wake = resolve;
-          });
-          wake = null;
+        } finally {
+          if (hb) clearInterval(hb);
+          unsub();
         }
-      } finally {
-        if (hb) clearInterval(hb);
-        unsub();
-      }
+      })();
+
+      const body = new ReadableStream<Uint8Array>({
+        async start(controller) {
+          try {
+            for await (const chunk of frames) controller.enqueue(chunk);
+            controller.close();
+          } catch (error) {
+            controller.error(error);
+          }
+        },
+        cancel() {
+          void frames.return(undefined as never);
+        },
+      });
+
+      return new Response(body, {
+        headers: {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        },
+      });
     },
   };
 }

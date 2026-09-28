@@ -36,7 +36,28 @@ async function renderServiceDrawer(
 }
 import { LOGICAL_DB_SUPPORT, type DbType } from "./db-templates";
 import type { RepoBrief } from "../github/github.service";
-import { detectToEnvText, detectToOverrideCompose, textToEnvMap, type DetectResult, type DetectedService } from "./detect";
+import type { SharedEnv } from "../resources/resources.service";
+import { detectToEnvText, detectToOverrideCompose, guessDbType, textToEnvMap, type DetectResult, type DetectedService } from "./detect";
+
+/** 共享资源匹配（部署前置检查）：识别出的中间件服务 vs 目标服务器的共享资源清单 */
+export type SharedMatch = { service: string; displayUrl: string } & SharedEnv;
+
+async function sharedMatchesOf(
+  di: { get(name: string): any },
+  nodeId: number,
+  services: DetectedService[],
+): Promise<SharedMatch[]> {
+  const node = await di.get("canvasService").byId(nodeId);
+  if (!node) return [];
+  const shared: SharedEnv[] = await di.get("resourceService").sharedEnvOf(node.serverId);
+  return services.flatMap((s) => {
+    const dbType = guessDbType(s);
+    const hit = dbType ? shared.find((sh) => sh.dbType === dbType) : undefined;
+    return hit
+      ? [{ service: s.name, ...hit, displayUrl: hit.url.replace(/(\/\/[^:/@]+:)[^@]+(@)/, "$1•••$2") }]
+      : [];
+  });
+}
 
 /** 向导 step2 的动态行（svcName 隐藏字段枚举 + svcExpose_/svcPort_/…_<服务名>）还原成服务列表。
  *  未勾「对外」时端口输入被禁用、不随表单提交 → port=undefined = 内部服务 */
@@ -96,6 +117,7 @@ export const deployController = defineController({ prefix: "/deploy" })
       const svc = di.get("deployService");
       const detect = await svc.detectLocal({ localPath: project.localPath, rootDir: project.rootDir ?? undefined });
       const dbRefs = await svc.dbRefsOfNode(params.nodeId);
+      const sharedMatches = await sharedMatchesOf(di, params.nodeId, detect.services);
       const carry = {
         nodeId: params.nodeId,
         name: project.slug,
@@ -103,7 +125,7 @@ export const deployController = defineController({ prefix: "/deploy" })
         branch: project.branch ?? "main",
         remoteDir: `~/dockyard/${project.slug}`,
       };
-      return <AppDetectStep carry={carry} detect={detect} envText={detectToEnvText(detect)} dbRefs={dbRefs} />;
+      return <AppDetectStep carry={carry} detect={detect} envText={detectToEnvText(detect)} dbRefs={dbRefs} sharedMatches={sharedMatches} />;
     }
     return <NewAppDrawer nodeId={params.nodeId} repos={repos} error={ghError} prefillRepo={project?.repoUrl ?? undefined} />;
   })
@@ -123,7 +145,8 @@ export const deployController = defineController({ prefix: "/deploy" })
       try {
         const detect = await di.get("deployService").detectRepo(body);
         const dbRefs = await di.get("deployService").dbRefsOfNode(body.nodeId);
-        return <AppDetectStep carry={body} detect={detect} envText={detectToEnvText(detect)} dbRefs={dbRefs} />;
+        const sharedMatches = await sharedMatchesOf(di, body.nodeId, detect.services);
+        return <AppDetectStep carry={body} detect={detect} envText={detectToEnvText(detect)} dbRefs={dbRefs} sharedMatches={sharedMatches} />;
       } catch (e) {
         let repos: RepoBrief[] = [];
         try {
@@ -165,7 +188,18 @@ export const deployController = defineController({ prefix: "/deploy" })
     },
     async ({ di, body, set }) => {
       const svc = di.get("deployService");
-      const services = servicesFromBody(body as unknown as Record<string, unknown>);
+      const rawBody = body as unknown as Record<string, unknown>;
+      const services = servicesFromBody(rawBody);
+      // 共享资源复用：勾了 reuse_<服务> 的中间件不部署，只注入共享变量
+      const reused = new Set(services.filter((s) => rawBody[`reuse_${s.name}`] !== undefined).map((s) => s.name));
+      if (reused.size > 0 && reused.size === services.length) {
+        const dbRefs = await svc.dbRefsOfNode(body.nodeId);
+        const detect: DetectResult = { source: "openship.json", composePath: body.composePath, services, rootEnv: {}, errors: [], warnings: [] };
+        return <AppDetectStep carry={body} detect={detect} envText={body.envText ?? ""} dbRefs={dbRefs} error="所有服务都选择了复用共享资源——至少保留一个业务服务需要部署" />;
+      }
+      const upServices = reused.size > 0
+        ? services.map((s) => s.name).filter((n) => !reused.has(n))
+        : undefined;
       let target;
       try {
         target = await svc.createAppTarget({
@@ -177,9 +211,10 @@ export const deployController = defineController({ prefix: "/deploy" })
           remoteDir: body.remoteDir,
           envText: body.envText,
           overrideCompose: detectToOverrideCompose({ services }),
-          dependsOn: depIdsFromBody(body as unknown as Record<string, unknown>),
+          dependsOn: depIdsFromBody(rawBody),
           domains: domainsFromServices(services),
           services,
+          upServices,
         });
       } catch (e) {
         // 创建失败回到 step2，保留已填内容

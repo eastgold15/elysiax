@@ -165,7 +165,18 @@ export interface DetectedService {
   domain?: string;
   cpuCores?: number;
   memoryMb?: number;
+  image?: string; // compose 探测时捕获（共享资源匹配用：识别 postgres/redis 等中间件）
   env: Record<string, OpenshipEnvValue>;
+}
+
+/** 从服务 image / 名称猜测中间件类型（部署前置检查：对比服务器共享资源清单） */
+export function guessDbType(svc: { name: string; image?: string }): "postgres" | "mysql" | "redis" | "mongo" | null {
+  const hay = `${svc.image ?? ""} ${svc.name}`.toLowerCase();
+  if (/postgres|pgvector|postgis/.test(hay)) return "postgres";
+  if (/mysql|mariadb/.test(hay)) return "mysql";
+  if (/redis|valkey|dragonfly/.test(hay)) return "redis";
+  if (/mongo/.test(hay)) return "mongo";
+  return null;
 }
 export interface DetectResult {
   source: "openship.json" | "compose" | "none";
@@ -260,7 +271,7 @@ export function detectFromCompose(composeText: string): DetectResult {
       if (m) port = Number(m[1] ?? m[2]);
     }
     if (def.image === undefined && def.build === undefined) warnings.push(`服务 ${name} 既无 image 也无 build，部署可能失败`);
-    services.push({ name, exposed: port !== undefined, port, env: {} });
+    services.push({ name, exposed: port !== undefined, port, image: typeof def.image === "string" ? def.image : undefined, env: {} });
   }
   if (services.length === 0) warnings.push("compose 里没发现任何 service");
   return { source: "compose", composePath: "docker-compose.yml", services, rootEnv: {}, errors: [], warnings };

@@ -62,4 +62,9 @@ export const migrationsJournal: MigrationsJournal = [
     timestamp: 11,
     sql: "CREATE TABLE `server_resources` (\n\t`id` integer PRIMARY KEY AUTOINCREMENT,\n\t`serverId` integer NOT NULL,\n\t`name` text NOT NULL,\n\t`dbType` text NOT NULL,\n\t`containerName` text,\n\t`envKey` text NOT NULL,\n\t`credsJson` text,\n\t`createdAt` integer NOT NULL,\n\tCONSTRAINT `fk_server_resources_serverId_servers_id_fk` FOREIGN KEY (`serverId`) REFERENCES `servers`(`id`) ON DELETE CASCADE,\n\tCONSTRAINT `server_resources_serverId_name_unique` UNIQUE(`serverId`,`name`)\n);\n--> statement-breakpoint\nCREATE TABLE `service_groups` (\n\t`id` integer PRIMARY KEY AUTOINCREMENT,\n\t`nodeId` integer NOT NULL,\n\t`name` text NOT NULL,\n\t`x` integer DEFAULT 24 NOT NULL,\n\t`y` integer DEFAULT 24 NOT NULL,\n\t`w` integer DEFAULT 360 NOT NULL,\n\t`h` integer DEFAULT 280 NOT NULL,\n\tCONSTRAINT `fk_service_groups_nodeId_canvas_nodes_id_fk` FOREIGN KEY (`nodeId`) REFERENCES `canvas_nodes`(`id`) ON DELETE CASCADE,\n\tCONSTRAINT `service_groups_nodeId_name_unique` UNIQUE(`nodeId`,`name`)\n);\n--> statement-breakpoint\nALTER TABLE `deploy_targets` ADD `groupId` integer REFERENCES service_groups(id);--> statement-breakpoint\nALTER TABLE `projects` ADD `sourceType` text;--> statement-breakpoint\nALTER TABLE `projects` ADD `branch` text;--> statement-breakpoint\nALTER TABLE `projects` ADD `rootDir` text;",
   },
+  {
+    name: "0011_up_services",
+    timestamp: 12,
+    sql: "ALTER TABLE `deploy_targets` ADD `upServices` text;",
+  },
 ];

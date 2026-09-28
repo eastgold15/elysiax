@@ -117,14 +117,16 @@ export class DeployService {
     dependsOn?: number[]; // 依赖的 db target id（画布连线 + 连接串引用血缘）
     domains?: { hostname: string; serviceName?: string; targetPort: number }[];
     services?: DetectedService[]; // compose 服务清单（画布小卡片；剥离秘密值后明文落库）
+    upServices?: string[]; // 实际 up 的服务子集（共享资源复用过滤中间件；undefined = 全量）
   }) {
     if (input.repoUrl?.trim()) parseOwnerRepo(input.repoUrl); // 提前校验（本地导入可无仓库）
     await this.assertNameFree(input.nodeId, "app", input.name);
-    const { envText, overrideCompose, domains, dependsOn, services, ...base } = input;
+    const { envText, overrideCompose, domains, dependsOn, services, upServices, ...base } = input;
     const target = await this.repo.createTarget({
       kind: "app",
       ...base,
       ...(dependsOn?.length ? { dependsOn } : {}),
+      ...(upServices?.length ? { upServices } : {}),
       // 只存 name/port：env 是秘密（envJson/overrideCompose 加密通道），cpu/mem 已在 override
       ...(services ? { servicesJson: { services: services.map((s) => ({ name: s.name, port: s.port })) } } : {}),
     });
@@ -894,7 +896,10 @@ export class DeployService {
     await log("远端 docker compose up -d …");
     // 注意：-f 一旦指定就只认列出的文件，base 必须一起带上
     const overrideArg = target.overrideCompose ? " -f docker-compose.yml -f docker-compose.dockyard.yml" : "";
-    const up = await client.exec(`cd ${remoteDir} && docker compose -p ${project}${overrideArg} up -d`);
+    // 共享资源复用时只 up 业务服务子集（compose 仍会拉起 depends_on 依赖——复用场景的 compose 不应依赖被跳过的中间件）
+    const upArg = target.upServices?.length ? ` ${target.upServices.join(" ")}` : "";
+    if (upArg) await log(`只部署业务服务：${target.upServices!.join("、")}（中间件复用服务器共享资源）`);
+    const up = await client.exec(`cd ${remoteDir} && docker compose -p ${project}${overrideArg} up -d${upArg}`);
     await log(up.stdout + up.stderr);
     if (up.code !== 0) throw new Error(`远端 compose up 失败（exit ${up.code}）`);
 
@@ -975,7 +980,10 @@ export class DeployService {
     await sftp.close();
     await log("远端 docker compose up -d …");
     const overrideArg = target.overrideCompose ? ` -f "${composePath}" -f docker-compose.dockyard.yml` : ` -f "${composePath}"`;
-    const up = await client.exec(`cd "${srcDir}" && docker compose -p ${projectName}${overrideArg} up -d`);
+    // 共享资源复用时只 up 业务服务子集（同本地构建路径的语义）
+    const upArg = target.upServices?.length ? ` ${target.upServices.join(" ")}` : "";
+    if (upArg) await log(`只部署业务服务：${target.upServices!.join("、")}（中间件复用服务器共享资源）`);
+    const up = await client.exec(`cd "${srcDir}" && docker compose -p ${projectName}${overrideArg} up -d${upArg}`);
     await log(up.stdout + up.stderr);
     if (up.code !== 0) throw new Error(`远端 compose up 失败（exit ${up.code}）`);
 

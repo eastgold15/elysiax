@@ -200,8 +200,10 @@ export const AppDetectStep: Component<{
   detect: DetectResult;
   envText: string;
   dbRefs: DbRef[];
+  /** 部署前置检查匹配到的服务器共享资源（中间件复用询问） */
+  sharedMatches?: { service: string; name: string; dbType: string; envKey: string; url: string; displayUrl: string }[];
   error?: string;
-}> = ({ carry, detect, envText, dbRefs, error }) => (
+}> = ({ carry, detect, envText, dbRefs, sharedMatches, error }) => (
   <Drawer title={carry.name} sub={carry.repoUrl ? `${carry.repoUrl}@${carry.branch}` : "本地文件夹导入"}>
     <form class="flex flex-col gap-5" hx-post={routes.deploy.targetsApp()} hx-target="#modal-root" hx-swap="innerHTML">
       <input type="hidden" name="nodeId" value={String(carry.nodeId)} />
@@ -228,6 +230,30 @@ export const AppDetectStep: Component<{
       {detect.services.length > 0 ? (
         <Section title="服务" hint={`${detect.services.length} 个 · 端口/域名/资源`}>
           {detect.services.map((svc) => <ServiceCard svc={svc} />)}
+        </Section>
+      ) : null}
+
+      {(sharedMatches?.length ?? 0) > 0 ? (
+        <Section title="复用服务器资源？" hint="前置检查：服务器已有匹配的共享中间件">
+          <div class="flex flex-col gap-1.5">
+            {sharedMatches!.map((m) => (
+              <label class="flex cursor-pointer items-center gap-2 rounded border border-tide-400/30 bg-tide-400/5 px-3 py-2 text-xs text-neutral-300 transition-colors has-checked:border-tide-400/70">
+                <input
+                  type="checkbox"
+                  name={`reuse_${m.service}`}
+                  checked
+                  class="accent-tide-400"
+                  data-line={`${m.envKey}=${m.url}`}
+                  onchange="const ta=this.closest('form').querySelector('[name=envText]');if(!ta)return;const ls=ta.value.split('\n').filter(l=>l.trim()&&l!==this.dataset.line);if(this.checked){ls.push(this.dataset.line);ta.scrollTop=ta.scrollHeight}ta.value=ls.join('\n')"
+                />
+                <span class="flex min-w-0 flex-col">
+                  <span>服务 <span class="mono text-neutral-200">{m.service}</span> 复用共享资源「{m.name}」（{m.dbType}）→ <span class="mono text-tide-400">{m.envKey}</span></span>
+                  <span class="mono truncate text-[10px] text-neutral-600">{m.displayUrl}</span>
+                </span>
+              </label>
+            ))}
+            <div class="text-[11px] text-neutral-600">勾选 = 跳过该中间件部署，自动注入共享连接串；取消 = 随项目完整部署。</div>
+          </div>
         </Section>
       ) : null}
 

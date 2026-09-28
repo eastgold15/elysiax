@@ -112,6 +112,8 @@ export const deployTargets = sqliteTable("deploy_targets", {
   dependsOn: text({ mode: "json" }).$type<number[]>(),
   // compose 服务清单（创建时从 DetectedService 落库，存量惰性补全；无秘密值，明文 JSON）
   servicesJson: text({ mode: "json" }).$type<TargetServicesDoc>(),
+  // 实际要 up 的服务子集（共享资源复用时过滤掉中间件；null = compose 全量）
+  upServices: text({ mode: "json" }).$type<string[]>(),
   // 画布布局：本卡在服务器卡内的位置（null → 岛端自动错位摆放）
   x: integer(),
   y: integer(),

@@ -24,9 +24,9 @@ async function listModel(ctx: Ctx): Promise<ProjectListModel> {
 }
 
 export const projectsController = defineController({ prefix: "/projects" })
-  .get("/ui", async ({ di }) => (
-    <ProjectList {...await listModel({ project: di.get("projectService"), local: di.get("localService") })} />
-  ))
+  .ui("/ui", ProjectList, ({ di }) =>
+    listModel({ project: di.get("projectService"), local: di.get("localService") }),
+  )
   // 扫描目录配置弹窗
   .get("/ui/config", async () => <ConfigModal scanDirs={(await loadConfig()).scanDirs} />)
   .post("/config", { body: t.Object({ scanDirs: t.String() }) }, async ({ di, body }) => {

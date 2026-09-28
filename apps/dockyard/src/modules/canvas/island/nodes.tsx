@@ -1,4 +1,5 @@
 /** @jsxImportSource react */
+import { routes } from "../../../../.elysiax";
 /**
  * 嵌套卡片（React Flow subflow）：服务器卡 → app 卡（compose 项目）→ 服务卡；db 卡直属服务器卡。
  * 父子关系只表达归属与布局，边连在叶子上：db 卡 source handle，服务卡/app 卡 target handle。
@@ -136,11 +137,11 @@ export const AppNodeView = memo(({ data, selected }: NodeProps<AppFlowNode>) => 
           {running ? "部署中…" : t.updateAvailable ? "更新部署" : "重新部署"}
         </button>
         <button className={`${btn} text-neutral-500 hover:text-neutral-200`}
-          onClick={() => openModal(`/api/deploy/ui/targets/${t.id}/env`)}>变量</button>
+          onClick={() => openModal(routes.deploy.uiTargetsByIdEnv(t.id))}>变量</button>
         <button className={`${btn} text-neutral-500 hover:text-neutral-200`}
-          onClick={() => openModal(`/api/deploy/ui/targets/${t.id}/domains`)}>域名</button>
+          onClick={() => openModal(routes.deploy.uiTargetsByIdDomains(t.id))}>域名</button>
         <button className={`${btn} text-neutral-500 hover:text-neutral-200`}
-          onClick={() => openModal(`/api/deploy/ui/targets/${t.id}/log`)}>日志</button>
+          onClick={() => openModal(routes.deploy.uiTargetsByIdLog(t.id))}>日志</button>
         <button className={`${btn} text-neutral-600 hover:text-signal-500`}
           onClick={() => removeTarget(t)}>✕</button>
       </div>
@@ -210,7 +211,7 @@ export const DbNodeView = memo(({ data, selected }: NodeProps<DbFlowNode>) => {
             onClick={() => navigator.clipboard.writeText(t.url!)}>连接串</button>
         ) : null}
         <button className={`${btn} text-neutral-500 hover:text-neutral-200`}
-          onClick={() => openModal(`/api/deploy/ui/targets/${t.id}/log`)}>日志</button>
+          onClick={() => openModal(routes.deploy.uiTargetsByIdLog(t.id))}>日志</button>
         <button className={`${btn} text-neutral-600 hover:text-signal-500`}
           onClick={() => removeTarget(t)}>✕</button>
       </div>

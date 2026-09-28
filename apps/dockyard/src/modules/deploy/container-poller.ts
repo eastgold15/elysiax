@@ -88,7 +88,7 @@ export function startContainerPoller(intervalMs = INTERVAL_MS) {
           const key = `${t.targetId}:${s.name}`;
           if (snapshot.get(key) === state) continue;
           snapshot.set(key, state);
-          events.emit(`project:${t.projectId}`, { type: "state", targetId: t.targetId, service: s.name, state });
+          events.publish(`project:${t.projectId}`, { type: "state", targetId: t.targetId, service: s.name, state });
         }
       }
     }

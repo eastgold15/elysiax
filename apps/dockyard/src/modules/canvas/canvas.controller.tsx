@@ -1,7 +1,7 @@
-import { t, sse } from "elysia";
+import { t } from "elysia";
 import { defineController } from "../../../.elysiax";
 import { decryptSecret } from "../../shared/crypto";
-import { events, type CanvasEvent } from "../../shared/events";
+import { events } from "../../shared/events";
 import { containerStatesOf } from "../deploy/container-poller";
 import type { DeployTarget } from "../../shared/schema";
 import CanvasShell from "./canvas.ui";
@@ -138,33 +138,9 @@ export const canvasController = defineController({ prefix: "/canvas" })
     return canvasData(ctxOf(di), params.projectId);
   })
   // 实时状态 SSE：部署 status/running（deploy.service 推）+ 容器 state（container-poller 推）。
-  // 推送式队列 + 25s 心跳；首帧重发该 project 的容器状态快照（订阅即齐，不等下轮 diff）
-  .get("/ui/:projectId/events", { params: t.Object({ projectId: t.Number() }) }, async function* ({ params }) {
-    const ch = `project:${params.projectId}`;
-    const queue: (CanvasEvent | "ping")[] = containerStatesOf(params.projectId);
-    let wake: (() => void) | null = null;
-    const push = (d: CanvasEvent | "ping") => {
-      queue.push(d);
-      wake?.();
-    };
-    const unsub = events.subscribe(ch, push);
-    const hb = setInterval(() => push("ping"), 25_000);
-    try {
-      while (true) {
-        while (queue.length) {
-          const item = queue.shift()!;
-          yield item === "ping"
-            ? sse({ event: "ping", data: "{}" })
-            : sse({ event: "message", data: JSON.stringify(item) });
-        }
-        await new Promise<void>((resolve) => { wake = resolve; });
-        wake = null;
-      }
-    } finally {
-      clearInterval(hb);
-      unsub();
-    }
-  })
+  // 首帧发该 project 的容器状态快照（订阅即齐，不等下轮 diff）；流实现见 defineRealtime
+  .get("/ui/:projectId/events", { params: t.Object({ projectId: t.Number() }) }, ({ params }) =>
+    events.stream(`project:${params.projectId}`, () => containerStatesOf(params.projectId)))
   .post(
     "/projects/:projectId/nodes",
     {

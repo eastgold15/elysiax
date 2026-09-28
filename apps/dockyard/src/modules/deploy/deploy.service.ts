@@ -629,12 +629,12 @@ export class DeployService {
     };
     const setStatus = async (status: Deployment["status"], patch: Partial<Deployment> = {}) => {
       await this.repo.updateDeployment(dep.id, { status, ...patch });
-      if (ch) events.emit(ch, { type: "status", targetId, status });
+      if (ch) events.publish(ch, { type: "status", targetId, status });
     };
 
     if (ch) {
-      events.emit(ch, { type: "running", targetId, running: true });
-      events.emit(ch, { type: "status", targetId, status: "queued" });
+      events.publish(ch, { type: "running", targetId, running: true });
+      events.publish(ch, { type: "status", targetId, status: "queued" });
     }
     try {
       if (target.kind === "app") await this.deployApp(target, log, setStatus);
@@ -646,7 +646,7 @@ export class DeployService {
       await log(`❌ ${(error as Error).message}`);
       await setStatus("failed", { finishedAt: new Date() });
     } finally {
-      if (ch) events.emit(ch, { type: "running", targetId, running: false });
+      if (ch) events.publish(ch, { type: "running", targetId, running: false });
     }
   }
 

@@ -1,3 +1,4 @@
+import { routes } from "../../../.elysiax";
 import type { Component } from "@workspace/htmx";
 import type { Server } from "../../shared/schema";
 import { Badge, Button, Empty, Field, PageHeader } from "../ui-kit/ui-kit.ui";
@@ -15,11 +16,11 @@ export const ServerRow: Component<{ server: Server; message?: string }> = ({ ser
       <span class="mono text-xs text-neutral-500">{server.user}@{server.host}:{server.port}</span>
       <span class="mono text-xs text-neutral-600">{server.authType}</span>
       <span class="ml-auto">{dockerBadge(server)}</span>
-      <Button label="检测" variant="ghost" small hxPost={`/api/servers/${server.id}/check`} hxTarget={`#server-${server.id}`} hxSwap="outerHTML" />
+      <Button label="检测" variant="ghost" small hxPost={routes.servers.ById(server.id)} hxTarget={`#server-${server.id}`} hxSwap="outerHTML" />
       {server.dockerStatus === "missing" ? (
-        <Button label="安装 docker" small hxPost={`/api/servers/${server.id}/install-docker`} hxTarget={`#server-${server.id}`} hxSwap="outerHTML" />
+        <Button label="安装 docker" small hxPost={routes.servers.ById(server.id)} hxTarget={`#server-${server.id}`} hxSwap="outerHTML" />
       ) : null}
-      <Button label="删除" variant="danger" small hxDelete={`/api/servers/${server.id}`} hxTarget="#main" hxSwap="innerHTML" hxConfirm={`删除服务器「${server.name}」？`} />
+      <Button label="删除" variant="danger" small hxDelete={routes.servers.ById(server.id)} hxTarget="#main" hxSwap="innerHTML" hxConfirm={`删除服务器「${server.name}」？`} />
     </div>
     {message ? (
       <pre class="mono mx-6 mb-3 max-h-40 overflow-auto rounded bg-harbor-950 p-2 text-xs whitespace-pre-wrap text-neutral-400">{message}</pre>
@@ -37,10 +38,10 @@ export const TrustPrompt: Component<{ server: Server; fingerprint: string; algor
       首次连接 <span class="mono">{server.host}</span>，请核对 {algorithm} 指纹：
     </div>
     <code class="mono mt-2 block rounded bg-harbor-950 p-2 text-xs text-brass-500">{fingerprint}</code>
-    <form class="mt-3 flex gap-2" hx-post={`/api/servers/${server.id}/trust`} hx-target={`#server-${server.id}`} hx-swap="outerHTML">
+    <form class="mt-3 flex gap-2" hx-post={routes.servers.ById(server.id)} hx-target={`#server-${server.id}`} hx-swap="outerHTML">
       <input type="hidden" name="fingerprint" value={fingerprint} />
       <Button label="信任并继续" type="submit" small />
-      <Button label="取消" variant="ghost" small hxGet={`/api/servers/${server.id}/card`} hxTarget={`#server-${server.id}`} hxSwap="outerHTML" />
+      <Button label="取消" variant="ghost" small hxGet={routes.servers.ByIdCard(server.id)} hxTarget={`#server-${server.id}`} hxSwap="outerHTML" />
     </form>
   </div>
 );
@@ -57,7 +58,7 @@ const ServerList: Component<{ servers: Server[] }> = ({ servers }) => (
     </PageHeader>
 
     <div id="add-server-form" class="hidden border-b border-harbor-800 bg-harbor-900 px-6 py-4">
-      <form class="grid max-w-3xl grid-cols-2 gap-3" hx-post="/api/servers" hx-target="#main" hx-swap="innerHTML">
+      <form class="grid max-w-3xl grid-cols-2 gap-3" hx-post={routes.servers.index()} hx-target="#main" hx-swap="innerHTML">
         <Field label="名称" name="name" placeholder="生产机" />
         <Field label="主机" name="host" placeholder="192.168.1.10" />
         <Field label="端口" name="port" type="number" value="22" />

@@ -1,4 +1,5 @@
 /** @jsxImportSource react */
+import { routes } from "../../../../.elysiax";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ReactFlow, ReactFlowProvider, Background, applyEdgeChanges, applyNodeChanges,
@@ -208,7 +209,7 @@ function Flow({ projectId }: { projectId: number }) {
 
   /** 结构拉取：只在挂载和 HX-Trigger: refresh（结构变更）时调用，不轮询 */
   const fetchBoard = useCallback(async () => {
-    const res = await fetch(`/api/canvas/ui/${projectId}/board`);
+    const res = await fetch(routes.canvas.uiByProjectId(projectId));
     if (!res.ok) return;
     const board = (await res.json()) as BoardModel;
     structureRef.current = board.cards;
@@ -245,7 +246,7 @@ function Flow({ projectId }: { projectId: number }) {
 
   // 实时：SSE——部署 status/running、容器 state，只进 live（不进 nodes）
   useEffect(() => {
-    const es = new EventSource(`/api/canvas/ui/${projectId}/events`);
+    const es = new EventSource(routes.canvas.uiByProjectId(projectId));
     es.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data) as Record<string, unknown>;
@@ -296,7 +297,7 @@ function Flow({ projectId }: { projectId: number }) {
     structureRef.current.flatMap((c) => c.targets).find((t) => t.id === id);
 
   const putEdges = async (appTargetId: number, entries: { service: string | null; db: number }[]) => {
-    await fetch(`/api/deploy/targets/${appTargetId}/deps`, {
+    await fetch(routes.deploy.targetsByIdDeps(appTargetId), {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ edges: entries }),
@@ -336,7 +337,7 @@ function Flow({ projectId }: { projectId: number }) {
 
   // 布局：本地已是权威，PATCH 只持久化，不 refetch
   const patchLayout = (targetId: number, body: Record<string, unknown>) =>
-    fetch(`/api/deploy/targets/${targetId}/layout`, {
+    fetch(routes.deploy.targetsByIdLayout(targetId), {
       method: "PATCH",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -353,7 +354,7 @@ function Flow({ projectId }: { projectId: number }) {
     const x = Math.round(node.position.x), y = Math.round(node.position.y);
     if (node.type === "server") {
       const nodeId = Number(node.id.replace("srv-", ""));
-      void fetch(`/api/canvas/nodes/${nodeId}`, {
+      void fetch(routes.canvas.nodesById(nodeId), {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ x, y }),
@@ -382,10 +383,10 @@ function Flow({ projectId }: { projectId: number }) {
     closeMenu();
     if (node.type === "service") {
       const { t, s } = node.data as { t: TargetModel; s: { name: string } };
-      openModal(`/api/deploy/ui/targets/${t.id}/service?svc=${encodeURIComponent(s.name)}`);
+      openModal(`${routes.deploy.uiTargetsByIdService(t.id)}?svc=${encodeURIComponent(s.name)}`);
     } else if (node.type === "db") {
       const { t } = node.data as { t: TargetModel };
-      openModal(`/api/deploy/ui/targets/${t.id}/service`);
+      openModal(routes.deploy.uiTargetsByIdService(t.id));
     }
   }, []);
 
@@ -428,16 +429,16 @@ function Flow({ projectId }: { projectId: number }) {
           style={{ left: menu.x, top: menu.y }}
           onClick={closeMenu}
         >
-          {menu.kind === "server" ? (
+          {menu.kind === "server" && menu.nodeId != null ? (
             <>
-              <MenuItem label="部署本仓库" onClick={() => openModal(`/api/deploy/ui/new-app/${menu.nodeId}`)} />
-              <MenuItem label="添加数据库" onClick={() => openModal(`/api/deploy/ui/new-db/${menu.nodeId}`)} />
+              <MenuItem label="部署本仓库" onClick={() => openModal(routes.deploy.uiNewAppByNodeId(menu.nodeId!))} />
+              <MenuItem label="添加数据库" onClick={() => openModal(routes.deploy.uiNewDbByNodeId(menu.nodeId!))} />
               <MenuItem
                 label="移除卡片"
                 danger
                 onClick={async () => {
                   if (!confirm("移除这张卡片？（服务器与部署目标不动）")) return;
-                  await fetch(`/api/canvas/nodes/${menu.nodeId}`, { method: "DELETE" });
+                  await fetch(routes.canvas.nodesById(menu.nodeId!), { method: "DELETE" });
                   // 岛自己的 fetch 不经 htmx，HX-Trigger 不会变成事件——手动重拉
                   await refetch();
                 }}
@@ -449,7 +450,7 @@ function Flow({ projectId }: { projectId: number }) {
                 key={s.id}
                 label={`＋ ${s.name}`}
                 onClick={async () => {
-                  await fetch(`/api/canvas/projects/${projectId}/nodes`, {
+                  await fetch(routes.canvas.projectsByProjectIdNodes(projectId), {
                     method: "POST",
                     headers: { "content-type": "application/json" },
                     body: JSON.stringify({ serverId: s.id, x: menu.flowX, y: menu.flowY }),

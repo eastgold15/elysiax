@@ -1,3 +1,4 @@
+import { routes } from "../../../../.elysiax";
 /**
  * 岛 → 服务端片段的桥：模态框（变量/域名/日志/新建目标）仍是 htmx 服务端渲染，
  * 岛里按钮只是调全局 htmx.ajax 把片段灌进 #modal-root。
@@ -14,20 +15,20 @@ export const openModal = (url: string) =>
 
 /** Railway 式体验：点部署即打开日志面板盯进度（modal 内 1s 轮询到终态） */
 export const deployTarget = async (targetId: number) => {
-  await htmx.ajax("POST", `/api/deploy/targets/${targetId}/deploy`, { swap: "none" });
-  await openModal(`/api/deploy/ui/targets/${targetId}/log`);
+  await htmx.ajax("POST", routes.deploy.targetsByIdDeploy(targetId), { swap: "none" });
+  await openModal(routes.deploy.uiTargetsByIdLog(targetId));
 };
 
 /** NodeResizer 拉伸结束 → 持久化手动尺寸（refetch 后作自动收敛的下限） */
 export const persistServerSize = (nodeId: number, w: number, h: number) =>
-  fetch(`/api/canvas/nodes/${nodeId}`, {
+  fetch(routes.canvas.nodesById(nodeId), {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ w: Math.round(w), h: Math.round(h) }),
   });
 
 export const persistTargetSize = (targetId: number, w: number, h: number) =>
-  fetch(`/api/deploy/targets/${targetId}/layout`, {
+  fetch(routes.deploy.targetsByIdLayout(targetId), {
     method: "PATCH",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ w: Math.round(w), h: Math.round(h) }),
@@ -38,7 +39,7 @@ export const removeTarget = async (t: { id: number; name: string; logical: boole
     ? `移除逻辑库「${t.name}」的记录？（远端数据库保留，不会 DROP）`
     : `移除部署目标「${t.name}」？（远端容器不动）`;
   if (!confirm(hint)) return;
-  const res = await fetch(`/api/deploy/targets/${t.id}`, { method: "DELETE" });
+  const res = await fetch(routes.deploy.targetsById(t.id), { method: "DELETE" });
   // 例如：实例下还有逻辑库，被阻止（409 + 错误文本）
   if (!res.ok) alert(await res.text());
   document.body.dispatchEvent(new Event("refresh"));

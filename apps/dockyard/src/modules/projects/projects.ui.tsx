@@ -1,3 +1,4 @@
+import { routes } from "../../../.elysiax";
 import type { Component } from "@workspace/htmx";
 import type { Project } from "../../shared/schema";
 import { configFile } from "../../shared/config";
@@ -27,7 +28,7 @@ const EditorPicker: Component<{ path: string; editors: string[]; defaultEditor: 
     <div class="flex items-center" {...{ onclick: "event.stopPropagation()" }}>
       <button
         class="rounded-l border border-harbor-700 px-2.5 py-1 text-xs text-neutral-300 transition-colors hover:bg-harbor-800 hover:text-brass-500"
-        hx-post="/api/projects/open"
+        hx-post={routes.projects.open()}
         hx-vals={`js:{path:${JSON.stringify(path)},tool:${JSON.stringify(current)}}`}
         hx-swap="none"
         {...{ "hx-on::response-error": "alert(event.detail.xhr.responseText)" }}
@@ -37,7 +38,7 @@ const EditorPicker: Component<{ path: string; editors: string[]; defaultEditor: 
       <select
         class="-ml-px rounded-r border border-harbor-700 bg-harbor-900 px-1 py-1 text-xs text-neutral-500 outline-none hover:text-neutral-300"
         name="tool"
-        hx-post="/api/projects/open"
+        hx-post={routes.projects.open()}
         hx-trigger="change"
         hx-vals={vals}
         hx-swap="none"
@@ -57,8 +58,8 @@ const EditorPicker: Component<{ path: string; editors: string[]; defaultEditor: 
 const ProjectList: Component<ProjectListModel> = ({ local, remote, editors, defaultEditor, lazygit }) => (
   <div class="flex h-full flex-col">
     <PageHeader title="项目" sub={`本地 ${local.length} · 远程 ${remote.length}`}>
-      <Button label="⚙ 扫描目录" variant="ghost" hxGet="/api/projects/ui/config" hxTarget="#modal-root" hxSwap="innerHTML" />
-      <Button label="＋ 从 GitHub 创建" hxGet="/api/projects/ui/new" hxTarget="#modal-root" hxSwap="innerHTML" />
+      <Button label="⚙ 扫描目录" variant="ghost" hxGet={routes.projects.uiConfig()} hxTarget="#modal-root" hxSwap="innerHTML" />
+      <Button label="＋ 从 GitHub 创建" hxGet={routes.projects.uiNew()} hxTarget="#modal-root" hxSwap="innerHTML" />
     </PageHeader>
 
     {local.length === 0 && remote.length === 0 ? (
@@ -68,7 +69,7 @@ const ProjectList: Component<ProjectListModel> = ({ local, remote, editors, defa
         {local.map((p) => (
           <div
             class="group flex h-12 cursor-pointer items-center gap-4 border-b border-harbor-800/60 px-6 hover:bg-harbor-900"
-            hx-get={`/api/canvas/ui/local?path=${encodeURIComponent(p.path)}`}
+            hx-get={routes.canvas.uiByProjectId(encodeURIComponent(p.path))}
             hx-target="#main"
             hx-swap="innerHTML"
           >
@@ -82,7 +83,7 @@ const ProjectList: Component<ProjectListModel> = ({ local, remote, editors, defa
               {lazygit ? (
                 <button
                   class="rounded border border-harbor-700 px-2.5 py-1 text-xs text-neutral-400 transition-colors hover:bg-harbor-800 hover:text-neutral-200"
-                  hx-post="/api/projects/open"
+                  hx-post={routes.projects.open()}
                   hx-vals={`js:{path:${JSON.stringify(p.path)},tool:"lazygit"}`}
                   hx-swap="none"
                   {...{
@@ -102,7 +103,7 @@ const ProjectList: Component<ProjectListModel> = ({ local, remote, editors, defa
                     label="删除"
                     variant="danger"
                     small
-                    hxDelete={`/api/projects/${p.registeredId}`}
+                    hxDelete={routes.projects.ById(p.registeredId)}
                     hxTarget="#main"
                     hxSwap="innerHTML"
                     hxConfirm={`删除项目「${p.name}」及其画布与部署配置？（不会删除本地文件）`}
@@ -119,7 +120,7 @@ const ProjectList: Component<ProjectListModel> = ({ local, remote, editors, defa
         {remote.map((p) => (
           <div
             class="group flex h-12 cursor-pointer items-center gap-4 border-b border-harbor-800/60 px-6 hover:bg-harbor-900"
-            hx-get={`/api/canvas/ui/${p.id}`}
+            hx-get={routes.canvas.uiByProjectId(p.id)}
             hx-target="#main"
             hx-swap="innerHTML"
           >
@@ -132,7 +133,7 @@ const ProjectList: Component<ProjectListModel> = ({ local, remote, editors, defa
                 label="删除"
                 variant="danger"
                 small
-                hxDelete={`/api/projects/${p.id}`}
+                hxDelete={routes.projects.ById(p.id)}
                 hxTarget="#main"
                 hxSwap="innerHTML"
                 hxConfirm={`删除项目「${p.name}」及其画布与部署配置？`}
@@ -158,7 +159,7 @@ export const ConfigModal: Component<{ scanDirs: string[] }> = ({ scanDirs }) => 
         </div>
         <button class="text-neutral-500 hover:text-neutral-200" onclick="this.closest('.fixed.inset-0').remove()">✕</button>
       </div>
-      <form class="flex flex-col gap-3 px-5 py-4" hx-post="/api/projects/config" hx-target="#main" hx-swap="innerHTML">
+      <form class="flex flex-col gap-3 px-5 py-4" hx-post={routes.projects.config()} hx-target="#main" hx-swap="innerHTML">
         <textarea
           class="h-28 rounded border border-harbor-700 bg-harbor-950 px-2.5 py-1.5 text-sm text-neutral-200 outline-none mono focus:border-brass-500"
           name="scanDirs"
@@ -192,7 +193,7 @@ export const NewProjectModal: Component<{ repos: RepoBrief[]; error?: string }> 
 
       <form
         class="flex min-h-0 flex-1 flex-col gap-3 px-5 py-4"
-        hx-post="/api/projects"
+        hx-post={routes.projects.index()}
         hx-target="#main"
         hx-swap="innerHTML"
         {...{ "hx-on::response-error": "alert(event.detail.xhr.responseText)" }}

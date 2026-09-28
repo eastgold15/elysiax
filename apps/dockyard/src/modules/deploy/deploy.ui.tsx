@@ -1,3 +1,4 @@
+import { routes } from "../../../.elysiax";
 import type { Component } from "@workspace/htmx";
 import type { Deployment, DeployTarget, Domain } from "../../shared/schema";
 import type { RepoBrief } from "../github/github.service";
@@ -73,7 +74,7 @@ const SubmitBtn: Component<{ label: string; busy: string }> = ({ label, busy }) 
 // Step 1：gh 仓库选择器 → 识别；Step 2：识别结果确认（服务/域名/变量/打包）→ 创建即部署
 export const NewAppDrawer: Component<{ nodeId: number; repos: RepoBrief[]; error?: string; prefillRepo?: string }> = ({ nodeId, repos, error, prefillRepo }) => (
   <Drawer title="部署 app" sub="从 GitHub 仓库部署到这台服务器">
-    <form class="flex flex-col gap-4" hx-post="/api/deploy/ui/detect" hx-target="#modal-root" hx-swap="innerHTML">
+    <form class="flex flex-col gap-4" hx-post={routes.deploy.uiDetect()} hx-target="#modal-root" hx-swap="innerHTML">
       <input type="hidden" name="nodeId" value={String(nodeId)} />
       {error ? <ErrorBanner>{error}</ErrorBanner> : null}
       <Section title="仓库" hint={`gh 账号下 ${repos.length} 个`}>
@@ -202,7 +203,7 @@ export const AppDetectStep: Component<{
   error?: string;
 }> = ({ carry, detect, envText, dbRefs, error }) => (
   <Drawer title={carry.name} sub={`${carry.repoUrl}@${carry.branch}`}>
-    <form class="flex flex-col gap-5" hx-post="/api/deploy/targets/app" hx-target="#modal-root" hx-swap="innerHTML">
+    <form class="flex flex-col gap-5" hx-post={routes.deploy.targetsApp()} hx-target="#modal-root" hx-swap="innerHTML">
       <input type="hidden" name="nodeId" value={String(carry.nodeId)} />
       <input type="hidden" name="name" value={carry.name} />
       <input type="hidden" name="repoUrl" value={carry.repoUrl} />
@@ -285,7 +286,7 @@ export const DomainsModal: Component<{ target: DeployTarget; domains: Domain[]; 
             {dnsChip(d)}{sslChip(d)}
             <button
               class="text-neutral-600 hover:text-signal-500"
-              hx-delete={`/api/deploy/domains/${d.id}`}
+              hx-delete={routes.deploy.domainsById(d.id)}
               hx-target="#modal-root"
               hx-swap="innerHTML"
               hx-confirm={`解绑 ${d.hostname}？`}
@@ -293,7 +294,7 @@ export const DomainsModal: Component<{ target: DeployTarget; domains: Domain[]; 
           </div>
         </div>
       ))}
-      <form class="flex items-end gap-2" hx-post={`/api/deploy/targets/${target.id}/domains`} hx-target="#modal-root" hx-swap="innerHTML">
+      <form class="flex items-end gap-2" hx-post={routes.deploy.targetsByIdDomains(target.id)} hx-target="#modal-root" hx-swap="innerHTML">
         <label class="flex flex-1 flex-col gap-0.5">
           <span class={labelCls}>域名</span>
           <input class={inputCls} type="text" name="hostname" placeholder="app.example.com" required />
@@ -317,7 +318,7 @@ export const EnvDrawer: Component<{
   error?: string;
 }> = ({ target, envText, dbRefs, error }) => (
   <Drawer title={`变量 — ${target.name}`} sub="保存后重新部署生效">
-    <form class="flex flex-col gap-5" hx-post={`/api/deploy/targets/${target.id}/env`} hx-target="#modal-root" hx-swap="innerHTML">
+    <form class="flex flex-col gap-5" hx-post={routes.deploy.targetsByIdEnv(target.id)} hx-target="#modal-root" hx-swap="innerHTML">
       {error ? <ErrorBanner>{error}</ErrorBanner> : null}
       {dbRefs.length > 0 ? (
         <Section title="依赖数据库" hint="画布连线 + 注入连接串">
@@ -358,7 +359,7 @@ export const InstanceOptions: Component<{ nodeId: number; instances: DeployTarge
 
 export const NewDbModal: Component<{ nodeId: number; instances: DeployTarget[]; error?: string }> = ({ nodeId, instances, error }) => (
   <Modal title="部署数据库（官方镜像）">
-    <form class="flex flex-col gap-3" hx-post="/api/deploy/targets/db" hx-target="#modal-root" hx-swap="innerHTML">
+    <form class="flex flex-col gap-3" hx-post={routes.deploy.targetsDb()} hx-target="#modal-root" hx-swap="innerHTML">
       <input type="hidden" name="nodeId" value={String(nodeId)} />
       <Field label="名称" name="name" placeholder="my-pg" required />
       <label class="flex flex-col gap-1 text-sm">
@@ -366,7 +367,7 @@ export const NewDbModal: Component<{ nodeId: number; instances: DeployTarget[]; 
         <select
           class="rounded-md border border-neutral-700 bg-neutral-900 px-3 py-1.5 text-neutral-200"
           name="dbType"
-          hx-get={`/api/deploy/ui/instances?nodeId=${nodeId}`}
+          hx-get={`${routes.deploy.uiInstances()}?nodeId=${nodeId}`}
           hx-target="#instance-options"
           hx-swap="outerHTML"
           hx-trigger="change"
@@ -396,7 +397,7 @@ export const DeployLog: Component<{ target: DeployTarget; dep?: Deployment }> = 
       <pre
         class="mono max-h-96 overflow-auto rounded bg-harbor-950 p-3 text-xs whitespace-pre-wrap text-neutral-300"
         {...(active
-          ? { "hx-get": `/api/deploy/ui/targets/${target.id}/log-body${dep ? `?dep=${dep.id}` : ""}`, "hx-trigger": "every 1s", "hx-swap": "innerHTML" }
+          ? { "hx-get": `${routes.deploy.uiTargetsByIdLogBody(target.id)}${dep ? `?dep=${dep.id}` : ""}`, "hx-trigger": "every 1s", "hx-swap": "innerHTML" }
           : {})}
       >
         {dep?.logText ?? "尚未部署"}
@@ -426,7 +427,7 @@ export const MetricsPanel: Component<{
 }> = ({ targetId, svc, stats }) => (
   <div
     id="svc-metrics"
-    hx-get={`/api/deploy/ui/targets/${targetId}/service/metrics${svc ? `?svc=${encodeURIComponent(svc)}` : ""}`}
+    hx-get={`${routes.deploy.uiTargetsByIdServiceMetrics(targetId)}${svc ? `?svc=${encodeURIComponent(svc)}` : ""}`}
     hx-trigger={`${stats === undefined ? "load, " : ""}every 4s`}
     hx-swap="innerHTML"
   >
@@ -483,7 +484,7 @@ export const ServiceDrawer: Component<{
     ...(isDbInstance ? [{ key: "backups" as const, label: "Backups" }] : []),
   ];
   const tabUrl = (k: ServiceTab) =>
-    `/api/deploy/ui/targets/${target.id}/service?tab=${k}${svc ? `&svc=${encodeURIComponent(svc)}` : ""}`;
+    `${routes.deploy.uiTargetsByIdService(target.id)}?tab=${k}${svc ? `&svc=${encodeURIComponent(svc)}` : ""}`;
   const svcField = svc ? <input type="hidden" name="svc" value={svc} /> : null;
   return (
     <Drawer wide title={svc ? `${target.name} / ${svc}` : target.name} sub={svc ? "服务" : target.kind === "db" ? "数据库" : "应用"}>
@@ -510,11 +511,11 @@ export const ServiceDrawer: Component<{
             <div class="flex gap-2">
               <button
                 class="rounded bg-brass-500 px-3 py-1.5 text-xs font-semibold text-harbor-950 hover:bg-brass-600"
-                {...{ onclick: `htmx.ajax('POST','/api/deploy/targets/${target.id}/deploy',{swap:'none'}).then(()=>htmx.ajax('GET','/api/deploy/ui/targets/${target.id}/log',{target:'#modal-root',swap:'innerHTML'}))` }}
+                {...{ onclick: `htmx.ajax('POST','${routes.deploy.targetsByIdDeploy(target.id)}',{swap:'none'}).then(()=>htmx.ajax('GET','${routes.deploy.uiTargetsByIdLog(target.id)}',{target:'#modal-root',swap:'innerHTML'}))` }}
               >
                 重新部署
               </button>
-              <form hx-post={`/api/deploy/targets/${target.id}/service/restart`} hx-target="#modal-root" hx-swap="innerHTML">
+              <form hx-post={routes.deploy.targetsByIdServiceRestart(target.id)} hx-target="#modal-root" hx-swap="innerHTML">
                 {svcField}
                 <button class="rounded border border-harbor-700 px-3 py-1.5 text-xs text-neutral-300 hover:bg-harbor-800" type="submit">
                   重启{svc ? "服务" : "容器"}
@@ -531,7 +532,7 @@ export const ServiceDrawer: Component<{
                   {d.finishedAt ? <span class="mono text-neutral-600">{Math.round((new Date(d.finishedAt).getTime() - new Date(d.startedAt).getTime()) / 1000)}s</span> : null}
                   <button
                     class="ml-auto text-tide-400 hover:text-tide-300"
-                    hx-get={`/api/deploy/ui/targets/${target.id}/log?dep=${d.id}`}
+                    hx-get={`${routes.deploy.uiTargetsByIdLog(target.id)}?dep=${d.id}`}
                     hx-target="#modal-root"
                     hx-swap="innerHTML"
                   >
@@ -546,7 +547,7 @@ export const ServiceDrawer: Component<{
         {tab === "logs" ? (
           <pre
             class="mono max-h-[70vh] overflow-auto rounded bg-harbor-950 p-3 text-xs leading-relaxed whitespace-pre-wrap text-neutral-300"
-            hx-get={`/api/deploy/ui/targets/${target.id}/service/logs${svc ? `?svc=${encodeURIComponent(svc)}` : ""}`}
+            hx-get={`${routes.deploy.uiTargetsByIdServiceLogs(target.id)}${svc ? `?svc=${encodeURIComponent(svc)}` : ""}`}
             hx-trigger="load, every 2s"
             hx-swap="innerHTML"
           >
@@ -555,7 +556,7 @@ export const ServiceDrawer: Component<{
         ) : null}
 
         {tab === "variables" && svc ? (
-          <form class="flex flex-col gap-3" hx-post={`/api/deploy/targets/${target.id}/service/env`} hx-target="#modal-root" hx-swap="innerHTML">
+          <form class="flex flex-col gap-3" hx-post={routes.deploy.targetsByIdServiceEnv(target.id)} hx-target="#modal-root" hx-swap="innerHTML">
             {svcField}
             <p class="text-xs text-neutral-500">
               随 override compose 注入该服务容器（enc1: 加密保存在控制面本地，不入 git），重新部署后生效。
@@ -576,7 +577,7 @@ export const ServiceDrawer: Component<{
           <>
             {svc ? (
               <Section title="资源限制" hint="override compose · 重新部署生效">
-                <form class="flex items-end gap-2" hx-post={`/api/deploy/targets/${target.id}/service/resources`} hx-target="#modal-root" hx-swap="innerHTML">
+                <form class="flex items-end gap-2" hx-post={routes.deploy.targetsByIdServiceResources(target.id)} hx-target="#modal-root" hx-swap="innerHTML">
                   {svcField}
                   <label class="flex flex-1 flex-col gap-0.5">
                     <span class={labelCls}>CPU 上限（核）</span>
@@ -607,7 +608,7 @@ export const ServiceDrawer: Component<{
                     {dnsChip(d)}{sslChip(d)}
                     <button
                       class="ml-auto text-neutral-600 hover:text-signal-500"
-                      hx-delete={`/api/deploy/targets/${target.id}/service/domains/${d.id}${svc ? `?svc=${encodeURIComponent(svc)}` : ""}`}
+                      hx-delete={`${routes.deploy.targetsByIdServiceDomainsByDomainId(target.id, d.id)}${svc ? `?svc=${encodeURIComponent(svc)}` : ""}`}
                       hx-target="#modal-root"
                       hx-swap="innerHTML"
                       hx-confirm={`解绑 ${d.hostname}？`}
@@ -616,7 +617,7 @@ export const ServiceDrawer: Component<{
                     </button>
                   </div>
                 ))}
-                <form class="flex items-end gap-2" hx-post={`/api/deploy/targets/${target.id}/service/domains`} hx-target="#modal-root" hx-swap="innerHTML">
+                <form class="flex items-end gap-2" hx-post={routes.deploy.targetsByIdServiceDomains(target.id)} hx-target="#modal-root" hx-swap="innerHTML">
                   {svcField}
                   <label class="flex flex-1 flex-col gap-0.5">
                     <span class={labelCls}>域名</span>
@@ -635,7 +636,7 @@ export const ServiceDrawer: Component<{
 
         {tab === "backups" && isDbInstance ? (
           <>
-            <form hx-post={`/api/deploy/targets/${target.id}/backup`} hx-target="#modal-root" hx-swap="innerHTML">
+            <form hx-post={routes.deploy.targetsByIdBackup(target.id)} hx-target="#modal-root" hx-swap="innerHTML">
               <SubmitBtn label="立即备份" busy="备份中…（远端 dump → 本地落盘）" />
             </form>
             <div class="flex flex-col">
@@ -645,7 +646,7 @@ export const ServiceDrawer: Component<{
                   <span class="mono text-neutral-300">{b.file}</span>
                   <span class="text-neutral-600">{fmtBytes(b.size)}</span>
                   <span class="text-neutral-500">{fmtAgo(b.at)}</span>
-                  <a class="ml-auto text-tide-400 hover:text-tide-300" href={`/api/deploy/backups/${target.id}/${b.file}`} download={b.file}>
+                  <a class="ml-auto text-tide-400 hover:text-tide-300" href={routes.deploy.backupsByIdByFile(target.id, b.file)} download={b.file}>
                     下载
                   </a>
                 </div>

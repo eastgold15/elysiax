@@ -33,8 +33,31 @@ export const projects = sqliteTable("projects", {
   repoUrl: text(),
   // 本地仓库路径（扫描发现/点击落库）；与 repoUrl 可并存——本地目录的 origin 就是那个仓库
   localPath: text(),
+  // Openship 导入来源：github = 远端拉代码+服务器构建；local = 本地构建+镜像推送（null = 旧数据，按 localPath/repoUrl 推断）
+  sourceType: text({ enum: ["github", "local"] }),
+  // 默认分支与项目根目录（Source 配置；根目录是 monorepo 子目录场景）
+  branch: text(),
+  rootDir: text(),
   createdAt: integer({ mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
 });
+
+// ── 服务器共享资源清单：绑定到单台服务器的中间件（视角 B 预部署产物）──
+// 任意项目部署到该服务器时可引用其连接串（envKey 下拉），不再重复部署中间件
+export const serverResources = sqliteTable("server_resources", {
+  id: integer().primaryKey({ autoIncrement: true }),
+  serverId: integer().notNull().references(() => servers.id, { onDelete: "cascade" }),
+  name: text().notNull(),
+  dbType: text({ enum: ["postgres", "mysql", "redis", "mongo"] }).notNull(),
+  // 远端容器名（dockyard-res-<id>-<name>，对账/防抢用）
+  containerName: text(),
+  // 注入给业务 app 的环境变量键名（redis → REDIS_URL，其余 DATABASE_URL；可改）
+  envKey: text().notNull(),
+  // 连接凭据 {url, password}（enc1: 加密；永不进仓库）
+  credsJson: text(),
+  createdAt: integer({ mode: "timestamp" }).notNull().$defaultFn(() => new Date()),
+}, (t) => [
+  unique().on(t.serverId, t.name),
+]);
 
 // ── 画布节点：项目画布上的一张服务器卡片 ──
 export const canvasNodes = sqliteTable("canvas_nodes", {
@@ -47,10 +70,25 @@ export const canvasNodes = sqliteTable("canvas_nodes", {
   h: integer().notNull().default(240),
 });
 
+// ── 服务分组：画布上的命名分组容器，归属某张服务器卡 ──
+export const serviceGroups = sqliteTable("service_groups", {
+  id: integer().primaryKey({ autoIncrement: true }),
+  nodeId: integer().notNull().references(() => canvasNodes.id, { onDelete: "cascade" }),
+  name: text().notNull(),
+  x: integer().notNull().default(24),
+  y: integer().notNull().default(24),
+  w: integer().notNull().default(360),
+  h: integer().notNull().default(280),
+}, (t) => [
+  unique().on(t.nodeId, t.name),
+]);
+
 // ── 部署目标：一张卡片上部署的 app 或数据库 ──
 export const deployTargets = sqliteTable("deploy_targets", {
   id: integer().primaryKey({ autoIncrement: true }),
   nodeId: integer().notNull().references(() => canvasNodes.id, { onDelete: "cascade" }),
+  // 所属服务分组（null = 不分组，直接挂在服务器卡上）
+  groupId: integer().references((): AnySQLiteColumn => serviceGroups.id),
   kind: text({ enum: ["app", "db"] }).notNull(),
   name: text().notNull(),
   // db 两层模型：null = 独立实例（或 app）；非 null = 逻辑库，指向宿主实例 target
@@ -145,6 +183,8 @@ export interface DepEdge {
 
 export type Server = typeof servers.$inferSelect;
 export type Project = typeof projects.$inferSelect;
+export type ServerResource = typeof serverResources.$inferSelect;
+export type ServiceGroup = typeof serviceGroups.$inferSelect;
 export type CanvasNode = typeof canvasNodes.$inferSelect;
 export type DeployTarget = typeof deployTargets.$inferSelect;
 export type Deployment = typeof deployments.$inferSelect;

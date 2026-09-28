@@ -36,25 +36,37 @@ export function containerNameOf(targetId: number, name: string): string {
   return `dockyard-${targetId}-${name}`;
 }
 
+/** 共享资源容器命名规范：dockyard-res-<resourceId>-<name>（与 deploy target 的 dockyard-<id>- 前缀区分） */
+export function sharedContainerNameOf(resourceId: number, name: string): string {
+  return `dockyard-res-${resourceId}-${name}`;
+}
+
 /** 官方镜像模板：数据卷 + 自动生成的凭据（env 走 .env，compose 无 secret）
- *  所有权标签：dockyard.managed / target-id —— 部署前对账靠它区分"我们的"和"别人的"容器 */
+ *  所有权标签：dockyard.managed / target-id（或 shared-resource）—— 部署前对账靠它区分"我们的"和"别人的"容器 */
 export function dbCompose(
   dbType: DbType,
   name: string,
-  ownership?: { targetId: number; project: string },
+  ownership?: { targetId: number; project: string } | { resourceId: number },
 ): { compose: string; env: string; port: number } {
   const image = IMAGES[dbType];
   const port = PORTS[dbType];
   const password = generatePassword();
   const volume = `${name}-data`;
   const labels = ownership
-    ? `    labels:
+    ? "resourceId" in ownership
+      ? `    labels:
+      dockyard.managed: "true"
+      dockyard.shared-resource: "${ownership.resourceId}"
+`
+      : `    labels:
       dockyard.managed: "true"
       dockyard.target-id: "${ownership.targetId}"
       dockyard.project: "${ownership.project}"
 `
     : "";
-  const containerName = ownership ? `    container_name: ${containerNameOf(ownership.targetId, name)}\n` : "";
+  const containerName = ownership
+    ? `    container_name: ${"resourceId" in ownership ? sharedContainerNameOf(ownership.resourceId, name) : containerNameOf(ownership.targetId, name)}\n`
+    : "";
 
   const envByType: Record<DbType, { env: Record<string, string>; lines: string[] }> = {
     postgres: {

@@ -16,6 +16,7 @@ export const ServerRow: Component<{ server: Server; message?: string }> = ({ ser
       <span class="mono text-xs text-neutral-500">{server.user}@{server.host}:{server.port}</span>
       <span class="mono text-xs text-neutral-600">{server.authType}</span>
       <span class="ml-auto">{dockerBadge(server)}</span>
+      <Button label="共享资源" variant="ghost" small hxGet={routes.resources.uiByServerId(server.id)} hxTarget="#modal-root" hxSwap="innerHTML" />
       <Button label="检测" variant="ghost" small hxPost={routes.servers.ById(server.id)} hxTarget={`#server-${server.id}`} hxSwap="outerHTML" />
       {server.dockerStatus === "missing" ? (
         <Button label="安装 docker" small hxPost={routes.servers.ById(server.id)} hxTarget={`#server-${server.id}`} hxSwap="outerHTML" />

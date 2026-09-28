@@ -1,0 +1,62 @@
+---
+title: 画布岛与 ResizeObserver loop
+description: 画布拉伸反复报 ResizeObserver loop 的原因总结、规避方法，以及「UI 孤岛 / 结构数据 / 实时数据」三分架构的影响与解法。
+---
+
+# 画布岛与 ResizeObserver loop
+
+## 问题：一拉伸画布就报 `ResizeObserver loop completed with undelivered notifications`
+
+### 原因
+
+这不是功能错误，是浏览器的**丢帧保护警告**：ResizeObserver 的回调里如果又改了被观察元素的尺寸，浏览器会在同一帧再排一次通知；检测到"回调 → 尺寸变化 → 再回调"同帧互踢时，丢弃多余通知并报这条 error。功能无损，但控制台刷屏。
+
+画布场景的具体触发链（@xyflow/react）：
+
+1. **小数像素 round-trip**：NodeResizer 拖出的尺寸是小数（如 `312.7`）。我们把它写回 node state → RF 设为元素 style → RO 测回读数是取整后的 `313` → 和 state 不等又产生一条 dimension change → 写回 state → style 变化 → RO 再触发……同帧互踢。
+2. **尺寸双向改写**：父卡随子卡撑大（grow-only）与 NodeResizer 精确尺寸互相覆盖——用户刚把卡拉小，grow 立刻 `Math.max` 回去，两个写源在同一节点上打架，同样构成同帧回路。
+3. `expandParent` 与显式 `width/height` 并用也会构成同样的回路（我们已弃用 expandParent）。
+
+### 规避方法（dockyard 现行做法，按有效性排序）
+
+1. **尺寸取整**：所有 dimension change 进 state 前 `Math.round`——style 与 RO 测量值收敛，round-trip 不再抖动（`board.tsx` onNodesChange）。
+2. **单一写源**：正在用 NodeResizer 拖的节点（dimension change 带 `resizing` 标志）跳过 clamp/grow，拖拽期间它的尺寸只有 NodeResizer 一个写源。
+3. **grow-only 只长不缩**：父卡尺寸用 `Math.max` 累计，不跟子卡回缩，消除"缩小→撑回"振荡；精确收敛只在结构 refetch 时做。
+4. **rAF 合帧**：dimensions 类 change 攒批，每帧最多一次 setNodes，把每 mousemove 一条的洪流降到每帧一次渲染。
+5. **全局过滤兜底**：这个报错本身是良性警告，在 `index.html` 用 `window error` 监听精确过滤 `ResizeObserver loop` 这一条消息，防止偶发漏网刷屏。
+
+> 教训：**任何"把 RO 测量值写回 state 再渲染回同一元素"的链路，都要保证值收敛**（取整 / epsilon 比较 / 单写源），否则就是一颗定时 loop。
+
+## 架构：UI 孤岛 / 结构数据 / 实时数据三分
+
+画布是框架里「htmx 壳 + React 岛」混合交互的典型，数据被拆成三条通道：
+
+| 通道 | 内容 | 传输 | 更新时机 |
+| --- | --- | --- | --- |
+| UI 壳（htmx） | 页面骨架、项目切换器、模态框 | 服务端 TSX 片段，swap 进 `#main` / `#modal-root` | 导航、表单提交 |
+| 结构数据（岛） | 卡片/连线/位置（nodes/edges） | `GET /ui/:id/board` JSON | 挂载拉一次 + `HX-Trigger: refresh` 事件触发 refetch |
+| 实时数据（岛） | 部署状态、容器 state | SSE `/ui/:id/events`（defineRealtime） | 服务端 publish 即推，25s 心跳 |
+
+### 为什么分开
+
+- **htmx 和 React 永不操作同一个 DOM**：htmx 只渲染壳容器 `<div id="canvas-island">`，岛内部一切归 React。否则 htmx swap 会卸载 React 挂载点，或 React 重渲染覆盖 htmx 塞进来的内容，双向踩。
+- **结构不进 SSE**：卡片位置/连线是低频高价值数据，走 REST + 按需 refetch（带交互门闩：拖拽中 refresh 排队，结束补拉），不会因为一条状态推送把用户正在拖的节点重渲染掉。
+- **实时不进 node.data**：状态灯这类高频数据进 LiveContext（React context），不触发 React Flow 的节点 diff——否则每条 SSE 都全量重算 nodes/edges，拖拽帧率直接崩。
+
+### 分开带来的问题与解法
+
+1. **三条通道的一致性**：片段请求（建/删卡、建/删边）完成后服务端发 `HX-Trigger: refresh`，岛监听 `document.body` 的 `refresh` 事件 refetch 结构——htmx 事件总线兼任岛外→岛内的信号通道，不需要岛暴露全局 API。
+2. **壳随片段进出，岛要跟着生死**：岛在 `htmx:afterSwap` 时检测容器存在性挂载/卸载（`island/index.tsx`），切页面不会泄漏 EventSource 和 RO。
+3. **SSE 断开与补数据**：defineRealtime 的 `snapshot` 在订阅建立时先推一帧全量快照，重连即齐，不靠客户端补差量。
+4. **壳里的表单要调岛内刷新**：模态框是服务端片段（htmx），操作完返回带 `HX-Trigger` 的响应即可，壳和岛解耦。
+5. **岛引类型化路由的坑**：岛是浏览器代码，必须 `import { routes } from ".elysiax/routes.gen"` **直接引文件**；引 `.elysiax` 桶文件会把整个服务端图谱（含 bun:sqlite）打进浏览器 bundle。
+6. **尺寸回路**（上文）：三分之后节点尺寸有两个写源（NodeResizer 实时、结构 refetch 收敛），必须用「单写源 + 取整 + grow-only」保证收敛。
+
+## 排查 checklist
+
+控制台再出现 ResizeObserver loop 时：
+
+1. 找哪个元素在被"测量→写回→再渲染"——大概率是新加的节点组件把 `node.measured` 或 RO 值写回了 state
+2. 检查新写源是否和既有写源（fitParents / NodeResizer）在同一节点上打架
+3. 值是否收敛：小数取整了吗？grow 会不会把用户的缩小顶回去？
+4. 确认只是良性警告（功能正常）还是真振荡（尺寸数值持续跳动）——后者按 1-3 修，前者靠全局过滤兜底

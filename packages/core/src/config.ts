@@ -11,6 +11,8 @@ export interface ElysiaxConfig {
   };
   /** 模块目录（相对项目根），默认 "src/modules" */
   modules?: string;
+  /** API 挂载前缀（start() 与 routes.gen 用），默认 "/api" */
+  apiPrefix?: string;
   build?: {
     /** server 入口，默认 "src/index.ts" */
     entry?: string;

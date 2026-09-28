@@ -278,6 +278,82 @@ cli.addCommand({
 });
 
 // ─────────────────────────────────────────────
+// elysiax doctor — 模块约定体检（路由冲突 / 岛边界 / DI 图）
+// ─────────────────────────────────────────────
+cli.addCommand({
+  name: "doctor",
+  description: "体检：DI 图装配、跨模块路由冲突、React 岛 htmx 边界",
+  execute: async ({ logger }) => {
+    const root = process.cwd();
+    const { codegen, loadConfig, extractRoutes } = await import("@elysiax/core");
+    const config = await loadConfig(root);
+    const modulesDir = config.modules ?? "src/modules";
+    let errors = 0;
+
+    // 1) DI 图 + codegen（依赖缺失/环会在这里抛出来）
+    try {
+      await codegen(root, config);
+      logger.info("✅ DI 图装配通过（.elysiax/ 已生成）");
+    } catch (error) {
+      logger.error(`❌ DI 图装配失败: ${(error as Error).message}`);
+      errors++;
+    }
+
+    // 2) 跨模块路由冲突：同一路径被两个模块声明，运行时才炸太晚了
+    const pathOwner = new Map<string, string>();
+    const modDirs = existsSync(resolve(root, modulesDir))
+      ? readdirSync(resolve(root, modulesDir), { withFileTypes: true })
+      : [];
+    for (const entry of modDirs) {
+      if (!entry.isDirectory()) continue;
+      const dir = resolve(root, modulesDir, entry.name);
+      for (const f of readdirSync(dir)) {
+        const m = f.match(/^(.+)\.controller\.tsx?$/);
+        if (!m) continue;
+        const src = readFileSync(resolve(dir, f), "utf8");
+        const { paths } = extractRoutes(src, `/${entry.name}`);
+        for (const p of paths) {
+          // 参数段归一化后再比（/a/:id 与 /a/:name 是同一路径）
+          const norm = p.replaceAll(/:[^/]+/g, ":");
+          const owner = pathOwner.get(norm);
+          if (owner && owner !== entry.name) {
+            logger.error(`❌ 路由冲突: ${p}（${entry.name}）与 ${owner} 模块重复`);
+            errors++;
+          } else {
+            pathOwner.set(norm, entry.name);
+          }
+        }
+      }
+    }
+    if (errors === 0) logger.info(`✅ 路由无冲突（${pathOwner.size} 条）`);
+
+    // 3) React 岛边界：有 island/ 的模块，ui 片段不得把 htmx swap 目标指向岛容器
+    let islandIssues = 0;
+    for (const entry of modDirs) {
+      if (!entry.isDirectory()) continue;
+      const dir = resolve(root, modulesDir, entry.name);
+      if (!existsSync(resolve(dir, "island"))) continue;
+      for (const f of readdirSync(dir)) {
+        if (!/\.ui\.tsx$/.test(f)) continue;
+        const src = readFileSync(resolve(dir, f), "utf8");
+        if (new RegExp(`hx-target=["'{][^}"']*#${entry.name}-island`).test(src)) {
+          logger.error(
+            `❌ ${entry.name}/${f}: htmx swap 目标指向岛容器 #${entry.name}-island，` +
+              `会冲掉 React 挂载点（边界规则：htmx 只渲染容器，容器内部归 React）`,
+          );
+          islandIssues++;
+          errors++;
+        }
+      }
+    }
+    if (!islandIssues) logger.info("✅ React 岛边界无越界");
+
+    if (errors > 0) throw new Error(`doctor 发现 ${errors} 个问题`);
+    logger.info("✅ 全部检查通过");
+  },
+});
+
+// ─────────────────────────────────────────────
 // elysiax gen — 生成 .elysiax/（模块清单 + 容器装配）
 // ─────────────────────────────────────────────
 cli.addCommand({

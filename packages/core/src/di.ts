@@ -1,4 +1,4 @@
-import { Elysia } from "elysia";
+import { Elysia, ValidationError } from "elysia";
 import { inferdiElysia } from "@inferdi/elysia";
 import { html } from "@workspace/htmx";
 import type { Container, Lifetime, Spec } from "@inferdi/inferdi";
@@ -27,14 +27,48 @@ type ServiceSpecs<S extends Record<string, unknown>> = {
  * );
  * ```
  */
+type DiCtx<S extends Record<string, unknown>> = {
+  di: Container<ServiceSpecs<S>>;
+} & Record<string, any>;
+
+/** .ui() 挂载的组件签名（@kitajs/html Component 的宽松版） */
+type UiComponent<P> = (props: P) => unknown;
+
+export interface UiRoute<S extends Record<string, unknown>> {
+  /**
+   * UI 片段路由：`取数 → 渲染组件` 一步声明，等价于
+   * `.get(path, async (ctx) => <Component {...await model(ctx)} />)`。
+   * 不传 model 即静态片段。
+   */
+  ui<P>(
+    path: string,
+    component: UiComponent<P>,
+    model?: (ctx: DiCtx<S>) => P | Promise<P>,
+  ): this;
+}
+
 export function elysiaxModule<S extends Record<string, unknown>>(
   options?: ConstructorParameters<typeof Elysia>[0],
 ) {
-  return new Elysia(options) as unknown as Elysia<
+  const app = new Elysia(options) as unknown as Elysia<
     "",
     "local",
     { decorator: {}; store: {}; derive: { di: Container<ServiceSpecs<S>> } }
-  >;
+  > &
+    UiRoute<S>;
+
+  // Elysia 链式方法原地返回同一实例，挂个 ui 方法不破坏后续链
+  (app as any).ui = function (
+    this: any,
+    path: string,
+    component: UiComponent<any>,
+    model?: (ctx: DiCtx<S>) => unknown,
+  ) {
+    return this.get(path, async (ctx: DiCtx<S>) =>
+      component({ ...((model ? await model(ctx) : {}) as object) }),
+    );
+  };
+  return app;
 }
 
 /**
@@ -58,11 +92,41 @@ export function elysiaxModule<S extends Record<string, unknown>>(
  * const app = new Elysia({ prefix: "/api" }).use(api);
  * ```
  */
+export interface ElysiaxAPIOptions {
+  /**
+   * htmx 请求的 typebox 校验错误回显：HX-Request 头 + ValidationError 时，
+   * 返回 200 + 错误横幅片段（htmx 默认不 swap 4xx，片段必须能吃进 target），
+   * 非 htmx 请求仍走默认 JSON 422。传 false 关闭，传函数自定义片段。
+   */
+  validationError?: false | ((error: ValidationError) => string);
+}
+
+const escapeHtml = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/** 默认校验错误横幅：inline style 不依赖任何主题，role=alert 可读屏 */
+const defaultValidationBanner = (error: ValidationError) =>
+  `<div role="alert" style="border:1px solid #7f1d1d;background:#450a0a;color:#fca5a5;` +
+  `border-radius:6px;padding:8px 12px;font-size:12px;margin-bottom:8px">` +
+  `表单校验失败：${escapeHtml(error.message)}</div>`;
+
 export function elysiaxAPI<T extends Record<string | symbol, any>>(
   root: Container<T>,
   modules: Record<string, ModuleEntry>,
+  options: ElysiaxAPIOptions = {},
 ) {
   const api = inferdiElysia({ container: root }).use(html());
+
+  if (options.validationError !== false) {
+    const banner = options.validationError ?? defaultValidationBanner;
+    // Elysia 2：错误处理器按错误类注册（.error(Class, handler)）
+    (api as any).error(ValidationError, ({ error, request, set }: any) => {
+      if (!request.headers.has("HX-Request")) return; // 非 htmx 走默认 JSON 422
+      set.status = 200; // htmx 默认不 swap 4xx，片段必须能吃进 target
+      set.headers["content-type"] = "text/html; charset=utf-8";
+      return banner(error);
+    });
+  }
 
   let app = api
   for (const mod of Object.values(modules)) {

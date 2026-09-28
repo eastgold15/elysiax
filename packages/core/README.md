@@ -57,6 +57,45 @@ export const userController = defineController<UserServices>({ prefix: "/users" 
 
 返回 JSX 即 `text/html` 响应（框架内置 `html()` autoDetect，无需手动包裹）。
 
+### .ui() 片段路由
+
+「取数 + 渲染」一步声明：
+
+```tsx
+.ui("/ui", ProjectList, ({ di }) => listModel(di.get("projectService")))
+// 等价于 .get("/ui", async ({ di }) => <ProjectList {...await listModel(...)} />)
+```
+
+## 类型化路由（routes.gen.ts）
+
+hx-* 里不写裸路径——codegen 静态解析 controller 字面量路由生成助手，改路由/前缀时 TSX 编译报错：
+
+```tsx
+import { routes } from "../../../.elysiax";
+
+hx-post={routes.deploy.uiDetect()}
+hx-delete={routes.deploy.domainsById(d.id)}
+// 查询串拼接：`${routes.deploy.uiTargetsByIdLog(id)}?dep=${depId}`
+```
+
+## 表单校验错误回显
+
+typebox 校验失败 + `HX-Request` 头时，`elysiaxAPI` 自动返回 200 + 错误横幅片段（htmx 默认不 swap 4xx）；非 htmx 请求仍是 JSON 422。`elysiaxAPI(root, modules, { validationError: false | (err) => html })` 可关可自定义。
+
+## 实时推送：defineRealtime
+
+```ts
+// shared/realtime.ts
+export const rt = defineRealtime<MyEvent>();
+
+// controller（SSE 端点，25s 心跳、断开自动退订；snapshot 首帧即齐）
+.get("/events/:id", ({ params }) => rt.stream(`res:${params.id}`, () => snapshotOf(params.id)))
+
+// service / 轮询器
+rt.publish(`res:${id}`, event);
+rt.hasSubs(`res:${id}`); // 无观众就跳过昂贵的拉取
+```
+
 ## 测试
 
 ```ts
@@ -76,6 +115,7 @@ elysiax new island canvas # 在模块里脚手架 React 岛
 elysiax add <path>        # 源码安装模块（module.json 可选，装完自动装配校验）
 elysiax dev               # codegen + bun --hot，声明变化自动重生成
 elysiax gen               # 手动重生成 .elysiax/
+elysiax doctor            # 体检：DI 图、跨模块路由冲突、React 岛 htmx 边界
 elysiax build [--desktop] # 编译二进制 / webview 桌面应用
 ```
 

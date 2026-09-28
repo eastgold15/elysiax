@@ -169,7 +169,32 @@ async function firstExisting(dir: string, base: string) {
 }
 
 const camel = (s: string) => s.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+const pascalCase = (s: string) => s.charAt(0).toUpperCase() + camel(s).slice(1);
 const ident = (s: string) => s.replace(/-/g, "_");
+
+/** 从 controller 源码提取路由。负向后瞻排除 di.get("...")；只认 "/" 开头字面量 */
+export function extractRoutes(
+  src: string,
+  fallbackPrefix: string,
+): { prefix: string; paths: string[] } {
+  const prefixMatch = src.match(
+    /defineController(?:<[^>]*>)?\(\s*\{\s*prefix:\s*["'`]([^"'`]+)["'`]/,
+  );
+  const prefix = prefixMatch?.[1] ?? fallbackPrefix;
+  const routeRe =
+    /(?<![\w$])\.(?:get|post|put|patch|delete|ui)\(\s*["'`](\/[^"'`]*)["'`]/g;
+  const paths: string[] = [];
+  const seen = new Set<string>();
+  for (const m of src.matchAll(routeRe)) {
+    const sub = m[1]!;
+    const path = sub === "/" ? prefix : `${prefix}${sub}`;
+    if (!seen.has(path)) {
+      seen.add(path);
+      paths.push(path);
+    }
+  }
+  return { prefix, paths };
+}
 
 /**
  * 扫描模块目录与 src/infra.di.ts，把复杂装配生成到 .elysiax/（类 .next 模式）。
@@ -355,6 +380,54 @@ export async function codegen(
   writeFileSync(join(outDir, "modules.gen.ts"), ml.join("\n") + "\n");
   written.push(".elysiax/modules.gen.ts");
 
+  // routes.gen.ts：静态解析 controller 源码里的字面量路由，生成类型化路径助手。
+  // hx-post={routes.deploy.uiDetect()} —— 改路由/前缀时 TSX 编译报错，不再静默 404。
+  // （不 import controller：controller → .elysiax → modules.gen → controller 存在循环）
+  const apiPrefix = config.apiPrefix ?? "/api";
+  const rl: string[] = [
+    header,
+    "/** 路径参数 */",
+    "type P = string | number;",
+    "",
+    "export const routes = {",
+  ];
+  for (const mod of mods) {
+    const n = mod.manifest.name;
+    if (!mod.controller) continue;
+    const src = await Bun.file(mod.controller).text();
+    const { prefix, paths } = extractRoutes(src, mod.manifest.route ?? `/${n}`);
+    const entries: [string, string][] = [];
+    for (const path of paths) {
+      const sub = path === prefix ? "/" : path.slice(prefix.length);
+      // /ui/detect → uiDetect；/domains/:id → domainsById；/ → index
+      const parts = sub.split("/").filter(Boolean);
+      let name = "index";
+      const params: string[] = [];
+      if (parts.length) {
+        name = parts
+          .map((p, i) => {
+            if (p.startsWith(":")) {
+              params.push(p.slice(1));
+              return `By${pascalCase(p.slice(1))}`;
+            }
+            if (p === "*") return "Wildcard";
+            return i === 0 ? camel(p) : pascalCase(p);
+          })
+          .join("");
+      }
+      const sig = params.map((p) => `${p}: P`).join(", ");
+      const body = path.replaceAll(/:([^/]+)/g, (_, p) => `\${${p}}`);
+      entries.push([name, `(${sig}) => \`${apiPrefix}${body}\``]);
+    }
+    if (!entries.length) continue;
+    rl.push(`  ${JSON.stringify(n)}: {`);
+    for (const [name, fn] of entries) rl.push(`    ${name}: ${fn},`);
+    rl.push("  },");
+  }
+  rl.push("} as const;", "");
+  writeFileSync(join(outDir, "routes.gen.ts"), rl.join("\n") + "\n");
+  written.push(".elysiax/routes.gen.ts");
+
   // services.gen.ts：从 di 声明推导 ServiceMap（类型一体化，di 泛型可省）
   const sl: string[] = [
     header,
@@ -491,6 +564,7 @@ export async function codegen(
       `export { buildRootContainer } from "./container.gen";`,
       `export type * from "./services.gen"; // ServiceMap + 每模块窄类型 <Name>Services`,
       `export { defineController } from "./controller.gen";`,
+      `export { routes } from "./routes.gen"; // 类型化路径助手：hx-post={routes.x.y()}`,
       "",
     ].join("\n"),
   );

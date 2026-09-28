@@ -1,5 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { $ } from "bun";
+import { parse as parseYaml } from "yaml";
 
 export interface RepoBrief {
   fullName: string;
@@ -17,25 +19,25 @@ export class GithubService {
     if (this.tokenCache && Date.now() - this.tokenCache.at < 10 * 60_000) {
       return this.tokenCache.token;
     }
-    const proc = Bun.spawn(["gh", "auth", "token"], { stdout: "pipe", stderr: "pipe" });
-    const token = (await new Response(proc.stdout).text()).trim();
-    if ((await proc.exited) === 0 && token) {
+    const proc = await $`gh auth token`.nothrow().quiet();
+    const token = proc.stdout.toString().trim();
+    if (proc.exitCode === 0 && token) {
       this.tokenCache = { token, at: Date.now() };
       return token;
     }
     const hostsYml = readFileSync(join(Bun.env.HOME ?? "", ".config", "gh", "hosts.yml"), "utf8");
-    const match = hostsYml.match(/oauth_token:\s*(\S+)/);
-    if (!match) throw new Error("未找到 GitHub 凭据：请先 `gh auth login`");
-    this.tokenCache = { token: match[1]!, at: Date.now() };
-    return match[1]!;
+    const doc = parseYaml(hostsYml) as Record<string, { oauth_token?: string }> | null;
+    const fallback = doc?.["github.com"]?.oauth_token;
+    if (!fallback) throw new Error("未找到 GitHub 凭据：请先 `gh auth login`");
+    this.tokenCache = { token: fallback, at: Date.now() };
+    return fallback;
   }
 
   /** 当前登录用户（UI 展示用） */
   async whoami(): Promise<string> {
-    const proc = Bun.spawn(["gh", "api", "user", "--jq", ".login"], { stdout: "pipe", stderr: "pipe" });
-    const out = (await new Response(proc.stdout).text()).trim();
-    if ((await proc.exited) !== 0) throw new Error("gh 未登录");
-    return out;
+    const proc = await $`gh api user --jq .login`.nothrow().quiet();
+    if (proc.exitCode !== 0) throw new Error("gh 未登录");
+    return proc.stdout.toString().trim();
   }
 
   /**
@@ -48,17 +50,16 @@ export class GithubService {
     etag?: string,
   ): Promise<{ sha: string; etag?: string } | null> {
     const args = [
-      "gh", "api", `repos/${ownerRepo}/commits/${branch}`,
+      "api", `repos/${ownerRepo}/commits/${branch}`,
       "--jq", ".sha",
       "--include",
     ];
     if (etag) args.push("-H", `If-None-Match: ${etag}`);
-    const proc = Bun.spawn(args, { stdout: "pipe", stderr: "pipe" });
-    const raw = await new Response(proc.stdout).text();
-    const code = await proc.exited;
+    const proc = await $`gh ${args}`.nothrow().quiet();
+    const raw = proc.stdout.toString();
     // 304 时 gh 对空 body 解析 JSON 报错退出——headers 已打印，先判 304 再判错误
     if (/\b304\b/.test(raw.split("\n")[0] ?? "")) return null;
-    if (code !== 0) throw new Error(`gh api 失败: ${await new Response(proc.stderr).text()}`);
+    if (proc.exitCode !== 0) throw new Error(`gh api 失败: ${proc.stderr.toString()}`);
     const etagMatch = raw.match(/^[Ee][Tt]ag:\s*(\S+)/m);
     const sha = raw.trim().split("\n").pop()?.trim();
     if (!sha || !/^[0-9a-f]{40}$/.test(sha)) throw new Error(`解析 sha 失败: ${raw.slice(-200)}`);
@@ -69,14 +70,11 @@ export class GithubService {
   private reposCache: { repos: RepoBrief[]; at: number } | null = null;
   async listRepos(): Promise<RepoBrief[]> {
     if (this.reposCache && Date.now() - this.reposCache.at < 5 * 60_000) return this.reposCache.repos;
-    const proc = Bun.spawn(
-      ["gh", "repo", "list", "--limit", "300", "--json", "nameWithOwner,defaultBranchRef,visibility,updatedAt"],
-      { stdout: "pipe", stderr: "pipe" },
-    );
-    const out = await new Response(proc.stdout).text();
-    if ((await proc.exited) !== 0)
-      throw new Error(`gh repo list 失败: ${await new Response(proc.stderr).text()}`);
-    const raw = JSON.parse(out) as {
+    const proc = await $`gh repo list --limit 300 --json nameWithOwner,defaultBranchRef,visibility,updatedAt`
+      .nothrow().quiet();
+    if (proc.exitCode !== 0)
+      throw new Error(`gh repo list 失败: ${proc.stderr.toString()}`);
+    const raw = proc.json() as {
       nameWithOwner: string;
       defaultBranchRef?: { name: string } | null;
       visibility: string;
@@ -94,19 +92,15 @@ export class GithubService {
 
   /** 单文件内容（contents API，base64）。404 → null；识别流程用它免去整库克隆 */
   async fileContent(ownerRepo: string, path: string, ref: string): Promise<string | null> {
-    const proc = Bun.spawn(
-      ["gh", "api", `repos/${ownerRepo}/contents/${path}?ref=${encodeURIComponent(ref)}`, "--jq", ".content"],
-      { stdout: "pipe", stderr: "pipe" },
-    );
-    const out = await new Response(proc.stdout).text();
-    const code = await proc.exited;
-    if (code !== 0) {
-      const err = await new Response(proc.stderr).text();
+    const proc = await $`gh api ${`repos/${ownerRepo}/contents/${path}?ref=${encodeURIComponent(ref)}`} --jq .content`
+      .nothrow().quiet();
+    if (proc.exitCode !== 0) {
+      const err = proc.stderr.toString();
       if (/404|Not Found/i.test(err)) return null;
       throw new Error(`gh api 读 ${path} 失败: ${err.slice(0, 200)}`);
     }
     // base64 里带换行，Buffer.from 容忍；contents API 单文件上限 1MB，openship.json/compose 远低于此
-    return Buffer.from(out.trim(), "base64").toString("utf8");
+    return Buffer.from(proc.stdout.toString().trim(), "base64").toString("utf8");
   }
 
   /** clone / fetch 用的带 token URL（用完必须重写 remote，见 deploy） */

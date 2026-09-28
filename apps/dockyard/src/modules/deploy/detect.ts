@@ -2,8 +2,11 @@
  * 部署自动识别（借鉴 openship 的 overlay 模型：检测先行、声明覆盖）。
  * - 仓库根有 openship.json → 按声明解析（services/domains/env），错误/警告带回 UI
  * - 没有 → 回退解析 compose 文件的 services + ports，生成同样的 DetectResult
- * 解析是手写的（无 schema 依赖），未知字段只警告不报错——同 openship 的宽容策略。
+ * 形状校验用 typebox（Value.Check 逐项判定），未知字段只警告不报错——同 openship 的宽容策略。
  */
+import { parse as parseDotenv } from "dotenv";
+import { Type, type Static } from "typebox";
+import { Value } from "typebox/value";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 
 // ── openship.json 类型（对齐 tradeflow/openship.json 的实际形状）──
@@ -42,11 +45,31 @@ export interface ParseResult {
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => typeof v === "object" && v !== null && !Array.isArray(v);
 
+// ── typebox 形状定义（Value.Check 只做判定，宽容策略：坏项跳过、能救的救回来）──
+const EnvValueSchema = Type.Union([
+  Type.String(),
+  Type.Object({ value: Type.String(), secret: Type.Optional(Type.Boolean()) }),
+]);
+const DomainSchema = Type.Object({
+  domain: Type.String(),
+  port: Type.Number(),
+  type: Type.Optional(Type.String()),
+});
+const ResourcesSchema = Type.Object({
+  cpuCores: Type.Optional(Type.Number()),
+  memoryMb: Type.Optional(Type.Number()),
+  diskMb: Type.Optional(Type.Number()),
+});
+const ServiceNameSchema = Type.Object({ name: Type.String({ minLength: 1 }) });
+
 function parseEnvValue(key: string, raw: unknown, warnings: string[]): OpenshipEnvValue | null {
-  if (typeof raw === "string") return { value: raw, secret: false };
-  if (isObj(raw) && typeof raw.value === "string") return { value: raw.value, secret: raw.secret === true };
-  warnings.push(`env.${key} 形状无法识别，已跳过`);
-  return null;
+  if (!Value.Check(EnvValueSchema, raw)) {
+    warnings.push(`env.${key} 形状无法识别，已跳过`);
+    return null;
+  }
+  return typeof raw === "string"
+    ? { value: raw, secret: false }
+    : { value: raw.value, secret: raw.secret === true };
 }
 
 function parseEnvMap(raw: unknown, scope: string, warnings: string[]): Record<string, OpenshipEnvValue> {
@@ -73,11 +96,12 @@ export function parseOpenshipConfig(raw: unknown): ParseResult {
     if (!Array.isArray(raw.domains)) errors.push("domains 必须是数组");
     else {
       for (const [i, d] of raw.domains.entries()) {
-        if (!isObj(d) || typeof d.domain !== "string" || typeof d.port !== "number") {
+        if (!Value.Check(DomainSchema, d)) {
           errors.push(`domains[${i}] 需要 { domain: string, port: number }`);
           continue;
         }
-        domains.push({ domain: d.domain, port: d.port, type: typeof d.type === "string" ? d.type : "custom" });
+        const dd = d as Static<typeof DomainSchema>;
+        domains.push({ domain: dd.domain, port: dd.port, type: dd.type ?? "custom" });
       }
     }
   }
@@ -87,23 +111,19 @@ export function parseOpenshipConfig(raw: unknown): ParseResult {
     if (!Array.isArray(raw.services)) errors.push("services 必须是数组");
     else {
       for (const [i, s] of raw.services.entries()) {
-        if (!isObj(s) || typeof s.name !== "string" || !s.name) {
+        if (!Value.Check(ServiceNameSchema, s)) {
           errors.push(`services[${i}] 需要 name: string`);
           continue;
         }
-        const resources = isObj(s.resources) ? s.resources : undefined;
+        const svc = s as Static<typeof ServiceNameSchema> & Obj;
         services.push({
-          name: s.name,
-          exposed: s.exposed === true,
-          exposedPort: typeof s.exposedPort === "string" ? Number(s.exposedPort) || undefined
-            : typeof s.exposedPort === "number" ? s.exposedPort : undefined,
-          domain: typeof s.domain === "string" ? s.domain : undefined,
-          resources: resources ? {
-            cpuCores: typeof resources.cpuCores === "number" ? resources.cpuCores : undefined,
-            memoryMb: typeof resources.memoryMb === "number" ? resources.memoryMb : undefined,
-            diskMb: typeof resources.diskMb === "number" ? resources.diskMb : undefined,
-          } : undefined,
-          env: parseEnvMap(s.env, `services.${s.name}.env`, warnings),
+          name: svc.name,
+          exposed: svc.exposed === true,
+          exposedPort: typeof svc.exposedPort === "string" ? Number(svc.exposedPort) || undefined
+            : typeof svc.exposedPort === "number" ? svc.exposedPort : undefined,
+          domain: typeof svc.domain === "string" ? svc.domain : undefined,
+          resources: Value.Check(ResourcesSchema, svc.resources) ? svc.resources : undefined,
+          env: parseEnvMap(svc.env, `services.${svc.name}.env`, warnings),
         });
       }
     }
@@ -246,24 +266,26 @@ export function detectFromCompose(composeText: string): DetectResult {
   return { source: "compose", composePath: "docker-compose.yml", services, rootEnv: {}, errors: [], warnings };
 }
 
+/** 含空白/引号/# 的值按 dotenv 双引号规则转义（dotenv v17+ 移除了 stringify，序列化只需处理这一处） */
+function quoteEnv(value: string): string {
+  return /[\s#"']/.test(value) ? JSON.stringify(value) : value;
+}
+
 /** rootEnv → .env 文本（服务 compose 的 ${VAR} 插值；服务级变量走 override 的 environment，不扁平化） */
 export function detectToEnvText(detect: Pick<DetectResult, "rootEnv">): string {
-  return Object.entries(detect.rootEnv).map(([k, v]) => `${k}=${v.value}`).join("\n");
+  return Object.entries(detect.rootEnv).map(([k, v]) => `${k}=${quoteEnv(v.value)}`).join("\n");
 }
 
 /** 服务 env map → .env 文本（step2 服务卡片里的编辑框初值） */
 export function serviceEnvToText(env: Record<string, OpenshipEnvValue>): string {
-  return Object.entries(env).map(([k, v]) => `${k}=${v.value}`).join("\n");
+  return Object.entries(env).map(([k, v]) => `${k}=${quoteEnv(v.value)}`).join("\n");
 }
 
-/** .env 文本 → env map（step2 提交时解析回服务级 environment） */
+/** .env 文本 → env map（step2 提交时解析回服务级 environment）。dotenv.parse 处理引号/转义/注释 */
 export function textToEnvMap(text: string): Record<string, OpenshipEnvValue> {
-  const out: Record<string, OpenshipEnvValue> = {};
-  for (const line of text.split("\n")) {
-    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/);
-    if (m) out[m[1]!] = { value: m[2]!.trim(), secret: false };
-  }
-  return out;
+  return Object.fromEntries(
+    Object.entries(parseDotenv(text)).map(([k, v]) => [k, { value: v, secret: false }]),
+  );
 }
 
 /** 资源限制 + 服务级 environment → compose override。

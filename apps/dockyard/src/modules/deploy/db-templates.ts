@@ -1,4 +1,5 @@
 import { randomBytes } from "node:crypto";
+import { parse as parseDotenv } from "dotenv";
 
 export type DbType = "postgres" | "mysql" | "redis" | "mongo";
 
@@ -146,7 +147,8 @@ export function logicalDbCommands(
 /** 实例目标的根连接串：从创建时生成的 env 文本里取密码推导（env 缺密码的类型返回 null） */
 export function instanceUrl(dbType: DbType, host: string, envText: string): string | null {
   const port = PORTS[dbType];
-  const pick = (key: string) => envText.match(new RegExp(`^${key}=(.+)$`, "m"))?.[1]?.trim();
+  const env = parseDotenv(envText);
+  const pick = (key: string) => env[key];
   switch (dbType) {
     case "postgres": {
       const pw = pick("POSTGRES_PASSWORD");

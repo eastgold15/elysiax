@@ -1,5 +1,6 @@
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+
+import { ensureDir, ensureDirSync } from "@visulima/fs";
+import { join } from "@visulima/path";
 
 // 数据目录：装进 /usr/bin 后 cwd 不可写，必须走 XDG
 const dataHome = Bun.env.XDG_DATA_HOME ?? join(Bun.env.HOME ?? ".", ".local", "share");
@@ -19,8 +20,10 @@ export const appPaths = {
 
 export type AppPaths = typeof appPaths;
 
-export function ensureDirs() {
-  for (const dir of [appPaths.dataDir, appPaths.cacheDir, appPaths.reposDir, appPaths.relayDir]) {
-    mkdirSync(dir, { recursive: true });
-  }
+export async function ensureDirs() {
+  await Promise.all(
+    [appPaths.dataDir, appPaths.cacheDir, appPaths.reposDir, appPaths.relayDir].map((dir) =>
+      ensureDir(dir)
+    )
+  );
 }

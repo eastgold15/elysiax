@@ -3,7 +3,7 @@ import type { Db } from "../../shared/db";
 import { projects, type Project } from "../../shared/schema";
 
 export class ProjectRepository {
-  constructor(private readonly db: Db) {}
+  constructor(private readonly db: Db) { }
 
   list(): Promise<Project[]> {
     return this.db.select().from(projects).orderBy(projects.id);

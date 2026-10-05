@@ -44,7 +44,7 @@ setupTypebox({
 export async function start(opts: {
   port?: number;
   /** `import index from "./index.html"` 的页面对象 */
-  index: unknown;
+  index: Bun.HTMLBundle;
   /** `import * as gen from "../.elysiax"` */
   gen: ElysiaxGenerated;
 }) {
@@ -55,7 +55,7 @@ export async function start(opts: {
   serve({
     port: opts.port ?? 3000,
     routes: {
-      "/": opts.index as any,
+      "/": opts.index,
       "/api/*": (req) => app.handle(req),
     },
     development: true,

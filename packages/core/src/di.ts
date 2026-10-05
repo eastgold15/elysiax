@@ -1,4 +1,5 @@
 import { Elysia, ValidationError } from "elysia";
+import { websocket } from "elysia/websocket";
 import { inferdiElysia } from "@inferdi/elysia";
 import { html } from "@workspace/htmx";
 import type { Container, Lifetime, Spec } from "@inferdi/inferdi";
@@ -115,7 +116,8 @@ export function elysiaxAPI<T extends Record<string | symbol, any>>(
   modules: Record<string, ModuleEntry>,
   options: ElysiaxAPIOptions = {},
 ) {
-  const api = inferdiElysia({ container: root }).use(html());
+  // Elysia 2：.ws() 需要显式 websocket 能力，框架层统一开启（各 controller 直接用 .ws）
+  const api = inferdiElysia({ container: root }).use(html()).use(websocket());
 
   if (options.validationError !== false) {
     const banner = options.validationError ?? defaultValidationBanner;

@@ -10,7 +10,7 @@ import { ServerService } from "../servers/servers.service";
 const INTERVAL_MS = 10_000;
 
 type SvcState = "running" | "exited" | "unknown";
-
+  
 /** key = `${targetId}:${service}`；not-found 也记 unknown，容器消失时能推出变化 */
 const snapshot = new Map<string, SvcState>();
 /** targetId → projectId（每轮重建，本地 sqlite 查询成本可忽略） */

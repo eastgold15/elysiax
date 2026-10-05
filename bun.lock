@@ -39,6 +39,8 @@
         "@inferdi/inferdi": "^6.1.0",
         "@meitaim/ssh": "^1.0.0",
         "@types/dotenv": "^8.2.3",
+        "@visulima/fs": "^6.0.18",
+        "@visulima/path": "^4.0.0",
         "@workspace/htmx": "workspace:*",
         "@xterm/addon-fit": "^0.11.0",
         "@xterm/xterm": "^6.0.0",
@@ -899,7 +901,11 @@
 
     "@visulima/colorize": ["@visulima/colorize@2.1.1", "", { "dependencies": { "@visulima/is-ansi-color-supported": "4.0.0" }, "os": [ "linux", "win32", "darwin", ] }, "sha512-oz8t10iI6g1Jt8W+5HEhTYqvMX0H7ts2AvjvosjIS4oA8wMEA9XDz4dIb/8zQhTBC9JqzgYtflqr7sFxFNfs9Q=="],
 
+    "@visulima/fs": ["@visulima/fs@6.0.18", "", { "dependencies": { "@visulima/path": "4.0.0" }, "peerDependencies": { "@visulima/yaml": "1.0.0", "ini": "^7.0.0", "json5": "^2.2.3", "jsonc-parser": "^3.3.1", "smol-toml": "^1.7.1" }, "optionalPeers": ["@visulima/yaml", "ini", "json5", "jsonc-parser", "smol-toml"], "os": [ "linux", "win32", "darwin", ] }, "sha512-9i1ylvVpKwowZusVxFzD8BTNGbHdWfzC3mTqID8vrcvV5FQ5cHSu12tCa/33EdrxBM/N2iQrkrtyik2iCq9ddQ=="],
+
     "@visulima/is-ansi-color-supported": ["@visulima/is-ansi-color-supported@4.0.0", "", {}, "sha512-GFTPtUCVoFlrtO/VrEz6Bhm1VkRPWJ1fp7P/LoBAPN6gUiBSsDMTp2N58/G+irr843RP/IP1pAUULbBi7gG8TA=="],
+
+    "@visulima/path": ["@visulima/path@4.0.0", "", { "os": [ "linux", "win32", "darwin", ] }, "sha512-M9cTzZNtTbOl975YAgUzzzwg9xOMqqC2Y2Jy1uFDQufK0sBNgbFnvR0o14jIfNDxACXyhEN3DSuFa4W7U7Hf2g=="],
 
     "@visulima/tabular": ["@visulima/tabular@4.1.0", "", {}, "sha512-fIzyHilmtFwEBfS9Tmc/G/PY77yu7+SrJfXljhFdWOW4K881wFjIuVd1bvydAqPJ3a0kgQ11iP4i50gG4JXtJQ=="],
 

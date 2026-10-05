@@ -17,6 +17,8 @@
     "@inferdi/inferdi": "^6.1.0",
     "@meitaim/ssh": "^1.0.0",
     "@types/dotenv": "^8.2.3",
+    "@visulima/fs": "^6.0.18",
+    "@visulima/path": "^4.0.0",
     "@workspace/htmx": "workspace:*",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",

@@ -111,6 +111,11 @@ export class ServerService {
     return this.sshPool.get(server);
   }
 
+  /** SSH 连接失效（断线）时丢弃缓存，下次 ssh() 重建 */
+  async dropSsh(id: number) {
+    await this.sshPool.drop(id);
+  }
+
   private async mustGet(id: number): Promise<Server> {
     const server = await this.repo.byId(id);
     if (!server) throw new Error(`服务器不存在: ${id}`);

@@ -1,4 +1,4 @@
-import { dirname, join } from "node:path";
+import { dirname, join, normalize } from "node:path";
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { Readable, Writable } from "node:stream";
@@ -976,6 +976,75 @@ export class DeployService {
     await this.repo.updateTarget(target.id, { lastKnownSha: sha, updateAvailable: false });
   }
 
+  /** 带断线重连的短命令：连接失效则丢弃缓存重建后重试 */
+  private async sshExec(serverId: number, cmd: string, retries = 2) {
+    for (;;) {
+      try {
+        return await (await this.serverService.ssh(serverId)).exec(cmd);
+      } catch (error) {
+        if (retries-- <= 0) throw error;
+        await this.serverService.dropSsh(serverId);
+      }
+    }
+  }
+
+  /**
+   * 长跑命令（镜像构建）放远端后台执行 + 轮询日志文件：
+   * 单条 exec 挂几十分钟会被中间网络/sshd 断开，通道一关命令就被 SIGHUP 杀掉；
+   * nohup 后台 + 短轮询则断线只废掉一次轮询，重连后续跑，构建本体不受影响。
+   */
+  private async execLongRemote(
+    serverId: number,
+    cmd: string,
+    tag: string,
+    log: Log,
+  ): Promise<{ code: number }> {
+    const logFile = `/tmp/dockyard-long-${tag}.log`;
+    const codeFile = `${logFile}.code`;
+    const partFile = `${logFile}.part`;
+    const quoted = cmd.replace(/'/g, `'\\''`);
+    const start = await this.sshExec(
+      serverId,
+      // < /dev/null 必须：后台进程继承通道 stdin 会让 sshd 一直等 EOF，start 命令挂到构建结束才返回
+      `rm -f ${logFile} ${codeFile} ${partFile} && nohup sh -c '${quoted}; echo $? > ${codeFile}' > ${logFile} 2>&1 < /dev/null & echo started`,
+    );
+    if (start.code !== 0) throw new Error(`远端后台命令启动失败：${start.stderr}`);
+    let offset = 0;
+    let delay = 4_000;
+    for (;;) {
+      await new Promise((r) => setTimeout(r, delay));
+      delay = 4_000;
+      let res: { stdout: string; stderr: string; code: number | null };
+      try {
+        res = await this.sshExec(
+          serverId,
+          // 窗口读取：每轮最多 256KB——构建日志可达数 MB，弱网下全量重传必然反复失败（偏移不涨、越传越大）
+          // 服务端报告本次实际输出字节数，避免客户端按解码后字符串估算偏移踩 UTF-8 边界
+          `tail -c +${offset + 1} ${logFile} 2>/dev/null | head -c 262144 > ${partFile}; cat ${partFile};` +
+            `printf '\\n__DC_SIZE__\\n'; wc -c < ${partFile}; printf '__DC_CODE__\\n'; cat ${codeFile} 2>/dev/null || true`,
+          0,
+        );
+      } catch {
+        await this.serverService.dropSsh(serverId); // 本轮轮询撞上断线：重建连接下轮续跑
+        continue;
+      }
+      const [rest = "", codeText = ""] = res.stdout.split("__DC_CODE__\n");
+      const [chunk = "", sizeText = "0"] = rest.split("\n__DC_SIZE__\n");
+      const printed = Number(sizeText.trim());
+      if (Number.isFinite(printed) && printed > 0) {
+        offset += printed;
+        if (chunk) await log(chunk.trimEnd());
+        if (printed >= 262144) delay = 300; // 读满窗口说明积压严重，加速排空
+      }
+      const codeStr = codeText.trim();
+      // 命令已结束但日志还有积压时继续排空（失败上下文在文件尾部），printed==0 说明已追到 EOF
+      if (codeStr !== "" && (!Number.isFinite(printed) || printed === 0)) {
+        const code = Number(codeStr);
+        return { code: Number.isFinite(code) ? code : -1 };
+      }
+    }
+  }
+
   // ── app · GitHub 导入：远端服务器拉代码 → 服务器上构建镜像 → compose up（免镜像传输）──
   private async deployAppRemoteBuild(
     target: DeployTarget,
@@ -988,6 +1057,10 @@ export class DeployService {
     const serverId = await this.nodeServerId(target);
     const client = await this.serverService.ssh(serverId);
     const authedUrl = await this.github.authedRepoUrl(ownerRepo);
+    // git 报错会把整条带 token 的 URL 打进 stderr——所有日志/异常先脱敏
+    const cred = authedUrl.match(/^https:\/\/([^@]+)@/)?.[1];
+    const redact = (s: string) => (cred ? s.split(cred).join("***") : s);
+    const rlog: Log = async (s) => log(redact(s));
     const srcDir = await this.resolveRemoteDir(client, `~/dockyard/src/${target.id}-${target.name}`);
     const composePath = target.composePath ?? "docker-compose.yml";
 
@@ -995,36 +1068,45 @@ export class DeployService {
     await setStatus("building");
     const probe = await client.exec(`[ -d "${srcDir}/.git" ] && echo yes || echo no`);
     if (probe.stdout.trim() !== "yes") {
-      await log(`远端克隆 ${ownerRepo} …`);
+      await rlog(`远端克隆 ${ownerRepo} …`);
       await client.exec(`mkdir -p "$(dirname "${srcDir}")"`);
       const clone = await client.exec(`git clone "${authedUrl}" "${srcDir}"`);
-      if (clone.code !== 0) throw new Error(`远端克隆失败（exit ${clone.code}）\n${clone.stderr}`);
+      if (clone.code !== 0) throw new Error(redact(`远端克隆失败（exit ${clone.code}）\n${clone.stderr}`));
       await client.exec(`git -C "${srcDir}" remote set-url origin "https://github.com/${ownerRepo}.git"`);
     }
     const fetch = await client.exec(`git -C "${srcDir}" fetch "${authedUrl}" "${branch}" && git -C "${srcDir}" checkout FETCH_HEAD`);
-    if (fetch.code !== 0) throw new Error(`远端拉取失败（exit ${fetch.code}）\n${fetch.stderr}`);
+    if (fetch.code !== 0) throw new Error(redact(`远端拉取失败（exit ${fetch.code}）\n${fetch.stderr}`));
     const sha = (await client.exec(`git -C "${srcDir}" rev-parse --short=8 HEAD`)).stdout.trim();
-    await log(`远端构建 ${ownerRepo}@${sha} …`);
+    await rlog(`远端构建 ${ownerRepo}@${sha} …`);
 
-    // 2. env_file 占位（compose config/build 要求文件存在；真实值由 override/.env 注入）
+    // 2. env_file 占位（compose config/build 要求文件存在；真实值由 override/.env 注入）。
+    // compose 把 env_file 解析为「相对 compose 文件所在目录」，子目录 compose（deploy/x.yml 写 ../apps/.env）必须同样解析
     const composeText = (await client.exec(`cat "${srcDir}/${composePath}"`)).stdout;
     for (const p of envFilePaths(composeText)) {
+      const rel = normalize(join(dirname(composePath), p));
+      if (rel.startsWith("..") || rel.startsWith("/")) continue; // 逃出仓库的路径不创建
       await client.exec(
-        `cd "${srcDir}" && mkdir -p "${join(".", p, "..")}" && [ -f "${p}" ] || printf '# dockyard 占位\\n' > "${p}"`,
+        `cd "${srcDir}" && mkdir -p "$(dirname "${rel}")" && [ -f "${rel}" ] || printf '# dockyard 占位\\n' > "${rel}"`,
       );
     }
 
-    // 3. 服务器上构建镜像
-    const build = await client.exec(
-      `cd "${srcDir}" && docker compose -f "${composePath}" build ${target.serviceName ?? ""} 2>&1 | tail -50`,
+    // 3. 服务器上构建镜像：后台跑 + 轮询（断线重连不杀构建，全量输出进部署日志）。
+    // 逐服务串行构建——小内存 VPS 并行构建多个镜像会 OOM 到 sshd 都无响应
+    const buildCmd = target.serviceName
+      ? `docker compose -f "${composePath}" build ${target.serviceName}`
+      : `for s in $(docker compose -f "${composePath}" config --services); do docker compose -f "${composePath}" build "$s" || exit 1; done`;
+    const build = await this.execLongRemote(
+      serverId,
+      `cd "${srcDir}" && ${buildCmd}`,
+      `build-${target.id}`,
+      rlog,
     );
-    await log(build.stdout);
     if (build.code !== 0) throw new Error(`远端构建失败（exit ${build.code}）`);
 
     // 4. 对账 + 环境变量/override 注入 + up
     await setStatus("deploying", { commitSha: sha });
-    const cfgOut = await client.exec(`cd "${srcDir}" && docker compose -f "${composePath}" config --format json`);
-    if (cfgOut.code !== 0) throw new Error(`远端 compose config 失败：${cfgOut.stderr}`);
+    const cfgOut = await this.sshExec(serverId, `cd "${srcDir}" && docker compose -f "${composePath}" config --format json`);
+    if (cfgOut.code !== 0) throw new Error(redact(`远端 compose config 失败：${cfgOut.stderr}`));
     const cfg = JSON.parse(cfgOut.stdout) as {
       name?: string;
       services?: Record<string, { container_name?: string }>;
@@ -1036,18 +1118,20 @@ export class DeployService {
     if (containerNames.length > 0)
       await this.preflightCheck(target, serverId, containerNames, log);
 
-    const sftp = await openSftp(client);
+    // 构建期间缓存连接可能已被丢弃重建——拿当前可用连接
+    const fresh = await this.serverService.ssh(serverId);
+    const sftp = await openSftp(fresh);
     if (target.envJson) await sftp.write(`${srcDir}/.env`, decryptSecret(target.envJson));
     if (target.overrideCompose)
       await sftp.write(`${srcDir}/docker-compose.dockyard.yml`, decryptSecret(target.overrideCompose));
     await sftp.close();
-    await log("远端 docker compose up -d …");
+    await rlog("远端 docker compose up -d …");
     const overrideArg = target.overrideCompose ? ` -f "${composePath}" -f docker-compose.dockyard.yml` : ` -f "${composePath}"`;
     // 共享资源复用时只 up 业务服务子集（同本地构建路径的语义）
     const upArg = target.upServices?.length ? ` ${target.upServices.join(" ")}` : "";
-    if (upArg) await log(`只部署业务服务：${target.upServices!.join("、")}（中间件复用服务器共享资源）`);
-    const up = await client.exec(`cd "${srcDir}" && docker compose -p ${projectName}${overrideArg} up -d${upArg}`);
-    await log(up.stdout + up.stderr);
+    if (upArg) await rlog(`只部署业务服务：${target.upServices!.join("、")}（中间件复用服务器共享资源）`);
+    const up = await this.sshExec(serverId, `cd "${srcDir}" && docker compose -p ${projectName}${overrideArg} up -d${upArg}`);
+    await rlog(up.stdout + up.stderr);
     if (up.code !== 0) throw new Error(`远端 compose up 失败（exit ${up.code}）`);
 
     // 5. 域名绑定 → edge 全量对账

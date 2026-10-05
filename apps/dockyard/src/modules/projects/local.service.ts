@@ -1,5 +1,5 @@
 import { readdir } from "node:fs/promises";
-import { join } from "node:path";
+import { join } from "@visulima/path";
 import { expandHome, loadConfig, saveConfig } from "../../shared/config";
 import { parseOwnerRepo } from "../../shared/github";
 

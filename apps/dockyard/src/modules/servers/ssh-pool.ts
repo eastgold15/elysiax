@@ -103,7 +103,8 @@ export class SshPool {
         port: server.port,
         username: server.user,
         ...credential,
-        timeout: 10_000,
+        // 跨网线路抖动大：握手 30s 超时 + 失败重试一次（keepAlive 15s 保活已开）
+        timeout: 30_000,
         keepAlive: 15_000,
         verifyHostKey,
       });

@@ -13,10 +13,10 @@ import { DEFAULTS, loadConfig, type ElysiaxConfig } from "./config";
 export type DiEntry =
   | { value: unknown }
   | {
-      class: new (...args: any[]) => unknown;
-      deps: readonly string[];
-      lifetime?: "singleton" | "transient";
-    };
+    class: new (...args: any[]) => unknown;
+    deps: readonly string[];
+    lifetime?: "singleton" | "transient";
+  };
 
 // ── provide / lazy：类引用代替字符串依赖（编译期校验 + 重构可跟随） ──
 
@@ -48,10 +48,10 @@ const isLazyRef = (v: unknown): v is LazyRef<unknown> =>
 /** 依赖槽位类型：Lazy<X> 参数 → lazy(X)；其他对象 → 类引用；值服务（db 等）→ 字符串键 */
 type DepItem<T> =
   | ([T] extends [import("@inferdi/inferdi").Lazy<infer U>]
-      ? LazyRef<U>
-      : [T] extends [object]
-        ? abstract new (...args: any[]) => T
-        : never)
+    ? LazyRef<U>
+    : [T] extends [object]
+    ? abstract new (...args: any[]) => T
+    : never)
   | (string & {});
 
 /** 从类构造函数签名推导依赖元组：写错类型/顺序直接编译报错 */
@@ -67,10 +67,10 @@ export type DiEntryInput =
   | DiEntry
   | (new (...args: any[]) => unknown) // 简写：零依赖的类
   | {
-      class: new (...args: any[]) => unknown;
-      deps: readonly (string | (abstract new (...args: any[]) => unknown) | LazyRef<unknown>)[];
-      lifetime?: "singleton" | "transient";
-    };
+    class: new (...args: any[]) => unknown;
+    deps: readonly (string | (abstract new (...args: any[]) => unknown) | LazyRef<unknown>)[];
+    lifetime?: "singleton" | "transient";
+  };
 
 /**
  * 声明一个服务：依赖写类引用而非字符串，类型从构造函数签名推导。
@@ -117,7 +117,7 @@ function normalizeEntry(key: string, e: DiEntryInput): DiEntry {
 function warnKeyMismatch(key: string, className: string) {
   console.warn(
     `[elysiax] provides 键 "${key}" 与类名推导键 "${lowerFirst(className)}" 不一致，` +
-      `其他模块必须用 "${key}" 才能注入`,
+    `其他模块必须用 "${key}" 才能注入`,
   );
 }
 
@@ -285,8 +285,8 @@ export async function codegen(
     if (state[i] === 1) {
       throw new Error(
         `检测到依赖环: ${[...chain, mods[i]!.manifest.name].join(" → ")}\n` +
-          `InferDI 不支持双向 Lazy —— 请按限界上下文拆成单向依赖，` +
-          `跨上下文的组合上移到 controller（见 CLAUDE.md）。`,
+        `InferDI 不支持双向 Lazy —— 请按限界上下文拆成单向依赖，` +
+        `跨上下文的组合上移到 controller（见 CLAUDE.md）。`,
       );
     }
     state[i] = 1;
@@ -328,9 +328,9 @@ export async function codegen(
       const lazy = lazyKeys.get(key);
       lines.push(
         `    .registerClass(${JSON.stringify(key)}, ${diExpr}.provides[${JSON.stringify(key)}].class, ` +
-          `${JSON.stringify(e.deps)}, ${JSON.stringify(e.lifetime ?? "singleton")}` +
-          (lazy ? `, ${JSON.stringify(lazy)}` : "") +
-          `)`,
+        `${JSON.stringify(e.deps)}, ${JSON.stringify(e.lifetime ?? "singleton")}` +
+        (lazy ? `, ${JSON.stringify(lazy)}` : "") +
+        `)`,
       );
     }
   };
@@ -357,8 +357,8 @@ export async function codegen(
     } else {
       ml.push(
         `const ${id}Manifest = { name: ${JSON.stringify(n)}, version: ${JSON.stringify(mod.manifest.version)}` +
-          (mod.manifest.route ? `, route: ${JSON.stringify(mod.manifest.route)}` : "") +
-          ` };`,
+        (mod.manifest.route ? `, route: ${JSON.stringify(mod.manifest.route)}` : "") +
+        ` };`,
       );
     }
     if (mod.controller)

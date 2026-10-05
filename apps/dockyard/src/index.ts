@@ -14,7 +14,7 @@ import { startContainerPoller } from "./modules/deploy/container-poller";
 
 await start({ port: 3002, index, gen });
 
-// GitHub 更新轮询（替代 webhook）：只提示不自动部署
+// GitHub 更新轮询：只提示不自动部署
 startUpdatePoller();
 // 容器状态轮询 → 事件总线 → SSE：SSH 频率与前端用户数无关
 startContainerPoller();

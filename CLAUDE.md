@@ -8,3 +8,7 @@ InferDI 不支持双向 Lazy 循环，我们采用限界上下文，一个词或
 ## 技术文档
 - [elysia2](./apps/website/docs/elysia2.0.md)
 - [drizzle](./apps/website/docs/drizzle/)
+
+
+
+## 思考必须中文

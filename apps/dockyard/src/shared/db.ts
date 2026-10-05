@@ -10,8 +10,7 @@ const sqlite = new Database(appPaths.dbFile);
 sqlite.run("PRAGMA journal_mode = WAL;");
 sqlite.run("PRAGMA foreign_keys = ON;");
 
-// 注意：drizzle rc 的 sqlite config 不再接受 schema（无 db.query），
-// 统一用 db.select()/insert()/update()/delete() 核心 API
+
 export const db = drizzle({ client: sqlite });
 
 // 启动即迁移（同步，桌面工具免交互）

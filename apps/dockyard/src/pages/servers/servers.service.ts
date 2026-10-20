@@ -1,6 +1,6 @@
 import { ServiceError } from "@elysiax/core";
 import type Docker from "dockerode";
-import type { Server } from "../../shared/schema";
+import type { Server } from "./schema";
 import { encryptSecret } from "../../shared/crypto";
 import { SshPool, UnknownHostKeyError } from "./ssh-pool";
 import { DockerRelay } from "./docker-relay";

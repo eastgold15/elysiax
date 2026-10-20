@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { parseOwnerRepo } from "../../shared/github";
+import { parseOwnerRepo } from "../github/github.socket";
 import { readGitRemote } from "./local.service";
 import type { ProjectRepository } from "./projects.repository";
 

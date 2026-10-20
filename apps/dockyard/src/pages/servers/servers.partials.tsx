@@ -2,9 +2,10 @@ import { defineRoutes } from "../../../.elysiax";
 import { routes } from "../../../.elysiax";
 import { t } from "elysia";
 import type { Component } from "@workspace/htmx";
-import type { Server, ServerResource } from "../../shared/schema";
+import type { Server } from "./schema";
+import type { ServerResource } from "../resources/resources.socket";
 import type { ServerService } from "./servers.service";
-import type { ResourceService } from "../resources/resources.service";
+import type { ResourceService } from "../resources/resources.socket";
 import { Badge, Button, Empty, Field, PageHeader } from "../../shared/ui";
 
 const dockerBadge = (s: Server) => {
@@ -140,10 +141,8 @@ const ResourceRow: Component<{ resource: ServerResource; url: string | null }> =
 export const ResourceListBody: Component<{
   server: Server;
   resources: { resource: ServerResource; url: string | null }[];
-  message?: string;
-}> = ({ server, resources, message }) => (
+}> = ({ server, resources }) => (
   <div id="shared-resources-body" class="flex flex-col gap-3">
-    {message ? <pre class="mono max-h-40 overflow-auto rounded bg-harbor-950 p-2 text-xs whitespace-pre-wrap text-signal-500">{message}</pre> : null}
     {resources.length === 0 ? (
       <p class="text-xs text-neutral-500">还没有共享资源——部署 Redis / 数据库后，连接串会成为这台服务器的共享变量，任何项目都能引用。</p>
     ) : (
@@ -166,10 +165,9 @@ export const ResourceListBody: Component<{
 export const SharedResourcesModal: Component<{
   server: Server;
   resources: { resource: ServerResource; url: string | null }[];
-  message?: string;
-}> = ({ server, resources, message }) => (
+}> = ({ server, resources }) => (
   <Modal title={`共享资源 — ${server.name}`}>
-    <ResourceListBody server={server} resources={resources} message={message} />
+    <ResourceListBody server={server} resources={resources} />
   </Modal>
 );
 

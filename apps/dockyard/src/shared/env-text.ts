@@ -4,7 +4,11 @@
  * dotenv 的 browser dist 会 require("child_process")，Bun 浏览器打包直接挂，
  * 所以这里实现最小的解析/序列化（引号、转义、注释、export 前缀）。
  */
-import type { OpenshipEnvValue } from "./detect";
+/** 与 detect 的 OpenshipEnvValue 结构一致（本地定义保持本模块零依赖） */
+export interface EnvValue {
+  value: string;
+  secret: boolean;
+}
 
 /** 含空白/引号/# 的值按 dotenv 双引号规则转义 */
 function quoteEnv(value: string): string {
@@ -12,7 +16,7 @@ function quoteEnv(value: string): string {
 }
 
 /** env map → .env 文本 */
-export function envMapToText(env: Record<string, OpenshipEnvValue>): string {
+export function envMapToText(env: Record<string, EnvValue>): string {
   return Object.entries(env).map(([k, v]) => `${k}=${quoteEnv(v.value)}`).join("\n");
 }
 
@@ -35,8 +39,8 @@ function unquote(value: string): string {
 }
 
 /** .env 文本 → env map（KEY=VALUE 行；# 注释、export 前缀、单/双引号） */
-export function textToEnvMap(text: string): Record<string, OpenshipEnvValue> {
-  const out: Record<string, OpenshipEnvValue> = {};
+export function textToEnvMap(text: string): Record<string, EnvValue> {
+  const out: Record<string, EnvValue> = {};
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
     if (!line || line.startsWith("#")) continue;

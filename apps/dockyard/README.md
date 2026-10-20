@@ -15,7 +15,9 @@ bunx elysiax build [--desktop]
 
 ## 架构
 
-- `src/pages/`——页面树：projects/servers（htmx CRUD）、canvas（client 模式整页 React）、
-  deploy/edge/github/resources（纯服务模块）
-- `src/app.layout.tsx`——全局壳；`src/shared/ui/`——L4 共享渲染
+- `src/pages/`——原子树：每个原子自含 `schema.ts`/`migrations.ts`/`<name>.socket.ts`，
+  跨原子 import 只走插座（doctor 门禁强制）；projects/servers（htmx CRUD）、
+  canvas（client 模式整页 React）、deploy/edge/github/resources（纯服务模块）、
+  deploy/runtime 与 deploy/backup（嵌套原子）
+- `src/app.layout.tsx`——全局壳；`src/shared/`——只剩基建（db/paths/crypto/env-text/ui）
 - 文档：[dockyard 实战](../website/docs/dockyard.mdx) · [画布 client 模式](../website/docs/canvas-client.mdx)

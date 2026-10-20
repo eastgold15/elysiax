@@ -1,7 +1,9 @@
-/** client → /api/canvas 的 fetch 助手：JSON 进出，错误统一抛 Error(message) */
+/** client 的 fetch 助手：JSON 进出，错误统一抛 Error(message)。
+ *  端点分流：部署语境在 /api/deploy/*（api），画布原生在 /api/canvas/*（canvasApi） */
 import { routes } from "../../../../.elysiax/routes.gen";
 
-export const api = routes.pages.canvas;
+export const api = routes.pages.deploy;
+export const canvasApi = routes.pages.canvas;
 
 export async function getJSON<T>(url: string): Promise<T> {
   const res = await fetch(url);

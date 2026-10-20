@@ -6,25 +6,16 @@ import { Readable, Writable } from "node:stream";
 import { openSftp } from "@meitaim/ssh/sftp";
 import type { AppPaths } from "../../shared/paths";
 import { decryptSecret, encryptSecret } from "../../shared/crypto";
-import { events } from "../../shared/events";
-import type { DeployTarget, Deployment, DepEdge, Project, TargetService } from "../../shared/schema";
-import type { ProjectRepository } from "../../pages/projects/projects.repository";
-import type { ResourceService, SharedEnv } from "../resources/resources.service";
-import type { ServerService } from "../servers/servers.service";
-import type { GithubService } from "../github/github.service";
-import type { CanvasRepository } from "../canvas/canvas.repository";
+import { events } from "./events";
+import type { DeployTarget, Deployment, DepEdge, TargetService } from "./schema";
+import type { Project, ProjectService } from "../projects/projects.socket";
+import type { ResourceService, SharedEnv } from "../resources/resources.socket";
+import type { ServerService } from "../servers/servers.socket";
+import { parseOwnerRepo, type GithubService } from "../github/github.socket";
+import type { CanvasService } from "../canvas/canvas.socket";
 import type { DeployRepository } from "./deploy.repository";
-import type { EdgeService } from "../edge/edge.service";
-import {
-  configToDetect,
-  detectFromCompose,
-  envFilePaths,
-  parseOpenshipConfigJson,
-  textToEnvMap,
-  type DetectResult,
-  type DetectedService,
-} from "./detect";
-import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import type { EdgeService } from "../edge/edge.socket";
+import { envFilePaths, type DetectedService } from "./detect";
 import {
   containerNameOf,
   dbCompose,
@@ -35,7 +26,7 @@ import {
   logicalDbUrl,
   suggestedEnvKey,
   type DbType,
-} from "./db-templates";
+} from "../resources/resources.socket";
 
 type Log = (line: string) => Promise<void>;
 
@@ -63,10 +54,6 @@ async function run(cmd: string[], cwd: string, log: Log): Promise<void> {
   if (code !== 0) throw new ServiceError(`命令失败（exit ${code}）: ${cmd.join(" ")}`);
 }
 
-// parseOwnerRepo 上移 shared/github.ts（projects 绑定仓库也要用）；此处 re-export 兼容
-export { parseOwnerRepo } from "../../shared/github";
-import { parseOwnerRepo } from "../../shared/github";
-
 export class DeployService {
   /** 防同 target 重入 */
   private running = new Map<number, Promise<void>>();
@@ -75,18 +62,18 @@ export class DeployService {
     private readonly repo: DeployRepository,
     private readonly serverService: ServerService,
     private readonly github: GithubService,
-    private readonly canvasRepo: CanvasRepository,
+    private readonly canvas: CanvasService,
     private readonly paths: AppPaths,
     private readonly edge: EdgeService,
-    private readonly projectRepo: ProjectRepository,
+    private readonly project: ProjectService,
     private readonly resourceService: ResourceService,
   ) { }
 
   /** 项目导入来源：github = 远端拉代码+服务器构建；local = 本地构建+镜像推送。
    *  旧数据 sourceType 为 null，按 localPath/repoUrl 推断。 */
   private async sourceOf(target: DeployTarget): Promise<{ type: "local" | "github"; project?: Project }> {
-    const node = await this.canvasRepo.byId(target.nodeId);
-    const project = node ? await this.projectRepo.byId(node.projectId) : undefined;
+    const node = await this.canvas.byId(target.nodeId);
+    const project = node ? await this.project.byId(node.projectId) : undefined;
     const type: "local" | "github" =
       project?.sourceType ?? (project?.localPath && !target.repoUrl ? "local" : "github");
     return { type, project };
@@ -151,11 +138,6 @@ export class DeployService {
     return (await this.repo.targetById(target.id))!;
   }
 
-  // ── 域名门面：域名归 edge 上下文，deploy 只是转发（画布/控制器不直接碰 edge）──
-  domainsOfTarget(targetId: number) {
-    return this.edge.domainsOfTarget(targetId);
-  }
-
   /**
    * app 的 compose 服务清单（画布小卡片 + 容器标签对账）：
    * 优先读 servicesJson 列；为 null（存量 target）则从本地仓库缓存跑 compose config 惰性补全并写回。
@@ -208,18 +190,6 @@ export class DeployService {
     }
   }
 
-  domainById(id: number) {
-    return this.edge.domainById(id);
-  }
-
-  addDomain(targetId: number, input: { hostname: string; targetPort: number; serviceName?: string }) {
-    return this.edge.addDomain(targetId, input);
-  }
-
-  removeDomain(id: number) {
-    return this.edge.removeDomain(id);
-  }
-
   /** 域名变更后的 edge 全量对账（增删域名、手动「重新同步」按钮共用） */
   async syncEdge(targetId: number, log: Log = async () => {}) {
     const target = await this.repo.targetById(targetId);
@@ -227,72 +197,11 @@ export class DeployService {
     await this.edge.syncServer(await this.nodeServerId(target), log);
   }
 
-  // ── 自动识别：gh contents API 直读文件（不克隆，秒级）→ openship.json 声明覆盖 → compose 回退 ──
-  async detectRepo(input: { repoUrl: string; branch: string }): Promise<DetectResult> {
-    const ownerRepo = parseOwnerRepo(input.repoUrl);
-    const branch = input.branch || "main";
-    const read = (path: string) => this.github.fileContent(ownerRepo, path, branch);
-
-    const openshipText = await read("openship.json");
-    if (openshipText !== null) {
-      const parsed = parseOpenshipConfigJson(openshipText);
-      const composePath = parsed.config?.composePath ?? "docker-compose.yml";
-      return configToDetect(parsed, await read(composePath));
-    }
-    for (const candidate of ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"]) {
-      const text = await read(candidate);
-      if (text !== null) {
-        const result = detectFromCompose(text);
-        result.composePath = candidate;
-        return result;
-      }
-    }
-    return {
-      source: "none",
-      composePath: "docker-compose.yml",
-      services: [],
-      rootEnv: {},
-      errors: [],
-      warnings: ["仓库里既没有 openship.json 也没有 compose 文件，请手动填写部署参数"],
-    };
-  }
-
-  /** 本地文件夹导入的识别：直接读本机目录的 openship.json / compose（不走 GitHub API） */
-  async detectLocal(input: { localPath: string; rootDir?: string }): Promise<DetectResult> {
-    const dir = join(input.localPath, input.rootDir ?? "");
-    const read = async (path: string): Promise<string | null> => {
-      const file = Bun.file(join(dir, path));
-      return (await file.exists()) ? file.text() : null;
-    };
-    const openshipText = await read("openship.json");
-    if (openshipText !== null) {
-      const parsed = parseOpenshipConfigJson(openshipText);
-      const composePath = parsed.config?.composePath ?? "docker-compose.yml";
-      return configToDetect(parsed, await read(composePath));
-    }
-    for (const candidate of ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"]) {
-      const text = await read(candidate);
-      if (text !== null) {
-        const result = detectFromCompose(text);
-        result.composePath = candidate;
-        return result;
-      }
-    }
-    return {
-      source: "none",
-      composePath: "docker-compose.yml",
-      services: [],
-      rootEnv: {},
-      errors: [],
-      warnings: ["本地目录里既没有 openship.json 也没有 compose 文件，请手动填写部署参数"],
-    };
-  }
-
   // ── 依赖与连接串引用 ──
 
   /** 项目空间内可引用的数据库连接（app 向导/变量抽屉的选择器数据） */
   async dbRefsOfNode(nodeId: number): Promise<DbRef[]> {
-    const node = await this.canvasRepo.byId(nodeId);
+    const node = await this.canvas.byId(nodeId);
     if (!node) return [];
     const dbs = await this.repo.dbTargetsOfProject(node.projectId);
     const refs: DbRef[] = [];
@@ -343,39 +252,6 @@ export class DeployService {
     });
   }
 
-  /** Console Tab：容器交互式终端（docker exec TTY，调用方负责桥接 WS 与关闭流） */
-  async openConsole(targetId: number, svcName?: string) {
-    const target = await this.repo.targetById(targetId);
-    if (!target) throw new ServiceError("部署目标不存在");
-    const serverId = await this.nodeServerId(target);
-    const remote = await this.serverService.docker(serverId);
-
-    let containerName: string;
-    if (target.kind === "db") {
-      if (!target.containerName) throw new ServiceError("数据库目标缺少容器名");
-      containerName = target.containerName;
-    } else {
-      const { project, services } = await this.servicesOfTarget(target);
-      const svc = svcName || services[0]?.name;
-      if (!svc) throw new ServiceError("没有可进入的服务（先部署，或指定服务名）");
-      containerName = `${project ?? `dockyard-${target.id}`}-${svc}-1`;
-    }
-    const containers = await remote.listContainers();
-    const hit = containers.find((c) => c.Names.includes(`/${containerName}`));
-    if (!hit) throw new ServiceError(`容器 ${containerName} 未在运行`);
-    const container = remote.getContainer(hit.Id);
-    const exec = await container.exec({
-      Cmd: ["/bin/sh", "-c", "command -v bash >/dev/null 2>&1 && exec bash || exec sh"],
-      Tty: true,
-      AttachStdin: true,
-      AttachStdout: true,
-      AttachStderr: true,
-      Env: ["TERM=xterm-256color", "COLORTERM=truecolor"],
-    });
-    const stream = await exec.start({ hijack: true, stdin: true, Tty: true });
-    return { exec, stream };
-  }
-
   /** app 的 .env 明文（变量抽屉回显；enc1: 解密，仅本机控制面） */
   envTextOf(target: DeployTarget): string {
     if (!target.envJson) return "";
@@ -383,6 +259,16 @@ export class DeployService {
       return decryptSecret(target.envJson);
     } catch {
       return "";
+    }
+  }
+
+  /** 逻辑库连接串（画布复制按钮；本地控制面，落库已 enc1: 加密）。非逻辑库 → undefined */
+  logicalUrlOf(target: DeployTarget): string | undefined {
+    if (target.kind !== "db" || !target.instanceOf || !target.envJson) return undefined;
+    try {
+      return (JSON.parse(decryptSecret(target.envJson)) as { url?: string }).url;
+    } catch {
+      return undefined;
     }
   }
 
@@ -423,7 +309,7 @@ export class DeployService {
     await this.repo.clearGroup(groupId);
   }
 
-  // ── 服务抽屉（Railway Service View）：部署历史 / 容器操作 / 服务变量 / 指标 / 备份 ──
+  // ── 部署历史（服务抽屉 Deployments Tab）──
 
   deploymentsOfTarget(targetId: number) {
     return this.repo.deploymentsOfTarget(targetId);
@@ -433,225 +319,11 @@ export class DeployService {
     return this.repo.deploymentById(id);
   }
 
-  /** target → 它所在服务器的 dockerode 连接（SSH 中继） */
-  private async dockerOfTarget(target: DeployTarget) {
-    const node = await this.canvasRepo.byId(target.nodeId);
-    if (!node) throw new ServiceError("画布节点不存在");
-    return this.serverService.docker(node.serverId);
-  }
-
-  /** 服务 → 容器：app 服务按 compose 标签对账；db 实例按 dockyard.target-id 标签（running 优先） */
-  private async containerOfService(target: DeployTarget, svcName?: string) {
-    const docker = await this.dockerOfTarget(target);
-    const containers = await docker.listContainers({ all: true }) as unknown as {
-      Id: string; Names?: string[]; Labels?: Record<string, string>; State?: string;
-    }[];
-    let hit;
-    if (target.kind === "app" && svcName) {
-      const { project } = await this.servicesOfTarget(target);
-      const match = (c: { Labels?: Record<string, string> }) =>
-        c.Labels?.["com.docker.compose.project"] === project &&
-        c.Labels?.["com.docker.compose.service"] === svcName;
-      hit = containers.find((c) => match(c) && c.State === "running") ?? containers.find(match);
-    } else {
-      const owned = (c: { Labels?: Record<string, string>; Names?: string[] }) =>
-        c.Labels?.["dockyard.target-id"] === String(target.id) ||
-        c.Names?.includes(`/${containerNameOf(target.id, target.name)}`);
-      hit = containers.find((c) => owned(c) && c.State === "running") ?? containers.find(owned);
-    }
-    return hit ? docker.getContainer(hit.Id) : null;
-  }
-
-  /** 重启单个服务容器（svcName 空 = db 实例整体） */
-  async restartService(targetId: number, svcName?: string) {
+  /** override compose 整列覆盖（runtime 原子的资源限制/服务变量保存用；enc1: 加密在调用方） */
+  async updateOverrideCompose(targetId: number, overrideCompose: string | null) {
     const target = await this.repo.targetById(targetId);
     if (!target) throw new ServiceError("部署目标不存在");
-    const container = await this.containerOfService(target, svcName);
-    if (!container) throw new ServiceError("容器未运行（先部署）");
-    await container.restart();
-  }
-
-  /** 一次性资源快照（docker stats stream:false；容器不在 → null） */
-  async serviceStats(targetId: number, svcName?: string): Promise<{
-    state: string; cpuPercent: number; memUsage: number; memLimit: number; netRx: number; netTx: number;
-  } | null> {
-    const target = await this.repo.targetById(targetId);
-    if (!target) return null;
-    try {
-      const container = await this.containerOfService(target, svcName);
-      if (!container) return null;
-      const info = await container.inspect();
-      if (!info.State.Running) return { state: info.State.Status ?? "exited", cpuPercent: 0, memUsage: 0, memLimit: 0, netRx: 0, netTx: 0 };
-      const s = await container.stats({ stream: false });
-      const cpuDelta = s.cpu_stats.cpu_usage.total_usage - (s.precpu_stats.cpu_usage?.total_usage ?? 0);
-      const sysDelta = s.cpu_stats.system_cpu_usage - (s.precpu_stats.system_cpu_usage ?? 0);
-      const cores = s.cpu_stats.online_cpus ?? s.cpu_stats.cpu_usage.percpu_usage?.length ?? 1;
-      const cpuPercent = sysDelta > 0 ? (cpuDelta / sysDelta) * cores * 100 : 0;
-      let netRx = 0, netTx = 0;
-      for (const n of Object.values(s.networks ?? {})) { netRx += n.rx_bytes; netTx += n.tx_bytes; }
-      return {
-        state: "running",
-        cpuPercent: Math.round(cpuPercent * 10) / 10,
-        memUsage: s.memory_stats.usage ?? 0,
-        memLimit: s.memory_stats.limit ?? 0,
-        netRx, netTx,
-      };
-    } catch {
-      return null; // 服务器离线/SSH 失败 → 前端显示"指标不可用"
-    }
-  }
-
-  /** 容器实时日志（≠ 部署日志）：docker logs --tail 300，非 TTY 输出带 8 字节多路复用帧头需剥离 */
-  async serviceLogs(targetId: number, svcName?: string): Promise<string> {
-    const target = await this.repo.targetById(targetId);
-    if (!target) return "部署目标不存在";
-    try {
-      const container = await this.containerOfService(target, svcName);
-      if (!container) return "容器未运行（先部署）";
-      const buf = await container.logs({ stdout: true, stderr: true, tail: 300 });
-      const out: Buffer[] = [];
-      let off = 0;
-      while (off + 8 <= buf.length) {
-        const size = buf.readUInt32BE(off + 4);
-        out.push(buf.subarray(off + 8, off + 8 + size));
-        off += 8 + size;
-      }
-      return Buffer.concat(out).toString("utf8").trimEnd() || "（无日志输出）";
-    } catch (e) {
-      return `日志不可用：${(e as Error).message}`;
-    }
-  }
-
-  /** 服务的资源限制（override compose 的 cpus/mem_limit；无 → {}） */
-  async serviceResources(targetId: number, svcName: string): Promise<{ cpuCores?: number; memoryMb?: number }> {
-    const target = await this.repo.targetById(targetId);
-    if (!target?.overrideCompose) return {};
-    try {
-      const doc = parseYaml(decryptSecret(target.overrideCompose)) as {
-        services?: Record<string, { cpus?: number | string; mem_limit?: string }>;
-      } | null;
-      const svc = doc?.services?.[svcName];
-      const cpu = svc?.cpus !== undefined ? Number(svc.cpus) : undefined;
-      const mem = svc?.mem_limit ? Number.parseInt(svc.mem_limit, 10) : undefined;
-      return {
-        cpuCores: cpu !== undefined && Number.isFinite(cpu) ? cpu : undefined,
-        memoryMb: mem !== undefined && Number.isFinite(mem) ? mem : undefined,
-      };
-    } catch {
-      return {};
-    }
-  }
-
-  /** 保存资源限制：只动 override compose 里该服务的 cpus/mem_limit（setServiceEnv 同款 merge） */
-  async setServiceResources(targetId: number, svcName: string, cpuCores?: number, memoryMb?: number) {
-    const target = await this.repo.targetById(targetId);
-    if (!target) throw new ServiceError("部署目标不存在");
-    type Doc = { services?: Record<string, Record<string, unknown>> };
-    let doc: Doc = { services: {} };
-    if (target.overrideCompose) {
-      try { doc = (parseYaml(decryptSecret(target.overrideCompose)) as Doc | null) ?? { services: {} }; } catch { /* 损坏则重建 */ }
-    }
-    doc.services ??= {};
-    const svc = (doc.services[svcName] ??= {});
-    if (cpuCores) svc.cpus = cpuCores; else delete svc.cpus;
-    if (memoryMb) svc.mem_limit = `${memoryMb}m`; else delete svc.mem_limit;
-    if (Object.keys(svc).length === 0) delete doc.services[svcName];
-    const empty = Object.keys(doc.services).length === 0 && Object.keys(doc).length === 1;
-    await this.repo.updateTarget(targetId, {
-      overrideCompose: empty ? null : encryptSecret(stringifyYaml(doc)),
-    });
-  }
-
-  /** 服务的注入变量（override compose 的 environment，enc1: 加密列里） */
-  async serviceEnvText(targetId: number, svcName: string): Promise<string> {
-    const target = await this.repo.targetById(targetId);
-    if (!target?.overrideCompose) return "";
-    try {
-      const doc = parseYaml(decryptSecret(target.overrideCompose)) as {
-        services?: Record<string, { environment?: Record<string, string> | string[] }>;
-      } | null;
-      const env = doc?.services?.[svcName]?.environment;
-      if (!env) return "";
-      // override compose 的 environment 是纯 string map（detectToOverrideCompose 落的就是这个格式）
-      if (Array.isArray(env)) return env.join("\n");
-      return Object.entries(env).map(([k, v]) => `${k}=${v.includes(" ") ? JSON.stringify(v) : v}`).join("\n");
-    } catch {
-      return "";
-    }
-  }
-
-  /** 保存服务变量：只动 override compose 里该服务的 environment，其余（资源限制等）原样保留 */
-  async setServiceEnv(targetId: number, svcName: string, envText: string) {
-    const target = await this.repo.targetById(targetId);
-    if (!target) throw new ServiceError("部署目标不存在");
-    type Doc = { services?: Record<string, Record<string, unknown>> };
-    let doc: Doc = { services: {} };
-    if (target.overrideCompose) {
-      try { doc = (parseYaml(decryptSecret(target.overrideCompose)) as Doc | null) ?? { services: {} }; } catch { /* 损坏则重建 */ }
-    }
-    doc.services ??= {};
-    const svc = (doc.services[svcName] ??= {});
-    const env = Object.fromEntries(Object.entries(textToEnvMap(envText)).map(([k, v]) => [k, v.value]));
-    if (Object.keys(env).length) svc.environment = env;
-    else delete svc.environment;
-    if (Object.keys(svc).length === 0) delete doc.services[svcName];
-    const empty = Object.keys(doc.services).length === 0 && Object.keys(doc).length === 1;
-    await this.repo.updateTarget(targetId, {
-      overrideCompose: empty ? null : encryptSecret(stringifyYaml(doc)),
-    });
-  }
-
-  // ── Backups（db 实例；逻辑库/应用服务暂无卷，不出 Tab）──
-
-  private backupsDir(targetId: number) {
-    return join(this.paths.dataDir, "backups", `target-${targetId}`);
-  }
-
-  /** 已有备份列表（新→旧） */
-  async backupsOf(targetId: number): Promise<{ file: string; size: number; at: Date }[]> {
-    const dir = this.backupsDir(targetId);
-    if (!existsSync(dir)) return [];
-    const { readdir, stat } = await import("node:fs/promises");
-    const files = (await readdir(dir)).filter((f) => f.endsWith(".sql.gz") || f.endsWith(".dump.gz"));
-    const rows = await Promise.all(files.map(async (file) => {
-      const st = await stat(join(dir, file));
-      return { file, size: st.size, at: st.mtime };
-    }));
-    return rows.sort((a, b) => b.at.getTime() - a.at.getTime());
-  }
-
-  /** 立即备份：远端容器内 dump → gzip → base64（二进制安全过 ssh exec 的文本通道）→ 本地落盘 */
-  async backupNow(targetId: number): Promise<string> {
-    const target = await this.repo.targetById(targetId);
-    if (!target || target.kind !== "db" || target.instanceOf) throw new ServiceError("只有数据库实例支持备份");
-    const dumpCmd: Record<string, string> = {
-      postgres: 'pg_dumpall -U "${POSTGRES_USER:-postgres}"',
-      mysql: 'mysqldump --all-databases -uroot -p"$MYSQL_ROOT_PASSWORD"',
-      mongo: 'mongodump --archive -u "$MONGO_INITDB_ROOT_USERNAME" -p "$MONGO_INITDB_ROOT_PASSWORD"',
-      redis: "redis-cli save >/dev/null && cat /data/dump.rdb",
-    };
-    const cmd = dumpCmd[target.dbType ?? ""] ?? dumpCmd.postgres!;
-    const node = await this.canvasRepo.byId(target.nodeId);
-    if (!node) throw new ServiceError("画布节点不存在");
-    const client = await this.serverService.ssh(node.serverId);
-    const container = containerNameOf(target.id, target.name);
-    const { stdout, stderr, code } = await client.exec(
-      `docker exec ${container} sh -c '${cmd}' | gzip | base64 -w0`,
-    );
-    if (code !== 0) throw new ServiceError(`备份失败：${stderr.trim() || `exit ${code}`}`);
-    const dir = this.backupsDir(targetId);
-    await mkdir(dir, { recursive: true });
-    const ext = target.dbType === "mongo" || target.dbType === "redis" ? "dump.gz" : "sql.gz";
-    const file = `${new Date().toISOString().replace(/[:.]/g, "-")}.${ext}`;
-    await Bun.write(join(dir, file), Buffer.from(stdout.trim(), "base64"));
-    return file;
-  }
-
-  /** 备份文件绝对路径（防目录穿越：只认 backupsDir 下的纯文件名） */
-  backupFilePath(targetId: number, file: string): string | null {
-    if (!/^[\w.-]+\.(sql|dump)\.gz$/.test(file)) return null;
-    const abs = join(this.backupsDir(targetId), file);
-    return existsSync(abs) ? abs : null;
+    await this.repo.updateTarget(targetId, { overrideCompose });
   }
 
   /** 该节点上可托管逻辑库的实例（kind=db、同类型、非逻辑库） */
@@ -667,7 +339,7 @@ export class DeployService {
     await this.assertNameFree(input.nodeId, "db", input.name);
     if (!input.remoteDir.trim()) throw new ServiceError("新建实例需要填写远端目录");
     const target = await this.repo.createTarget({ kind: "db", ...input });
-    const node = await this.canvasRepo.byId(input.nodeId);
+    const node = await this.canvas.byId(input.nodeId);
     const rendered = dbCompose(input.dbType, input.name, {
       targetId: target.id,
       project: `project-${node?.projectId ?? "?"}`,
@@ -735,7 +407,7 @@ export class DeployService {
     const target = await this.repo.targetById(targetId);
     if (!target) throw new ServiceError(`部署目标不存在: ${targetId}`);
     // 画布 SSE 频道：状态迁移实时推给订阅了该 project 的浏览器（structure 不变，不走 refresh）
-    const node = await this.canvasRepo.byId(target.nodeId);
+    const node = await this.canvas.byId(target.nodeId);
     const ch = node ? `project:${node.projectId}` : null;
     const dep = await this.repo.createDeployment(targetId);
     const log: Log = async (line) => {
@@ -1167,7 +839,7 @@ export class DeployService {
 
   /** target → node → serverId（deploy 位于 canvas 之上，可直接查） */
   private async nodeServerId(target: DeployTarget): Promise<number> {
-    const node = await this.canvasRepo.byId(target.nodeId);
+    const node = await this.canvas.byId(target.nodeId);
     if (!node) throw new ServiceError("画布节点已删除");
     return node.serverId;
   }

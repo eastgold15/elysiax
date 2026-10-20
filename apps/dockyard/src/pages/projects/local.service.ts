@@ -1,8 +1,8 @@
 import { ServiceError } from "@elysiax/core";
 import { readdir } from "node:fs/promises";
 import { join } from "@visulima/path";
-import { expandHome, loadConfig, saveConfig } from "../../shared/config";
-import { parseOwnerRepo } from "../../shared/github";
+import { expandHome, loadConfig, saveConfig } from "./config";
+import { parseOwnerRepo } from "../github/github.socket";
 
 /** 扫描发现的本地项目（磁盘为准，registeredId 非空 = 已落库） */
 export interface LocalProject {

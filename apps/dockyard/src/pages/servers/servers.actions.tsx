@@ -75,29 +75,20 @@ export default defineRoutes()
       }),
     },
     async ({ di, body }) => {
+      // 预期错误（重名/非法 envKey 等）由 resourceService 抛 ServiceError，框架统一回显
       const svc = di.get("resourceService");
-      let message: string | undefined;
-      try {
-        await svc.create({ serverId: body.serverId, name: body.name.trim(), dbType: body.dbType, envKey: body.envKey });
-      } catch (e) {
-        message = (e as Error).message;
-      }
+      await svc.create({ serverId: body.serverId, name: body.name.trim(), dbType: body.dbType, envKey: body.envKey });
       const { server, resources } = await resourcesModel(svc, di.get("serverService"), body.serverId);
-      return <ResourceListBody server={server} resources={resources} message={message} />;
+      return <ResourceListBody server={server} resources={resources} />;
     },
   )
   .post("/resources/:id/deploy", { params: t.Object({ id: t.Number() }) }, async ({ di, params }) => {
     const svc = di.get("resourceService");
     const target = await svc.byId(params.id);
     if (!target) return "";
-    let message: string | undefined;
-    try {
-      await svc.deploy(params.id);
-    } catch (e) {
-      message = (e as Error).message;
-    }
+    await svc.deploy(params.id);
     const { server, resources } = await resourcesModel(svc, di.get("serverService"), target.serverId);
-    return <ResourceListBody server={server} resources={resources} message={message} />;
+    return <ResourceListBody server={server} resources={resources} />;
   })
   .delete("/resources/:id", { params: t.Object({ id: t.Number() }) }, async ({ di, params }) => {
     const svc = di.get("resourceService");

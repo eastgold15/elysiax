@@ -276,10 +276,10 @@ export function detectFromCompose(composeText: string): DetectResult {
   return { source: "compose", composePath: "docker-compose.yml", services, rootEnv: {}, errors: [], warnings };
 }
 
-import { envMapToText } from "./env-text";
+import { envMapToText } from "../../shared/env-text";
 
 // env 文本转换函数抽到了零依赖的 env-text.ts（canvas client 也要打包），此处转出口保持旧 import 不破
-export { serviceEnvToText, textToEnvMap } from "./env-text";
+export { serviceEnvToText, textToEnvMap } from "../../shared/env-text";
 
 /** rootEnv → .env 文本（服务 compose 的 ${VAR} 插值；服务级变量走 override 的 environment，不扁平化） */
 export function detectToEnvText(detect: Pick<DetectResult, "rootEnv">): string {
@@ -303,4 +303,69 @@ export function detectToOverrideCompose(detect: Pick<DetectResult, "services">):
   }
   if (Object.keys(services).length === 0) return null;
   return stringifyYaml({ services });
+}
+
+// ── 识别入口（原 DeployService.detectRepo/detectLocal，下沉为纯函数）──
+import { join } from "node:path";
+import { parseOwnerRepo, type GithubService } from "../github/github.socket";
+
+/** 仓库识别：gh contents API 直读文件（不克隆，秒级）→ openship.json 声明覆盖 → compose 回退 */
+export async function detectRepo(github: GithubService, input: { repoUrl: string; branch: string }): Promise<DetectResult> {
+  const ownerRepo = parseOwnerRepo(input.repoUrl);
+  const branch = input.branch || "main";
+  const read = (path: string) => github.fileContent(ownerRepo, path, branch);
+
+  const openshipText = await read("openship.json");
+  if (openshipText !== null) {
+    const parsed = parseOpenshipConfigJson(openshipText);
+    const composePath = parsed.config?.composePath ?? "docker-compose.yml";
+    return configToDetect(parsed, await read(composePath));
+  }
+  for (const candidate of ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"]) {
+    const text = await read(candidate);
+    if (text !== null) {
+      const result = detectFromCompose(text);
+      result.composePath = candidate;
+      return result;
+    }
+  }
+  return {
+    source: "none",
+    composePath: "docker-compose.yml",
+    services: [],
+    rootEnv: {},
+    errors: [],
+    warnings: ["仓库里既没有 openship.json 也没有 compose 文件，请手动填写部署参数"],
+  };
+}
+
+/** 本地文件夹导入的识别：直接读本机目录的 openship.json / compose（不走 GitHub API） */
+export async function detectLocal(input: { localPath: string; rootDir?: string }): Promise<DetectResult> {
+  const dir = join(input.localPath, input.rootDir ?? "");
+  const read = async (path: string): Promise<string | null> => {
+    const file = Bun.file(join(dir, path));
+    return (await file.exists()) ? file.text() : null;
+  };
+  const openshipText = await read("openship.json");
+  if (openshipText !== null) {
+    const parsed = parseOpenshipConfigJson(openshipText);
+    const composePath = parsed.config?.composePath ?? "docker-compose.yml";
+    return configToDetect(parsed, await read(composePath));
+  }
+  for (const candidate of ["docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"]) {
+    const text = await read(candidate);
+    if (text !== null) {
+      const result = detectFromCompose(text);
+      result.composePath = candidate;
+      return result;
+    }
+  }
+  return {
+    source: "none",
+    composePath: "docker-compose.yml",
+    services: [],
+    rootEnv: {},
+    errors: [],
+    warnings: ["本地目录里既没有 openship.json 也没有 compose 文件，请手动填写部署参数"],
+  };
 }

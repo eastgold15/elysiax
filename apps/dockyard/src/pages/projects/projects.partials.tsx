@@ -1,9 +1,9 @@
 import { defineRoutes } from "../../../.elysiax";
 import { routes } from "../../../.elysiax";
 import type { Component } from "@workspace/htmx";
-import type { Project } from "../../shared/schema";
-import { configFile, loadConfig } from "../../shared/config";
-import type { RepoBrief } from "../github/github.service";
+import type { Project } from "./schema";
+import { configFile, loadConfig } from "./config";
+import type { RepoBrief } from "../github/github.socket";
 import type { LocalProject, LocalService } from "./local.service";
 import type { ProjectService } from "./projects.service";
 import { Button, Empty, PageHeader } from "../../shared/ui";

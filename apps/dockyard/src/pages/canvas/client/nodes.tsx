@@ -7,7 +7,7 @@
 import { memo } from "react";
 import { Handle, NodeResizer, Position, type Node, type NodeProps } from "@xyflow/react";
 import type { CardModel, DomainBadge, GroupModel, ServiceRow, TargetModel } from "../canvas.model";
-import { api, delJSON, patchJSON, postJSON } from "./api";
+import { api, canvasApi, delJSON, patchJSON, postJSON } from "./api";
 import { useServiceState, useTargetLive } from "./live";
 import { emitRefresh, useUi } from "./ui";
 
@@ -74,9 +74,9 @@ const StateDot = ({ targetId, svcName }: { targetId: number; svcName: string }) 
 
 /** NodeResizer 拉伸结束 → 持久化手动尺寸（refetch 后作自动收敛的下限） */
 const persistServerSize = (nodeId: number, w: number, h: number) =>
-  patchJSON(api.nodesById(nodeId), { w: Math.round(w), h: Math.round(h) });
+  patchJSON(canvasApi.nodesById(nodeId), { w: Math.round(w), h: Math.round(h) });
 const persistGroupSize = (groupId: number, w: number, h: number) =>
-  patchJSON(api.groupsById(groupId), { w: Math.round(w), h: Math.round(h) });
+  patchJSON(canvasApi.groupsById(groupId), { w: Math.round(w), h: Math.round(h) });
 const persistTargetSize = (targetId: number, w: number, h: number) =>
   patchJSON(api.targetsByIdLayout(targetId), { w: Math.round(w), h: Math.round(h) });
 

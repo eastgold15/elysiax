@@ -4,7 +4,7 @@
  * + 页头（项目切换）+ Board + DrawerHost（React 模态层，替代 #modal-root + htmx.ajax）。
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, getJSON } from "./api";
+import { api, canvasApi, getJSON } from "./api";
 import { Board } from "./board";
 import { DeployLogModal, DomainsModal, EnvDrawer, NewAppWizard, NewDbModal, ServiceDrawer } from "./drawers";
 import { emitRefresh, UiContext, type UiBus, type View } from "./ui";
@@ -16,13 +16,13 @@ async function resolveProject(): Promise<number | null> {
   const q = new URLSearchParams(location.search);
   const path = q.get("path");
   if (path) {
-    const r = await getJSON<{ projectId: number }>(`${api.resolveLocal()}?path=${encodeURIComponent(path)}`);
+    const r = await getJSON<{ projectId: number }>(`${canvasApi.resolveLocal()}?path=${encodeURIComponent(path)}`);
     return r.projectId;
   }
   const project = q.get("project");
   if (project) return Number(project);
   try {
-    const r = await getJSON<{ projectId: number }>(api.latest());
+    const r = await getJSON<{ projectId: number }>(canvasApi.latest());
     return r.projectId;
   } catch {
     return null;
@@ -55,7 +55,7 @@ export function App() {
       if (id) setProjectId(id);
       else setMissing(true);
     });
-    getJSON<ProjectBrief[]>(api.projects()).then(setProjects).catch(() => {});
+    getJSON<ProjectBrief[]>(canvasApi.projects()).then(setProjects).catch(() => {});
   }, []);
 
   const bus: UiBus = useMemo(() => ({

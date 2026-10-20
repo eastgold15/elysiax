@@ -11,7 +11,7 @@ import {
   AppNodeView, DbNodeView, GroupNodeView, ServerNodeView, ServiceNodeView,
   type CanvasFlowNode,
 } from "./nodes";
-import { api, delJSON, patchJSON, postJSON, putJSON } from "./api";
+import { api, canvasApi, delJSON, patchJSON, postJSON, putJSON } from "./api";
 import { applyLiveEvent, emptyLive, LiveContext, type LiveState } from "./live";
 import { useUi } from "./ui";
 
@@ -253,7 +253,7 @@ function Flow({ projectId }: { projectId: number }) {
 
   /** 结构拉取：只在挂载和 refresh 事件（结构变更）时调用，不轮询 */
   const fetchBoard = useCallback(async () => {
-    const res = await fetch(api.projectsByProjectIdBoard(projectId));
+    const res = await fetch(canvasApi.projectsByProjectIdBoard(projectId));
     if (!res.ok) return;
     const board = (await res.json()) as BoardModel;
     structureRef.current = board.cards;
@@ -290,7 +290,7 @@ function Flow({ projectId }: { projectId: number }) {
 
   // 实时：SSE——部署 status/running、容器 state，只进 live（不进 nodes）
   useEffect(() => {
-    const es = new EventSource(api.projectsByProjectIdEvents(projectId));
+    const es = new EventSource(canvasApi.projectsByProjectIdEvents(projectId));
     es.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data) as Record<string, unknown>;
@@ -413,9 +413,9 @@ function Flow({ projectId }: { projectId: number }) {
     const x = Math.round(node.position.x), y = Math.round(node.position.y);
     if (node.type === "server") {
       const nodeId = Number(node.id.replace("srv-", ""));
-      void patchJSON(api.nodesById(nodeId), { x, y });
+      void patchJSON(canvasApi.nodesById(nodeId), { x, y });
     } else if (node.type === "group") {
-      void patchJSON(api.groupsById(Number(node.id.replace("grp-", ""))), { x, y });
+      void patchJSON(canvasApi.groupsById(Number(node.id.replace("grp-", ""))), { x, y });
     } else if (node.type === "app" || node.type === "db") {
       const targetId = Number(node.id.replace(/^(app|db)-/, ""));
       // 分组命中测试：卡片中心落在哪个分组矩形内（无 → 直属服务器卡）
@@ -518,7 +518,7 @@ function Flow({ projectId }: { projectId: number }) {
                 onClick={async () => {
                   const name = prompt("分组名称");
                   if (!name?.trim()) return;
-                  await patchJSON(api.groupsById(menu.groupId!), { name: name.trim() });
+                  await patchJSON(canvasApi.groupsById(menu.groupId!), { name: name.trim() });
                   await refetch();
                 }}
               />
@@ -527,7 +527,7 @@ function Flow({ projectId }: { projectId: number }) {
                 danger
                 onClick={async () => {
                   if (!confirm("删除分组？组内服务卡会回落到服务器卡（部署不动）")) return;
-                  await delJSON(api.groupsById(menu.groupId!));
+                  await delJSON(canvasApi.groupsById(menu.groupId!));
                   await refetch();
                 }}
               />
@@ -541,7 +541,7 @@ function Flow({ projectId }: { projectId: number }) {
                 onClick={async () => {
                   const name = prompt("分组名称", "group");
                   if (!name?.trim()) return;
-                  await postJSON(api.nodesByIdGroups(menu.nodeId!), { name: name.trim() });
+                  await postJSON(canvasApi.nodesByIdGroups(menu.nodeId!), { name: name.trim() });
                   await refetch();
                 }}
               />
@@ -550,7 +550,7 @@ function Flow({ projectId }: { projectId: number }) {
                 danger
                 onClick={async () => {
                   if (!confirm("移除这张卡片？（服务器与部署目标不动）")) return;
-                  await delJSON(api.nodesById(menu.nodeId!));
+                  await delJSON(canvasApi.nodesById(menu.nodeId!));
                   await refetch();
                 }}
               />
@@ -561,7 +561,7 @@ function Flow({ projectId }: { projectId: number }) {
                 key={s.id}
                 label={`＋ ${s.name}`}
                 onClick={async () => {
-                  await postJSON(api.projectsByProjectIdNodes(projectId), { serverId: s.id, x: menu.flowX, y: menu.flowY });
+                  await postJSON(canvasApi.projectsByProjectIdNodes(projectId), { serverId: s.id, x: menu.flowX, y: menu.flowY });
                   await refetch();
                 }}
               />

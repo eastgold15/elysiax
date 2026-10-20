@@ -102,6 +102,33 @@ async function scaffoldPage(name: string, logger: { info: (m: string) => void })
 }
 `,
   );
+  // 数据层骨架：表归原子自己所有；跨原子的外键经对方插座 import（插头）
+  writeFileSync(
+    resolve(dir, "schema.ts"),
+    `import { sqliteTable, integer } from "drizzle-orm/sqlite-core";
+
+// export const ${C}Items = sqliteTable("${C}_items", {
+//   id: integer().primaryKey({ autoIncrement: true }),
+// });
+// export type ${P}Item = typeof ${C}Items.$inferSelect;
+`,
+  );
+  // 迁移 journal 片段：shared/db 聚合所有原子的片段后按 timestamp 排序重放
+  writeFileSync(
+    resolve(dir, "migrations.ts"),
+    `// drizzle-kit generate 生成 SQL 后，把语句放进这里（保留 name/timestamp）
+export default [] as { name: string; timestamp: number; sql: string }[];
+`,
+  );
+  // 插座：本原子对外承诺的唯一出口；跨原子 import 只允许指向这个文件
+  writeFileSync(
+    resolve(dir, `${name}.socket.ts`),
+    `// 对外承诺集中在这里 re-export：表锚点 / 行类型 / 服务类。
+// 别的原子引用本原子时只能 import 这个文件（doctor 插座门禁强制）。
+export { ${P}Service } from "./${name}.service";
+// export { ${C}Items, type ${P}Item } from "./schema";
+`,
+  );
   writeFileSync(
     resolve(dir, `${name}.di.ts`),
     `import { defineModule, provide } from "@elysiax/core";
@@ -426,6 +453,51 @@ cli.addCommand({
       }
     }
     if (!clientIssues) logger.info("✅ client 模式边界无越界");
+
+    // 4) 插座门禁（凹凸契约）：有 <name>.di.ts / <name>.socket.ts 的文件夹是原子；
+    //    跨原子 import 只允许指向对方插座文件（<name>.socket.ts），
+    //    指向原子内部其他文件 = 私拉电线（type import 同样算——类型也是契约）
+    let socketIssues = 0;
+    const atomsDirs: string[] = [];
+    for await (const f of new Glob(`${pagesDir}/**/*.{di,socket}.ts`).scan({ cwd: root })) {
+      const d = resolve(root, f, "..");
+      if (!atomsDirs.includes(d)) atomsDirs.push(d);
+    }
+    const atomOf = (absFile: string): string | undefined => {
+      const dir = resolve(absFile, "..");
+      // 嵌套原子取最深归属
+      return atomsDirs
+        .filter((a) => dir === a || dir.startsWith(`${a}/`))
+        .sort((a, b) => b.length - a.length)[0];
+    };
+    const resolveImport = (fromFile: string, spec: string): string | undefined => {
+      const base = resolve(fromFile, "..", spec);
+      for (const cand of [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`])
+        if (existsSync(cand)) return cand;
+      return undefined;
+    };
+    for await (const f of new Glob(`${pagesDir}/**/*.ts*`).scan({ cwd: root })) {
+      const abs = resolve(root, f);
+      const src = readFileSync(abs, "utf8");
+      for (const m of src.matchAll(/^import\s+(?:type\s+)?[^"']*from\s+["']([^"']+)["']/gm)) {
+        const spec = m[1]!;
+        if (!spec.startsWith(".")) continue; // 包与 shared 基建不查
+        const target = resolveImport(abs, spec);
+        if (!target || !target.includes(`/${pagesDir}/`)) continue;
+        const srcAtom = atomOf(abs);
+        const tgtAtom = atomOf(target);
+        if (!tgtAtom || tgtAtom === srcAtom) continue; // 原子内部 / 非原子目标
+        if (!/\.socket\.tsx?$/.test(target)) {
+          logger.error(
+            `❌ ${f}: 跨原子 import 绕过了插座（${spec}）——` +
+              `只允许指向对方的 <name>.socket.ts，被引用方请先把符号登记进插座`,
+          );
+          socketIssues++;
+          errors++;
+        }
+      }
+    }
+    if (!socketIssues) logger.info(`✅ 插座门禁通过（${atomsDirs.length} 个原子）`);
 
     if (errors > 0) throw new Error(`doctor 发现 ${errors} 个问题`);
     logger.info("✅ 全部检查通过");

@@ -5,12 +5,13 @@
  * 替代了旧的 htmx.ajax 桥 + 服务端片段交换。
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Deployment, DeployTarget, Domain } from "../../../shared/schema";
-import type { RepoBrief } from "../../github/github.service";
-import type { DbRef } from "../../deploy/deploy.service";
-import type { DetectResult, DetectedService } from "../../deploy/detect";
+import type { Deployment, DeployTarget } from "../../deploy/deploy.socket";
+import type { Domain } from "../../edge/edge.socket";
+import type { RepoBrief } from "../../github/github.socket";
+import type { DbRef } from "../../deploy/deploy.socket";
+import type { DetectResult, DetectedService } from "../../deploy/deploy.socket";
 // env 文本函数从零依赖模块引（detect.ts 依赖链里的 dotenv 无法进浏览器包）
-import { serviceEnvToText, textToEnvMap } from "../../deploy/env-text";
+import { serviceEnvToText, textToEnvMap } from "../../../shared/env-text";
 import { api, delJSON, getJSON, postJSON } from "./api";
 import { ConsoleView } from "./console";
 import { emitRefresh, useUi } from "./ui";

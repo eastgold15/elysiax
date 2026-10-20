@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "../../shared/db";
-import { projects, type Project } from "../../shared/schema";
+import { projects, type Project } from "./schema";
 
 export class ProjectRepository {
   constructor(private readonly db: Db) { }

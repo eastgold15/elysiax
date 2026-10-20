@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "../../shared/db";
-import { canvasNodes, serviceGroups, type CanvasNode, type ServiceGroup } from "../../shared/schema";
+import { canvasNodes, serviceGroups, type CanvasNode, type ServiceGroup } from "./schema";
 
 export class CanvasRepository {
   constructor(private readonly db: Db) {}

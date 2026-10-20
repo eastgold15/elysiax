@@ -1,15 +1,15 @@
 import { ServiceError } from "@elysiax/core";
 import { openSftp } from "@meitaim/ssh/sftp";
 import { decryptSecret, encryptSecret } from "../../shared/crypto";
-import type { ServerResource } from "../../shared/schema";
+import type { ServerResource } from "./schema";
 import {
   dbCompose,
   instanceUrl,
   sharedContainerNameOf,
   suggestedEnvKey,
   type DbType,
-} from "../deploy/db-templates";
-import type { ServerService } from "../servers/servers.service";
+} from "./db-templates";
+import type { ServerService } from "../servers/servers.socket";
 import type { NewResource, ResourceRepository } from "./resources.repository";
 
 /** credsJson 解密后的结构：模板 compose/env + 部署成功后回填的连接串 */

@@ -1,6 +1,6 @@
 import { t } from "elysia";
 import { defineRoutes } from "../../../.elysiax";
-import { loadConfig, saveConfig } from "../../shared/config";
+import { loadConfig, saveConfig } from "./config";
 import { listModel, ProjectList } from "./projects.partials";
 
 const model = (di: any) =>
@@ -25,28 +25,19 @@ export default defineRoutes()
   .post(
     "/open",
     { body: t.Object({ path: t.String({ minLength: 1 }), tool: t.String({ minLength: 1 }) }) },
+    // 预期错误（未装 lazygit / 终端）由 localService 抛 ServiceError，框架统一回显
     async ({ di, body, set }) => {
       const local = di.get("localService");
-      try {
-        if (body.tool === "lazygit") await local.openLazygit(body.path);
-        else await local.openEditor(body.path, body.tool);
-      } catch (e) {
-        set.status = 400;
-        return (e as Error).message;
-      }
+      if (body.tool === "lazygit") await local.openLazygit(body.path);
+      else await local.openEditor(body.path, body.tool);
       set.status = 204;
     },
   )
   .post(
     "/",
     { body: t.Object({ name: t.String({ minLength: 1 }), repoUrl: t.Optional(t.String()) }) },
-    async ({ di, body, set }) => {
-      try {
-        await di.get("projectService").create(body.name, body.repoUrl);
-      } catch (e) {
-        set.status = 400;
-        return (e as Error).message;
-      }
+    async ({ di, body }) => {
+      await di.get("projectService").create(body.name, body.repoUrl);
       // OOB 清空 #modal-root 关弹窗，主体刷新项目列表
       return (
         <>

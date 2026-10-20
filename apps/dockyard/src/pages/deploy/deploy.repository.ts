@@ -1,6 +1,7 @@
 import { and, desc, eq } from "drizzle-orm";
 import type { Db } from "../../shared/db";
-import { canvasNodes, deployments, deployTargets, type Deployment, type DeployTarget } from "../../shared/schema";
+import { canvasNodes } from "../canvas/canvas.socket";
+import { deployments, deployTargets, type Deployment, type DeployTarget } from "./schema";
 
 export type NewTarget = Omit<typeof deployTargets.$inferInsert, "id" | "createdAt">;
 

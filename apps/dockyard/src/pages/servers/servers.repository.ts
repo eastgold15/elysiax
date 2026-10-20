@@ -1,6 +1,6 @@
 import { eq } from "drizzle-orm";
 import type { Db } from "../../shared/db";
-import { servers, type Server } from "../../shared/schema";
+import { servers, type Server } from "./schema";
 
 export type NewServer = {
   name: string;

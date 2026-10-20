@@ -27,7 +27,7 @@ export function ConsoleView({ targetId, service }: { targetId: number; service?:
 
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const sock = new WebSocket(
-      `${proto}://${location.host}/api/canvas/console/${targetId}?svc=${encodeURIComponent(service ?? "")}`,
+      `${proto}://${location.host}/api/deploy/console/${targetId}?svc=${encodeURIComponent(service ?? "")}`,
     );
     sock.onmessage = (e) => term.write(typeof e.data === "string" ? e.data : "");
     sock.onclose = () => term.write("\r\n\x1b[90m[连接已关闭]\x1b[0m\r\n");

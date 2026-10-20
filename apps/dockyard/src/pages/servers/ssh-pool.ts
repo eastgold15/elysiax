@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import net from "node:net";
 import { connect, acceptHostKeys, type Credential, type SshClient } from "@meitaim/ssh";
 import { sshAgent } from "@meitaim/ssh/agent";
-import type { Server } from "../../shared/schema";
+import type { Server } from "./schema";
 import { decryptSecret } from "../../shared/crypto";
 
 /** 首次连接未知主机：携带指纹让 UI 走 TOFU 确认流程 */

@@ -111,4 +111,7 @@ export async function start(opts: {
     console.log(
       `   页面: ${pages.map((p) => `${p.url}${p.client ? " (client)" : ""}`).join(", ")}`,
     );
+
+  // 根容器交还入口：进程级后台任务（轮询器等 DI 服务）与请求共用同一份单例
+  return { app, root };
 }

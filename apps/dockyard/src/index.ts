@@ -6,15 +6,17 @@ import "typebox/value";
 import "typebox/schema";
 import "typebox/compile";
 
-import { start } from "@elysiax/core";
+import { start, type ServiceSpecs } from "@elysiax/core";
+import type { Container } from "@inferdi/inferdi";
 import "./app.layout";
 import * as gen from "../.elysiax";
-import { startUpdatePoller } from "./pages/deploy/update-poller";
-import { startContainerPoller } from "./pages/deploy/container-poller";
+import type { ServiceMap } from "../.elysiax";
 
-await start({ port: 3003, gen });
+const { root } = await start({ port: 3003, gen });
 
+// 后台轮询器与请求共用同一个根容器（DI 服务单例：SSH 连接池只有一份）
+const di = root as Container<ServiceSpecs<ServiceMap>>;
 // GitHub 更新轮询：只提示不自动部署
-startUpdatePoller();
+di.get("updatePoller").start();
 // 容器状态轮询 → 事件总线 → SSE：SSH 频率与前端用户数无关
-startContainerPoller();
+di.get("containerPoller").start();

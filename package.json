@@ -15,7 +15,7 @@
     "apps/*"
   ],
   "catalog": {
-    "elysia": "2.0.0-beta.14"
+    "elysia": "^2.0.0-rc.0"
   },
   "scripts": {
     "dev": "turbo run dev",

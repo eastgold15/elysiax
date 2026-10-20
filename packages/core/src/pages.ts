@@ -29,6 +29,7 @@ export type PageHandler<S extends Record<string, unknown>> = ((
  * 返回值：
  * - `{ title, meta, content }` → 完整 PageResult
  * - 裸 JSX → 视为 `{ content }`
+ * - `Response` → 原样透传（重定向页：`return new Response(null, { status: 302, headers: { location: "/x" } })`）
  *
  * 整页 / hx 片段的分流由 html() 插件按 HX-Request 头完成（7.1），
  * 页面函数只写一份渲染代码。
@@ -45,7 +46,11 @@ export function definePage<S extends Record<string, unknown> = any>(
   handler: (ctx: PageCtx<S>) => unknown,
   meta?: PageMeta,
 ): PageHandler<S> {
-  const wrapped = (async (ctx: PageCtx<S>) => brandPageResult(await handler(ctx))) as PageHandler<S>;
+  const wrapped = (async (ctx: PageCtx<S>) => {
+    const r = await handler(ctx);
+    // handler 直接返回 Response（如根页面的 302 重定向）时原样透传，不打 PageResult 品牌
+    return r instanceof Response ? r : brandPageResult(r);
+  }) as PageHandler<S>;
   wrapped.pageMeta = meta;
   return wrapped;
 }

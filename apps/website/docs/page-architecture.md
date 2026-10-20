@@ -55,6 +55,11 @@ src/pages/
 
 - 没有"父页面"：每个 `.page.tsx` 是独立整页，各自渲染、各自取数
 - **允许且只允许一个全局壳** `AppLayout`：全站唯一的外框（`<html><head>`、导航栏、页脚、主题），每页显式包裹。准入条件：纯视觉边框，不查业务数据、不感知 URL 属于哪个模块
+- **导航归壳，不归任何业务页面**：侧边栏/顶栏是跨页面长驻的 chrome，没有自己的 URL，不属于任何业务上下文。壳准入三条：
+  1. 壳可以放静态导航链接（`<a href>` 是纯视觉，不违规）
+  2. 导航需要动态数据时（「部署中 ●3」badge、在线数），壳只留挂载点（`<span hx-get="/api/servers/nav-badge" hx-trigger="load, every 30s">`），片段端点由对应业务页面的 partials 提供——数据 ownership 仍在业务模块，壳不越界查库
+  3. 壳永不 import 业务 service
+- **根 URL `/` 也是页面**：`src/pages/index.page.tsx`，职责是门户。无跨模块聚合需求时handler 直接返回 `Response` 重定向（definePage 透传 Response）；做真 dashboard 时数据走各业务 partials 的挂载点，不造聚合 service 层
 - **禁止目录级布局**（不设 `_layout.tsx`）：只覆盖部分页面的"中间层布局"必然带业务语义（查当前项目、管 Tab 高亮），是事实上的父页面。兄弟页面的公共段（如项目头部）→ 各自 import L4 渲染件自己拼，布局相同是视觉巧合，不是结构关系
 - 下划线前缀文件不参与路由（`_utils.ts` 等本页面私有辅助）
 

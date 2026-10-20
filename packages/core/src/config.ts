@@ -9,8 +9,12 @@ export interface ElysiaxConfig {
     /** 打包元数据用的标识，如 dev.example.my-app */
     identifier?: string;
   };
-  /** 模块目录（相对项目根），默认 "src/modules" */
+  /** 模块目录（相对项目根，旧约定 controller/ui），默认 "src/modules" */
   modules?: string;
+  /** 页面目录（相对项目根，page/partials/actions/di/client），默认 "src/pages" */
+  pages?: string;
+  /** client 页壳引入的全局样式，默认 "src/global.css"（存在才注入） */
+  clientCss?: string;
   /** API 挂载前缀（start() 与 routes.gen 用），默认 "/api" */
   apiPrefix?: string;
   build?: {
@@ -40,6 +44,7 @@ export interface ElysiaxConfig {
 
 export const DEFAULTS = {
   modules: "src/modules",
+  pages: "src/pages",
   entry: "src/index.ts",
   outdir: "dist",
 } as const;

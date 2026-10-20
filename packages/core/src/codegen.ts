@@ -1,5 +1,5 @@
-import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { basename, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ModuleManifest } from "./index";
 import { DEFAULTS, loadConfig, type ElysiaxConfig } from "./config";
@@ -20,7 +20,10 @@ export type DiEntry =
 
 // ── provide / lazy：类引用代替字符串依赖（编译期校验 + 重构可跟随） ──
 
-const lazyBrand: unique symbol = Symbol.for("elysiax.lazy") as any;
+// Symbol.for 返回 symbol 而非 unique symbol，注解断言是官方唯一途径
+const lazyBrand: unique symbol = Symbol.for(
+  "elysiax.lazy",
+) as typeof lazyBrand;
 
 /** `lazy(Class)` 的返回物：标记该依赖走 Lazy 伴随键（对应字符串约定 "xxxLazy"） */
 export interface LazyRef<T> {
@@ -43,7 +46,9 @@ export function lazy<C extends abstract new (...args: any[]) => any>(
 }
 
 const isLazyRef = (v: unknown): v is LazyRef<unknown> =>
-  typeof v === "object" && v !== null && (v as any)[lazyBrand] === true;
+  typeof v === "object" &&
+  v !== null &&
+  (v as Record<symbol, unknown>)[lazyBrand] === true;
 
 /** 依赖槽位类型：Lazy<X> 参数 → lazy(X)；其他对象 → 类引用；值服务（db 等）→ 字符串键 */
 type DepItem<T> =
@@ -108,7 +113,7 @@ function normalizeEntry(key: string, e: DiEntryInput): DiEntry {
   const deps: string[] = e.deps.map((d): string => {
     if (typeof d === "string") return d;
     if (isLazyRef(d)) return `${lowerFirst(d.cls.name)}Lazy`;
-    return lowerFirst((d as any).name);
+    return lowerFirst(d.name);
   });
   if (lowerFirst(e.class.name) !== key) warnKeyMismatch(key, e.class.name);
   return { class: e.class, deps, lifetime: e.lifetime };
@@ -172,6 +177,112 @@ const camel = (s: string) => s.replace(/-([a-z])/g, (_, c) => c.toUpperCase());
 const pascalCase = (s: string) => s.charAt(0).toUpperCase() + camel(s).slice(1);
 const ident = (s: string) => s.replace(/-/g, "_");
 
+// ── 页面扫描（page-architecture.md：module → page，URL = 文件夹路径） ──
+
+const PAGE_FILE_RE = /^(.+)\.(page|partials|actions)\.tsx?$/;
+const DI_FILE_RE = /^(.+)\.di\.ts$/;
+const LEGACY_RE = /^.+\.(controller|ui)\.tsx?$/;
+
+/** 一个页面组：同目录同 stem 的 page/partials/actions + 可选 client/ */
+export interface LoadedPage {
+  stem: string;
+  url: string;
+  page?: string;
+  partials?: string;
+  actions?: string;
+  clientIndex?: string;
+}
+
+interface PageScan {
+  pages: LoadedPage[];
+  /** 页面树里的 DI 声明（与模块 di 一视同仁进拓扑排序） */
+  dis: { stem: string; path: string }[];
+}
+
+/**
+ * 递归扫描 pages 目录：
+ * - `[id]` 目录段 → `:id`；下划线/点开头跳过；`client/` 是页面标记不进 URL
+ * - stem 规则：`index.page.tsx` 或 `<目录名>.page.tsx` → 目录 URL；
+ *   其他 `<x>.page.tsx` → 目录 URL + /x
+ * - 目录含 `client/index.tsx` → client 模式（L5 逃生舱）
+ * - 检测到 .controller./.ui. 旧约定文件 → 直接报错（P2-4 起拒绝）
+ */
+async function scanPages(root: string, pagesDir: string): Promise<PageScan> {
+  const base = join(root, pagesDir);
+  const groups = new Map<string, LoadedPage>();
+  const dis: PageScan["dis"] = [];
+  const legacy: string[] = [];
+  if (!existsSync(base)) return { pages: [], dis };
+
+  const groupOf = (dir: string, urlPrefix: string, stem: string) => {
+    const dirBase = basename(dir);
+    const url =
+      stem === "index" || stem === dirBase
+        ? urlPrefix || "/"
+        : `${urlPrefix}/${stem}`;
+    const key = `${dir}#${stem}`;
+    let g = groups.get(key);
+    if (!g) {
+      g = { stem, url };
+      groups.set(key, g);
+    }
+    return g;
+  };
+
+  const walk = async (dir: string, urlPrefix: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name.startsWith(".") || entry.name.startsWith("_")) continue;
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        if (entry.name === "client") continue;
+        const seg =
+          entry.name.startsWith("[") && entry.name.endsWith("]")
+            ? `:${entry.name.slice(1, -1)}`
+            : entry.name;
+        await walk(full, `${urlPrefix}/${seg}`);
+        continue;
+      }
+      if (LEGACY_RE.test(entry.name)) {
+        legacy.push(full);
+        continue;
+      }
+      const diM = entry.name.match(DI_FILE_RE);
+      if (diM) {
+        dis.push({ stem: diM[1]!, path: full });
+        continue;
+      }
+      const m = entry.name.match(PAGE_FILE_RE);
+      if (!m) continue;
+      const [, stem, kind] = m as unknown as [string, string, "page" | "partials" | "actions"];
+      groupOf(dir, urlPrefix, stem)[kind] = full;
+    }
+    // client/index.tsx 标记本目录（dirBase 组）为 client 模式
+    for (const ext of ["tsx", "ts"]) {
+      const ci = join(dir, "client", `index.${ext}`);
+      if (existsSync(ci)) {
+        const g = groupOf(dir, urlPrefix, basename(dir));
+        g.clientIndex = ci;
+        break;
+      }
+    }
+  };
+  await walk(base, "");
+
+  // P2-4：旧约定从警告升级为拒绝——controller/ui 形态已被页面约定取代
+  if (legacy.length)
+    throw new Error(
+      `[elysiax] 检测到已废弃的 .controller./.ui. 文件，请迁移到页面约定` +
+      `（.page.tsx 整页 / .partials.tsx hx 片段 / .actions.ts 写端点）:\n` +
+      legacy.map((p) => `  - ${relative(root, p)}`).join("\n"),
+    );
+
+  return { pages: [...groups.values()], dis };
+}
+
+/** client 页壳 HTML 的 slug：URL 段拼合（/projects/:id/env → projects_id_env） */
+const shellSlug = (url: string) =>
+  url.split("/").filter(Boolean).join("_").replaceAll(":", "") || "root";
+
 /** 从 controller 源码提取路由。负向后瞻排除 di.get("...")；只认 "/" 开头字面量 */
 export function extractRoutes(
   src: string,
@@ -206,8 +317,12 @@ export async function codegen(
 ): Promise<string[]> {
   config ??= await loadConfig(root);
   const modulesDir = config.modules ?? DEFAULTS.modules;
+  const pagesDir = config.pages ?? DEFAULTS.pages;
   const entry = config.build?.entry ?? DEFAULTS.entry;
   const written: string[] = [];
+
+  // 页面树扫描（新约定）：URL = 文件夹路径，页面文件夹内聚一切
+  const pageScan = await scanPages(root, pagesDir);
 
   // 基础设施声明（可选）：src/infra.di.ts，永远最先装配
   const infraPath = await firstExisting(join(root, "src"), "infra.di");
@@ -218,7 +333,10 @@ export async function codegen(
 
   const mods: LoadedModule[] = [];
   // module.json 已可选：模块 = 含 <name>.di.ts / <name>.controller.* / <name>.ui.* 的目录
-  const entries = readdirSync(join(root, modulesDir), { withFileTypes: true });
+  // 旧约定目录可整个不存在（pages/ 一统后 dockyard 已无 src/modules）
+  const entries = existsSync(join(root, modulesDir))
+    ? readdirSync(join(root, modulesDir), { withFileTypes: true })
+    : [];
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
     const dir = join(root, modulesDir, entry.name);
@@ -249,6 +367,20 @@ export async function codegen(
     };
     const mod: LoadedModule = { dir, manifest, di, diPath, diVar: `${ident(manifest.name)}Di`, controller, ui };
     mods.push(mod);
+  }
+
+  // 页面树里的 di 声明：与模块 di 一视同仁进拓扑排序（纯服务文件夹 = 无
+  // page/partials/actions 只有 di 的目录，deploy/edge/github 即此形态）
+  for (const d of pageScan.dis) {
+    const di = (await import(pathToFileURL(d.path).href)).default as ModuleDi;
+    const name = di.name ?? d.stem;
+    mods.push({
+      dir: join(d.path, ".."),
+      manifest: { name, version: di.version ?? "0.0.0", route: di.route },
+      di,
+      diPath: d.path,
+      diVar: `${ident(name)}Di`,
+    });
   }
 
   // ── 拓扑排序：dep 的提供者必须先装配 ──
@@ -380,6 +512,68 @@ export async function codegen(
   writeFileSync(join(outDir, "modules.gen.ts"), ml.join("\n") + "\n");
   written.push(".elysiax/modules.gen.ts");
 
+  // pages.gen.ts：页面路由表 + 真实 import；client 页额外生成壳 HTML
+  if (pageScan.pages.length) {
+    const shellsDir = join(outDir, "shells");
+    const pl: string[] = [
+      header,
+      `import type { PageEntry } from "@elysiax/core";`,
+    ];
+    const entries: string[] = [];
+    let idx = 0;
+    // client 页的全局样式（默认 src/global.css，config.clientCss 可覆盖）
+    const clientCss = config.clientCss ?? "src/global.css";
+    const cssPath = join(root, clientCss);
+    for (const p of pageScan.pages) {
+      const i = idx++;
+      const parts: string[] = [`url: ${JSON.stringify(p.url)}`];
+      if (p.clientIndex) {
+        parts.push("client: true");
+        mkdirSync(shellsDir, { recursive: true });
+        const slug = shellSlug(p.url);
+        const cssLink = existsSync(cssPath)
+          ? `    <link rel="stylesheet" href="${relative(shellsDir, cssPath).replaceAll("\\", "/")}" />\n`
+          : "";
+        writeFileSync(
+          join(shellsDir, `${slug}.html`),
+          [
+            "<!doctype html>",
+            `<html lang="zh-CN">`,
+            `  <head>`,
+            `    <meta charset="utf-8" />`,
+            `    <meta name="viewport" content="width=device-width, initial-scale=1" />`,
+            cssLink.trimEnd(),
+            `  </head>`,
+            `  <body>`,
+            `    <div id="root"></div>`,
+            `    <script type="module" src="${relative(shellsDir, p.clientIndex).replaceAll("\\", "/")}"></script>`,
+            `  </body>`,
+            `</html>`,
+            "",
+          ].filter((l) => l !== "").join("\n"),
+        );
+        pl.push(`import shell${i} from "./shells/${slug}.html";`);
+        parts.push(`shell: shell${i}`);
+      }
+      if (p.page) {
+        pl.push(`import page${i} from "${rel(p.page)}";`);
+        parts.push(`page: page${i}`);
+      }
+      if (p.partials) {
+        pl.push(`import partials${i} from "${rel(p.partials)}";`);
+        parts.push(`partials: partials${i}`);
+      }
+      if (p.actions) {
+        pl.push(`import actions${i} from "${rel(p.actions)}";`);
+        parts.push(`actions: actions${i}`);
+      }
+      entries.push(`  { ${parts.join(", ")} },`);
+    }
+    pl.push("", "export const pages: PageEntry[] = [", ...entries, "];", "");
+    writeFileSync(join(outDir, "pages.gen.ts"), pl.join("\n") + "\n");
+    written.push(".elysiax/pages.gen.ts");
+  }
+
   // routes.gen.ts：静态解析 controller 源码里的字面量路由，生成类型化路径助手。
   // hx-post={routes.deploy.uiDetect()} —— 改路由/前缀时 TSX 编译报错，不再静默 404。
   // （不 import controller：controller → .elysiax → modules.gen → controller 存在循环）
@@ -391,15 +585,12 @@ export async function codegen(
     "",
     "export const routes = {",
   ];
-  for (const mod of mods) {
-    const n = mod.manifest.name;
-    if (!mod.controller) continue;
-    const src = await Bun.file(mod.controller).text();
-    const { prefix, paths } = extractRoutes(src, mod.manifest.route ?? `/${n}`);
+  // 由完整路径（已含挂载前缀）生成类型化助手条目：
+  // /ui/detect → uiDetect；/domains/:id → domainsById；/ → index
+  const buildEntries = (prefix: string, paths: string[]): [string, string][] => {
     const entries: [string, string][] = [];
     for (const path of paths) {
       const sub = path === prefix ? "/" : path.slice(prefix.length);
-      // /ui/detect → uiDetect；/domains/:id → domainsById；/ → index
       const parts = sub.split("/").filter(Boolean);
       let name = "index";
       const params: string[] = [];
@@ -419,10 +610,55 @@ export async function codegen(
       const body = path.replaceAll(/:([^/]+)/g, (_, p) => `\${${p}}`);
       entries.push([name, `(${sig}) => \`${apiPrefix}${body}\``]);
     }
+    return entries;
+  };
+  for (const mod of mods) {
+    const n = mod.manifest.name;
+    if (!mod.controller) continue;
+    const src = await Bun.file(mod.controller).text();
+    const { prefix, paths } = extractRoutes(src, mod.manifest.route ?? `/${n}`);
+    const entries = buildEntries(prefix, paths);
     if (!entries.length) continue;
     rl.push(`  ${JSON.stringify(n)}: {`);
     for (const [name, fn] of entries) rl.push(`    ${name}: ${fn},`);
     rl.push("  },");
+  }
+  // 页面路由：page → 自然 URL；partials/actions → /api<页面URL>（7.1/7.2）
+  if (pageScan.pages.length) {
+    rl.push(`  pages: {`);
+    const usedPageKeys = new Set<string>();
+    for (const p of pageScan.pages) {
+      const key = camel(p.stem);
+      if (usedPageKeys.has(key))
+        throw new Error(
+          `页面路由助手键冲突：多个页面 stem 都是 "${p.stem}"（${p.url}），` +
+          `routes.pages.${key} 无法区分，请给页面文件换名`,
+        );
+      usedPageKeys.add(key);
+      rl.push(`    ${JSON.stringify(key)}: {`);
+      const emitted = new Set<string>(["page"]);
+      if (p.page || p.clientIndex) {
+        const body = p.url.replaceAll(/:([^/]+)/g, (_, pm) => `\${${pm}}`);
+        const params = [...p.url.matchAll(/:([^/]+)/g)].map((m) => m[1]);
+        const sig = params.map((pm) => `${pm}: P`).join(", ");
+        rl.push(`      page: (${sig}) => \`${body}\`,`);
+      }
+      for (const kind of ["partials", "actions"] as const) {
+        const file = p[kind];
+        if (!file) continue;
+        const src = await Bun.file(file).text();
+        const { paths } = extractRoutes(src, p.url);
+        for (const [name, fn] of buildEntries(p.url, paths)) {
+          // GET /config（partials）与 POST /config（actions）同名同 URL：
+          // 助手只返路径，重名即重复，跳过后者
+          if (emitted.has(name)) continue;
+          emitted.add(name);
+          rl.push(`      ${name}: ${fn},`);
+        }
+      }
+      rl.push(`    },`);
+    }
+    rl.push(`  },`);
   }
   rl.push("} as const;", "");
   writeFileSync(join(outDir, "routes.gen.ts"), rl.join("\n") + "\n");
@@ -503,9 +739,49 @@ export async function codegen(
       "  return elysiaxModule<S>(options);",
       "}",
       "",
+      "/** 页面 partials/actions 的子路由工厂：同 defineController，但不带 prefix（挂载点 = /api<页面URL>，由页面目录推导） */",
+      "export function defineRoutes<",
+      "  S extends Record<string, unknown> = ServiceMap,",
+      ">() {",
+      "  return elysiaxModule<S>();",
+      "}",
+      "",
     ].join("\n"),
   );
   written.push(".elysiax/controller.gen.ts");
+
+  // assets.gen.ts：SSR 页面的全局样式（AppLayout 引用的固定 URL
+  // /api/assets/global.css 由 start() 服务）。HTMLBundle 的资产走 /_bun/
+  // 哈希路径 SSR 拿不到，故编译产物内联成文本——dev 与 bun --compile
+  // 二进制（文本随包嵌入）都可用。有 bun-plugin-tailwind 就用它编译。
+  {
+    const cssFile = join(root, config.clientCss ?? "src/global.css");
+    if (existsSync(cssFile)) {
+      let cssText: string;
+      try {
+        const pluginPath = Bun.resolveSync("bun-plugin-tailwind", root);
+        const tailwind = (await import(pluginPath)).default;
+        const out = await Bun.build({
+          entrypoints: [cssFile],
+          plugins: [tailwind],
+          throw: true,
+        });
+        cssText = await out.outputs[0]!.text();
+      } catch {
+        cssText = await Bun.file(cssFile).text(); // 无插件/编译失败 → 原样服务
+      }
+      writeFileSync(
+        join(outDir, "assets.gen.ts"),
+        [
+          header,
+          "/** AppLayout 引用的全局样式（start() 服务在 /api/assets/global.css） */",
+          `export const globalCss: string = ${JSON.stringify(cssText)};`,
+          "",
+        ].join("\n"),
+      );
+      written.push(".elysiax/assets.gen.ts");
+    }
+  }
 
   // desktop.gen.ts：桌面入口（config.desktop 存在时；src/desktop.ts 可覆盖）
   if (config.desktop) {
@@ -563,8 +839,14 @@ export async function codegen(
       `export { modules } from "./modules.gen";`,
       `export { buildRootContainer } from "./container.gen";`,
       `export type * from "./services.gen"; // ServiceMap + 每模块窄类型 <Name>Services`,
-      `export { defineController } from "./controller.gen";`,
+      `export { defineController, defineRoutes } from "./controller.gen";`,
       `export { routes } from "./routes.gen"; // 类型化路径助手：hx-post={routes.x.y()}`,
+      ...(pageScan.pages.length
+        ? [`export { pages } from "./pages.gen"; // 页面路由表（PageEntry[]）`]
+        : []),
+      ...(written.includes(".elysiax/assets.gen.ts")
+        ? [`export { globalCss } from "./assets.gen"; // AppLayout 全局样式文本`]
+        : []),
       "",
     ].join("\n"),
   );

@@ -3,6 +3,9 @@ import { createElement } from './h'
 
 export * from './html'
 export * from './options'
+export * from './page'
+export * from './actions'
+export * from './toast'
 export * from './utils'
 
 export { ErrorBoundary } from '@kitajs/html/error-boundary'

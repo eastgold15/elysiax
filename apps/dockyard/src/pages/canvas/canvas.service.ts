@@ -1,3 +1,4 @@
+import { ServiceError } from "@elysiax/core";
 import type { CanvasRepository } from "./canvas.repository";
 
 export class CanvasService {
@@ -29,7 +30,7 @@ export class CanvasService {
   }
 
   addGroup(nodeId: number, name: string) {
-    if (!name.trim()) throw new Error("分组名不能为空");
+    if (!name.trim()) throw new ServiceError("分组名不能为空");
     return this.repo.addGroup(nodeId, name.trim());
   }
 

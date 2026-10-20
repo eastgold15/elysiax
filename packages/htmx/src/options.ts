@@ -48,4 +48,11 @@ export interface HtmlOptions {
    * @default isHtml
    */
   isHtml?: (this: void, value: string) => boolean
+
+  /**
+   * 全局壳（AppLayout）：handler 返回 PageResult（elysiax definePage 的
+   * 返回值）时，无 HX-Request 用它渲染整页，有 HX-Request 只出 content
+   * 片段。不传则 PageResult 按裸 content 处理。
+   */
+  layout?: import('./page').LayoutComponent
 }

@@ -1,3 +1,4 @@
+import { ServiceError } from "@elysiax/core";
 import { openSftp } from "@meitaim/ssh/sftp";
 import { decryptSecret, encryptSecret } from "../../shared/crypto";
 import type { ServerResource } from "../../shared/schema";
@@ -45,7 +46,7 @@ export class ResourceService {
   async create(input: { serverId: number; name: string; dbType: DbType; envKey?: string }) {
     const existing = await this.repo.ofServer(input.serverId);
     if (existing.some((r) => r.name === input.name))
-      throw new Error(`服务器上已存在同名共享资源「${input.name}」`);
+      throw new ServiceError(`服务器上已存在同名共享资源「${input.name}」`);
     const resource = await this.repo.create({
       ...input,
       envKey: input.envKey?.trim() || suggestedEnvKey(input.dbType),
@@ -61,10 +62,10 @@ export class ResourceService {
   /** 部署中间件到服务器（视角 B）：对账 → SFTP 推模板 → compose up → 生成连接串 */
   async deploy(id: number): Promise<void> {
     const resource = await this.mustGet(id);
-    if (!resource.credsJson || !resource.containerName) throw new Error("共享资源缺少模板内容");
+    if (!resource.credsJson || !resource.containerName) throw new ServiceError("共享资源缺少模板内容");
     const creds = JSON.parse(decryptSecret(resource.credsJson)) as ResourceCreds;
     const server = await this.serverService.byId(resource.serverId);
-    if (!server) throw new Error("服务器不存在");
+    if (!server) throw new ServiceError("服务器不存在");
 
     // 部署前对账：远端同名容器必须是本资源管理的，绝不动别人的容器
     const remote = await this.serverService.docker(resource.serverId);
@@ -74,7 +75,7 @@ export class ResourceService {
       const managed = hit.Labels?.["dockyard.managed"] === "true";
       const owner = hit.Labels?.["dockyard.shared-resource"];
       if (!(managed && owner === String(resource.id)))
-        throw new Error(
+        throw new ServiceError(
           managed
             ? `远端容器 ${resource.containerName} 属于另一个共享资源（#${owner}），已阻止部署`
             : `远端已存在非本工具管理的同名容器 ${resource.containerName}，已阻止部署`,
@@ -90,7 +91,7 @@ export class ResourceService {
     await sftp.write(`${absDir}/.env`, creds.env);
     await sftp.close();
     const up = await client.exec(`cd ${absDir} && docker compose up -d`);
-    if (up.code !== 0) throw new Error(`远端 compose up 失败（exit ${up.code}）\n${up.stdout}${up.stderr}`);
+    if (up.code !== 0) throw new ServiceError(`远端 compose up 失败（exit ${up.code}）\n${up.stdout}${up.stderr}`);
 
     // 部署成功：生成连接串，写入共享清单（服务器级共享变量）
     const url = instanceUrl(resource.dbType, server.host, creds.env);
@@ -106,7 +107,7 @@ export class ResourceService {
 
   /** 更新 envKey（共享变量键名） */
   async updateEnvKey(id: number, envKey: string) {
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(envKey)) throw new Error(`非法的环境变量名: ${envKey}`);
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(envKey)) throw new ServiceError(`非法的环境变量名: ${envKey}`);
     return this.repo.update(id, { envKey });
   }
 
@@ -130,7 +131,7 @@ export class ResourceService {
 
   private async mustGet(id: number): Promise<ServerResource> {
     const r = await this.repo.byId(id);
-    if (!r) throw new Error(`共享资源不存在: ${id}`);
+    if (!r) throw new ServiceError(`共享资源不存在: ${id}`);
     return r;
   }
 }

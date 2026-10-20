@@ -1,9 +1,18 @@
 import { Elysia, ValidationError } from "elysia";
 import { websocket } from "elysia/websocket";
 import { inferdiElysia } from "@inferdi/elysia";
-import { html } from "@workspace/htmx";
+import { actions, html, type LayoutComponent } from "@workspace/htmx";
 import type { Container, Lifetime, Spec } from "@inferdi/inferdi";
 import type { ModuleEntry } from "./index";
+import type { PageEntry } from "./pages";
+import { elysiaxAuth } from "./auth";
+import type { GuardOptions } from "./guard";
+import {
+  ServiceError,
+  serviceErrorHandler,
+  validationErrorHandler,
+  errorBanner,
+} from "./errors";
 
 export { inferdiElysia } from "@inferdi/elysia";
 
@@ -54,7 +63,17 @@ export function elysiaxModule<S extends Record<string, unknown>>(
   const app = new Elysia(options) as unknown as Elysia<
     "",
     "local",
-    { decorator: {}; store: {}; derive: { di: Container<ServiceSpecs<S>> } }
+    {
+      decorator: {};
+      store: {};
+      derive: {
+        di: Container<ServiceSpecs<S>>;
+        // 类型声明：运行时由 elysiaxAPI 的 actions() 插件 derive('global') 注入
+        redirect: (url: string) => Response;
+        toast: (message: string, kind?: "info" | "success" | "error") => void;
+        formError: (fragment: unknown) => Response;
+      };
+    }
   > &
     UiRoute<S>;
 
@@ -96,20 +115,29 @@ export function elysiaxModule<S extends Record<string, unknown>>(
 export interface ElysiaxAPIOptions {
   /**
    * htmx 请求的 typebox 校验错误回显：HX-Request 头 + ValidationError 时，
-   * 返回 200 + 错误横幅片段（htmx 默认不 swap 4xx，片段必须能吃进 target），
-   * 非 htmx 请求仍走默认 JSON 422。传 false 关闭，传函数自定义片段。
+   * 返回 422 + 错误片段（全局壳的 responseHandling 配置允许 swap 422，
+   * 见 page-architecture.md 7.2），非 htmx 请求仍走默认 JSON 422。
+   * 传 false 关闭，传函数自定义片段。
    */
   validationError?: false | ((error: ValidationError) => string);
+  /** 页面路由表（.elysiax/pages.gen）；不传则只有模块路由 */
+  pages?: PageEntry[];
+  /** 全局壳 AppLayout（html() 的 PageResult 双响应用） */
+  layout?: LayoutComponent;
+  /** API 前缀（模块 controller 与页面 partials/actions 的挂载点），默认 "/api" */
+  apiPrefix?: string;
+  /**
+   * auth 宏（7.5）：传入即按 PageMeta.auth 给页面整页路由、partials、
+   * actions 挂载 `{ auth: true }` 守卫（未声明页面随 defaultAuth 策略，
+   * 默认 protected）。client 页的壳是静态 HTML，其 JSON 端点（本页的
+   * partials/actions）同样受保护。模块 controller 需自行 .use(elysiaxAuth)。
+   */
+  auth?: GuardOptions;
 }
 
-const escapeHtml = (s: string) =>
-  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-
-/** 默认校验错误横幅：inline style 不依赖任何主题，role=alert 可读屏 */
+/** 默认校验错误横幅（errorBanner 统一样式） */
 const defaultValidationBanner = (error: ValidationError) =>
-  `<div role="alert" style="border:1px solid #7f1d1d;background:#450a0a;color:#fca5a5;` +
-  `border-radius:6px;padding:8px 12px;font-size:12px;margin-bottom:8px">` +
-  `表单校验失败：${escapeHtml(error.message)}</div>`;
+  errorBanner(`表单校验失败：${error.message}`);
 
 export function elysiaxAPI<T extends Record<string | symbol, any>>(
   root: Container<T>,
@@ -117,31 +145,86 @@ export function elysiaxAPI<T extends Record<string | symbol, any>>(
   options: ElysiaxAPIOptions = {},
 ) {
   // Elysia 2：.ws() 需要显式 websocket 能力，框架层统一开启（各 controller 直接用 .ws）
-  const api = inferdiElysia({ container: root }).use(html()).use(websocket());
+  // as any：packages/htmx 有独立 node_modules/elysia（同版本但物理两份），
+  // Elysia 类的 #private 字段跨包不可互认（TS2769）；derive 的运行时注入不受影响，
+  // 类型在 elysiaxModule 里手工声明（di/redirect/toast/formError）
+  const api = inferdiElysia({ container: root })
+    .use(html({ layout: options.layout }) as any)
+    .use(actions({ layout: options.layout }) as any)
+    .use(websocket());
 
   if (options.validationError !== false) {
     const banner = options.validationError ?? defaultValidationBanner;
-    // Elysia 2：错误处理器按错误类注册（.error(Class, handler)）
-    (api as any).error(ValidationError, ({ error, request }: any) => {
-      if (!request.headers.has("HX-Request")) return; // 非 htmx 走默认 JSON 422
-      // 显式 200 Response：htmx 默认不 swap 4xx，片段必须能吃进 target
-      return new Response(banner(error), {
-        status: 200,
-        headers: { "content-type": "text/html; charset=utf-8" },
-      });
-    });
+    // Elysia 2 rc：错误处理器按错误类注册（.onError(Class, handler)）
+    api.onError(ValidationError, validationErrorHandler(banner));
   }
+  // ServiceError：services 抛类型化错误 → 统一 hx 片段 / JSON 映射，
+  // controller 不再各自 try/catch 回显（7.3）
+  api.onError(ServiceError, serviceErrorHandler);
+
+  // auth 宏：具名插件幂等，内层实例各自 .use() 以获得宏定义
+  const authed = options.auth ? elysiaxAuth(options.auth) : null;
+  /** 页面是否受保护：PageMeta.auth 优先，缺省随 start({ auth }) 策略 */
+  const isProtected = (p: PageEntry) =>
+    (p.page?.pageMeta?.auth ?? options.auth?.defaultAuth ?? "protected") ===
+    "protected";
+
+  const apiPrefix = options.apiPrefix ?? "/api";
 
   let app = api
   for (const mod of Object.values(modules)) {
     if (mod.controller) {
       // controller 是 any 泛型的 Elysia（各模块 derive 类型不同），
       // 挂载结果在框架边界内断言回 api 链类型
-      app = app.use(mod.controller) as unknown as typeof app;
+      app = app.use(
+        new Elysia({ prefix: apiPrefix }).use(mod.controller),
+      ) as unknown as typeof app;
     } else if (mod.ui) {
       const route = mod.manifest.route ?? `/${mod.manifest.name}`;
       const Ui = mod.ui;
-      app = app.use(new Elysia().get(`${route}/ui`, () => Ui({}))) as unknown as typeof app;
+      app = app.use(
+        new Elysia({ prefix: apiPrefix }).get(`${route}/ui`, () => Ui({})),
+      ) as unknown as typeof app;
+    }
+  }
+
+  // 页面路由（L0）：整页挂自然 URL；partials/actions 挂 /api<页面URL>。
+  // client 页（L5）的 url 由 Bun.serve 的 HTMLBundle 服务，这里只挂端点。
+  //
+  // as unknown as：Elysia 每次链式调用都生成新的泛型实例（类型不可重新
+  // 赋值），且各页面的 derive 泛型互不相同；框架边界内断言回 app 链类型。
+  for (const p of options.pages ?? []) {
+    if (p.page && !p.client) {
+      const handler = p.page;
+      type Ctx = Parameters<typeof handler>[0];
+      const pageApp = authed
+        ? new Elysia()
+            .use(authed)
+            .get(p.url, { auth: isProtected(p) }, (ctx) =>
+              handler(ctx as unknown as Ctx),
+            )
+        : new Elysia().get(p.url, (ctx) => handler(ctx as unknown as Ctx));
+      app = app.use(pageApp) as unknown as typeof app;
+    }
+    if (p.partials || p.actions) {
+      const prefix = `${apiPrefix}${p.url === "/" ? "" : p.url}`;
+      if (authed) {
+        // guard 把宏选项批量应用到本页所有片段/写端点
+        const sub = new Elysia({ prefix })
+          .use(authed)
+          .guard({ auth: isProtected(p) }, (s) => {
+            let r = s;
+            if (p.partials) r = r.use(p.partials) as unknown as typeof r;
+            if (p.actions) r = r.use(p.actions) as unknown as typeof r;
+            return r;
+          });
+        app = app.use(sub) as unknown as typeof app;
+      } else {
+        let sub = new Elysia({ prefix });
+        if (p.partials) sub = sub.use(p.partials) as unknown as typeof sub;
+        if (p.actions) sub = sub.use(p.actions) as unknown as typeof sub;
+        app = app.use(sub) as unknown as typeof app;
+      }
     }
   }
   return app

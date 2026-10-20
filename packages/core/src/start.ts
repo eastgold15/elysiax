@@ -1,4 +1,4 @@
-import { Elysia, setupTypebox } from "elysia";
+import { setupTypebox } from "elysia";
 import * as typeboxType from "typebox/type";
 import * as typeboxSystem from "typebox/system";
 import * as typeboxValue from "typebox/value";
@@ -6,12 +6,20 @@ import * as typeboxSchema from "typebox/schema";
 import * as typeboxCompile from "typebox/compile";
 import { serve } from "bun";
 import type { Container } from "@inferdi/inferdi";
-import { elysiaxAPI } from "./di";
+import type { LayoutComponent } from "@workspace/htmx";
+import { elysiaxAPI, type ElysiaxAPIOptions } from "./di";
+import type { GuardOptions } from "./guard";
+import { getLayout } from "./layout";
 import type { ModuleEntry } from "./index";
+import type { PageEntry } from "./pages";
 
 export interface ElysiaxGenerated {
   modules: Record<string, ModuleEntry>;
   buildRootContainer: () => Container<any>;
+  /** .elysiax/pages.gen 的页面路由表（无页面时 codegen 不生成，故可选） */
+  pages?: PageEntry[];
+  /** .elysiax/assets.gen 的全局样式文本（有则服务在 /api/assets/global.css） */
+  globalCss?: string;
 }
 
 /**
@@ -43,24 +51,64 @@ setupTypebox({
 
 export async function start(opts: {
   port?: number;
-  /** `import index from "./index.html"` 的页面对象 */
-  index: Bun.HTMLBundle;
+  /**
+   * 旧模式单页壳：`import index from "./index.html"`。
+   * 页面架构下 htmx 页纯 SSR（AppLayout 渲染）、client 页由 codegen
+   * 生成的壳 HTMLBundle 服务，不再需要它；保留仅为兼容旧应用。
+   */
+  index?: Bun.HTMLBundle;
   /** `import * as gen from "../.elysiax"` */
   gen: ElysiaxGenerated;
+  /** 全局壳 AppLayout；缺省读 defineLayout 注册的全局单例 */
+  layout?: LayoutComponent;
+  /** API 前缀，默认 "/api" */
+  apiPrefix?: string;
+  /** 传入选项才启用 auth 宏（7.5）：页面/端点按 PageMeta.auth 受保护，不挂载零开销零行为 */
+  auth?: GuardOptions;
+  /** 透传 elysiaxAPI 的其余选项（如 validationError） */
+  api?: Omit<ElysiaxAPIOptions, "pages" | "layout" | "apiPrefix">;
 }) {
   const root = opts.gen.buildRootContainer();
-  const api = elysiaxAPI(root, opts.gen.modules);
-  const app = new Elysia({ prefix: "/api" }).use(api);
+  const pages = opts.gen.pages ?? [];
+  const app = elysiaxAPI(root, opts.gen.modules, {
+    ...opts.api,
+    pages,
+    layout: opts.layout ?? getLayout(),
+    apiPrefix: opts.apiPrefix,
+    auth: opts.auth,
+  });
+  const handle = (req: Request) => app.handle(req);
+
+  // 动态路由表（Bun.serve routes 不支持热增，新增页面需重启 dev server）：
+  // - client 页 URL → codegen 生成的壳 HTMLBundle（自带 JS/CSS 资产服务）
+  // - SSR 页 URL → Elysia（PageResult 双响应）
+  // - /api/* → Elysia（模块 controller + 页面 partials/actions）
+  const routes: Record<string, unknown> = {};
+  if (opts.index) routes["/"] = opts.index;
+  for (const p of pages) {
+    if (p.client && p.shell) routes[p.url] = p.shell;
+    else if (p.page) routes[p.url] = handle;
+  }
+  if (opts.gen.globalCss)
+    routes["/api/assets/global.css"] = new Response(opts.gen.globalCss, {
+      headers: { "content-type": "text/css; charset=utf-8" },
+    });
+  routes["/api/*"] = handle;
+
+  // auth 由 elysiaxAPI 的 auth 宏按路由挂载（7.5），不再包全局 URL 匹配守卫
+  for (const k of Object.keys(routes))
+    if (typeof routes[k] === "function") routes[k] = handle;
 
   serve({
     port: opts.port ?? 3000,
-    routes: {
-      "/": opts.index,
-      "/api/*": (req) => app.handle(req),
-    },
+    routes: routes as never,
     development: true,
   });
 
   console.log(`✅ elysiax: http://localhost:${opts.port ?? 3000}`);
-  console.log(`   已挂载模块: ${Object.keys(opts.gen.modules).join(", ")}`);
+  console.log(`   已挂载模块: ${Object.keys(opts.gen.modules).join(", ") || "(无)"}`);
+  if (pages.length)
+    console.log(
+      `   页面: ${pages.map((p) => `${p.url}${p.client ? " (client)" : ""}`).join(", ")}`,
+    );
 }

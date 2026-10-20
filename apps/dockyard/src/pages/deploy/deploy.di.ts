@@ -1,0 +1,26 @@
+import { defineModule, provide } from "@elysiax/core";
+import { CanvasRepository } from "../canvas/canvas.repository";
+import { GithubService } from "../github/github.service";
+import { ServerService } from "../servers/servers.service";
+import { EdgeService } from "../edge/edge.service";
+import { ProjectRepository } from "../../pages/projects/projects.repository";
+import { ResourceRepository } from "../resources/resources.repository";
+import { ResourceService } from "../resources/resources.service";
+import { DeployRepository } from "./deploy.repository";
+import { DeployService } from "./deploy.service";
+
+export default defineModule({
+  provides: {
+    deployRepository: provide(DeployRepository, ["db"]),
+    deployService: provide(DeployService, [
+      DeployRepository,
+      ServerService,
+      GithubService,
+      CanvasRepository,
+      "appPaths",
+      EdgeService,
+      ProjectRepository,
+      ResourceService,
+    ]),
+  },
+});

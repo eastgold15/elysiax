@@ -1,3 +1,4 @@
+import { ServiceError } from "@elysiax/core";
 import { readdir } from "node:fs/promises";
 import { join } from "@visulima/path";
 import { expandHome, loadConfig, saveConfig } from "../../shared/config";
@@ -94,7 +95,7 @@ export class LocalService {
         ? [terminal, "-e", editor, path]
         : null
       : [editor, path];
-    if (!cmd) throw new Error(`「${editor}」是终端编辑器，但未找到可用终端（${TERMINALS.join("/")}）`);
+    if (!cmd) throw new ServiceError(`「${editor}」是终端编辑器，但未找到可用终端（${TERMINALS.join("/")}）`);
     this.spawnDetached(cmd);
     const cfg = await loadConfig();
     if (cfg.defaultEditor !== editor) await saveConfig({ ...cfg, defaultEditor: editor });
@@ -102,8 +103,8 @@ export class LocalService {
 
   async openLazygit(path: string) {
     const { terminal, lazygit } = await this.toolchain();
-    if (!lazygit) throw new Error("未安装 lazygit");
-    if (!terminal) throw new Error(`未找到可用终端（${TERMINALS.join("/")}）`);
+    if (!lazygit) throw new ServiceError("未安装 lazygit");
+    if (!terminal) throw new ServiceError(`未找到可用终端（${TERMINALS.join("/")}）`);
     this.spawnDetached([terminal, "-e", "lazygit", "-p", path]);
   }
 

@@ -1,3 +1,4 @@
+import { ServiceError } from "@elysiax/core";
 import type Docker from "dockerode";
 import type { Server } from "../../shared/schema";
 import { encryptSecret } from "../../shared/crypto";
@@ -118,7 +119,7 @@ export class ServerService {
 
   private async mustGet(id: number): Promise<Server> {
     const server = await this.repo.byId(id);
-    if (!server) throw new Error(`服务器不存在: ${id}`);
+    if (!server) throw new ServiceError(`服务器不存在: ${id}`);
     return server;
   }
 }

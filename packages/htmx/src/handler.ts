@@ -58,5 +58,8 @@ export function handleHtml(
     )
   }
 
-  return new Response(stream as any, headers)
+  return new Response(
+    stream as unknown as ConstructorParameters<typeof Response>[0],
+    headers,
+  )
 }

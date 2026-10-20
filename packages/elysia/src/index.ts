@@ -819,14 +819,14 @@ export function inferdiElysia(options: unknown): unknown {
    * 本身不是受推断门控的字段。
    */
   return withValidatedScope
-    .error('plugin', ({ request, error }) => {
+    .onError('plugin', ({ request, error }) => {
       const state = requestState.get(request)
       if (state !== undefined) {
         state.hasError = true
         state.error = error
       }
     })
-    .afterResponse('plugin', async ({ request }) =>
+    .onAfterResponse('plugin', async ({ request }) =>
       useDefaultDisposePath
         ? disposeDefaultOnce(request)
         : disposeOnce(request)

@@ -6,13 +6,13 @@ import "typebox/value";
 import "typebox/schema";
 import "typebox/compile";
 
-import index from "./index.html";
 import { start } from "@elysiax/core";
+import "./app.layout";
 import * as gen from "../.elysiax";
-import { startUpdatePoller } from "./modules/deploy/update-poller";
-import { startContainerPoller } from "./modules/deploy/container-poller";
+import { startUpdatePoller } from "./pages/deploy/update-poller";
+import { startContainerPoller } from "./pages/deploy/container-poller";
 
-await start({ port: 3002, index, gen });
+await start({ port: 3003, gen });
 
 // GitHub 更新轮询：只提示不自动部署
 startUpdatePoller();

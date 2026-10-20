@@ -4,20 +4,22 @@
  * @see https://stackoverflow.com/q/1732348
  * @see https://stackoverflow.com/q/11229831
  */
-export function isHtml(this: void, value?: any): value is string {
+export function isHtml(this: void, value?: unknown): value is string {
   if (typeof value !== 'string')
     return false
 
-  value = value.trim()
-  const length = value.length
+  // TS7（tsc 7.x native）对「类型谓词签名 + 参数再赋值」的窄化有 bug，
+  // 用新 const 绕开（见 memory: htmx-tsx-conventions）
+  const v = value.trim()
+  const length = v.length
 
   return (
     // Minimum html is 7 characters long: <a></a>
     length >= 7 &&
     // open tag
-    value[0] === '<' &&
+    v[0] === '<' &&
     // close tag
-    value[length - 1] === '>'
+    v[length - 1] === '>'
   )
 }
 

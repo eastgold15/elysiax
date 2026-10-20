@@ -76,19 +76,19 @@ const camel = (s: string) => {
   return p.charAt(0).toLowerCase() + p.slice(1);
 };
 
-async function scaffoldModule(name: string, logger: { info: (m: string) => void }) {
+async function scaffoldPage(name: string, logger: { info: (m: string) => void }) {
   if (!/^[a-z][a-z0-9-]*$/.test(name))
-    throw new Error(`模块名须为 kebab-case: ${name}`);
+    throw new Error(`页面名须为 kebab-case: ${name}`);
 
   const root = process.cwd();
   const { loadConfig, codegen } = await import("@elysiax/core");
   const config = await loadConfig(root);
-  const modulesDir = config.modules ?? "src/modules";
-  const dir = resolve(root, modulesDir, name);
-  if (existsSync(dir)) throw new Error(`模块已存在: ${dir}`);
+  const pagesDir = config.pages ?? "src/pages";
+  const dir = resolve(root, pagesDir, name);
+  if (existsSync(dir)) throw new Error(`页面已存在: ${dir}`);
 
-  // 模块目录到 .elysiax/ 的相对深度（如 src/modules/user → ../../../）
-  const up = "../".repeat(modulesDir.split("/").length + 1);
+  // 页面目录到 .elysiax/ 的相对深度（如 src/pages/user → ../../../）
+  const up = "../".repeat(pagesDir.split("/").length + 1);
   const P = pascal(name);
   const C = camel(name);
 
@@ -98,6 +98,7 @@ async function scaffoldModule(name: string, logger: { info: (m: string) => void 
     `export class ${P}Service {
   // 依赖在构造函数里声明，${name}.di.ts 的 provide() 按顺序给类引用：
   // constructor(private readonly db: Db) {}
+  // 业务错误抛 ServiceError（@elysiax/core），框架统一映射回显
 }
 `,
   );
@@ -107,7 +108,6 @@ async function scaffoldModule(name: string, logger: { info: (m: string) => void 
 import { ${P}Service } from "./${name}.service";
 
 export default defineModule({
-  route: "/${name}",
   provides: {
     // 键 = camelCase 类名；依赖写类引用（编译期校验），懒加载用 lazy(Class)
     ${C}Service: provide(${P}Service),
@@ -116,68 +116,138 @@ export default defineModule({
 `,
   );
   writeFileSync(
-    resolve(dir, `${name}.controller.tsx`),
-    `import { defineController } from "${up}.elysiax";
+    resolve(dir, `${name}.page.tsx`),
+    `import { definePage } from "@elysiax/core";
+import { ${P}List } from "./${name}.partials";
 
-export const ${C}Controller = defineController({ prefix: "/${name}" })
-  .get("/", ({ di }) => di.get("${C}Service"));
-  // 返回 JSX 即 text/html 响应：.get("/ui", ({ di }) => <${P}Ui />)
+export default definePage(({ di }) => ({
+  title: "${name}",
+  content: <${P}List />,
+}));
+`,
+  );
+  writeFileSync(
+    resolve(dir, `${name}.partials.tsx`),
+    `import type { Component } from "@workspace/htmx";
+import { defineRoutes } from "${up}.elysiax";
+
+/** 展示组件（整页与片段刷新共用） */
+export const ${P}List: Component = () => (
+  <div id="${C}-list">
+    <h2 class="text-lg font-semibold">${P}</h2>
+  </div>
+);
+
+/** GET 片段子路由：挂在 /api/${name} 前缀下（页面 URL = 文件夹路径） */
+export default defineRoutes();
+  // .get("/:id", ({ di, params }) => <${P}List />)
+`,
+  );
+  writeFileSync(
+    resolve(dir, `${name}.actions.tsx`),
+    `import { defineRoutes } from "${up}.elysiax";
+
+/** 写端点：校验失败框架 422 回显；业务错误由 service 抛 ServiceError，不写 try/catch */
+export default defineRoutes();
+  // .post("/", { body: t.Object({ name: t.String() }) }, ({ di, body, toast }) => {
+  //   toast("已创建");
+  //   return <${P}List />;
+  // })
 `,
   );
 
   await codegen(root, config);
-  logger.info(`✅ 模块已创建: ${modulesDir}/${name}/（.elysiax/ 已重新生成）`);
-  logger.info(`   路由前缀: /${name}，服务键: ${C}Service`);
+  logger.info(`✅ 页面已创建: ${pagesDir}/${name}/（.elysiax/ 已重新生成）`);
+  logger.info(`   URL: /${name}，API 前缀: /api/${name}，服务键: ${C}Service`);
 }
 
-async function scaffoldIsland(mod: string, logger: { info: (m: string) => void }) {
-  const root = process.cwd();
-  const { loadConfig } = await import("@elysiax/core");
-  const modulesDir = (await loadConfig(root)).modules ?? "src/modules";
-  const dir = resolve(root, modulesDir, mod, "island");
-  if (!existsSync(resolve(root, modulesDir, mod)))
-    throw new Error(`模块不存在: ${modulesDir}/${mod}（先 elysiax new module ${mod}）`);
-  if (existsSync(dir)) throw new Error(`岛已存在: ${dir}`);
+/** 纯服务模块：只有 di + service，不进路由表（deploy/edge/github 形态） */
+async function scaffoldService(name: string, logger: { info: (m: string) => void }) {
+  if (!/^[a-z][a-z0-9-]*$/.test(name))
+    throw new Error(`服务名须为 kebab-case: ${name}`);
 
-  const P = pascal(mod);
+  const root = process.cwd();
+  const { loadConfig, codegen } = await import("@elysiax/core");
+  const config = await loadConfig(root);
+  const pagesDir = config.pages ?? "src/pages";
+  const dir = resolve(root, pagesDir, name);
+  if (existsSync(dir)) throw new Error(`目录已存在: ${dir}`);
+
+  const P = pascal(name);
+  const C = camel(name);
   mkdirSync(dir, { recursive: true });
-  // 岛需要 react / react-dom，没装就直接报错提示（避免生成后类型检查挂）
-  const pkgPath = resolve(root, "package.json");
-  const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+  writeFileSync(
+    resolve(dir, `${name}.service.ts`),
+    `export class ${P}Service {}
+`,
+  );
+  writeFileSync(
+    resolve(dir, `${name}.di.ts`),
+    `import { defineModule, provide } from "@elysiax/core";
+import { ${P}Service } from "./${name}.service";
+
+export default defineModule({
+  provides: {
+    ${C}Service: provide(${P}Service),
+  },
+});
+`,
+  );
+  await codegen(root, config);
+  logger.info(`✅ 纯服务模块已创建: ${pagesDir}/${name}/（无路由，仅供其他页面注入）`);
+}
+
+/** client 模式升舱：在已有页面目录下生成 client/index.tsx（L5 逃生舱） */
+async function scaffoldClient(page: string, logger: { info: (m: string) => void }) {
+  const root = process.cwd();
+  const { loadConfig, codegen } = await import("@elysiax/core");
+  const config = await loadConfig(root);
+  const pagesDir = config.pages ?? "src/pages";
+  const pageDir = resolve(root, pagesDir, page);
+  if (!existsSync(pageDir))
+    throw new Error(`页面不存在: ${pagesDir}/${page}（先 elysiax new page ${page}）`);
+  const dir = resolve(pageDir, "client");
+  if (existsSync(dir)) throw new Error(`client 已存在: ${dir}`);
+
+  const P = pascal(page);
+  mkdirSync(dir, { recursive: true });
+  // client 需要 react / react-dom，没装就直接报错提示（避免生成后类型检查挂）
+  const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
   const deps = { ...pkg.dependencies, ...pkg.devDependencies };
   if (!deps["react-dom"])
-    throw new Error(`岛需要 react + react-dom，请先 bun add react react-dom`);
+    throw new Error(`client 模式需要 react + react-dom，请先 bun add react react-dom`);
   writeFileSync(
     resolve(dir, "index.tsx"),
     `import { createRoot } from "react-dom/client";
 
-// 边界规则：htmx 只渲染容器 <div id="${mod}-island" />，容器内部全归 React 管，
-// 两边不要操作同一个 DOM 元素。
-function ${P}Island() {
-  return <div>${P} island</div>;
+// client 模式：/${page} 由 codegen 壳 HTMLBundle 服务，整页归 React。
+// 铁律：依赖链不得 import Node-only 包（dotenv/bun:sqlite 等会让浏览器打包 500）；
+// 后端数据走 /api/${page} 的 JSON 端点（${page}.actions.ts）。
+function App() {
+  return <div>${P} client</div>;
 }
 
-const el = document.getElementById("${mod}-island");
-if (el) createRoot(el).render(<${P}Island />);
+createRoot(document.getElementById("root")!).render(<App />);
 `,
   );
-  logger.info(`✅ 岛已创建: ${modulesDir}/${mod}/island/index.tsx`);
-  logger.info(`   下一步: 在 ${mod}.ui.tsx 渲染 <div id="${mod}-island" />，并在 index.html 里 <script type="module" src=".../island/index.tsx">`);
+  await codegen(root, config);
+  logger.info(`✅ client 模式已启用: ${pagesDir}/${page}/client/index.tsx（壳 .elysiax/shells/ 已生成）`);
 }
 
 cli.addCommand({
   name: "new",
-  description: "脚手架：new module <name> 生成模块；new island <module> 生成 React 岛",
+  description: "脚手架：new page <name> 页面；new service <name> 纯服务模块；new client <page> 升舱 React",
   arguments: [
-    { name: "kind", description: "module | island", type: String },
-    { name: "name", description: "模块名（island 时为目标模块）", type: String },
+    { name: "kind", description: "page | service | client", type: String },
+    { name: "name", description: "名称（client 时为目标页面）", type: String },
   ],
   execute: async ({ argument, logger }) => {
     const [kind, name] = argument;
-    if (!name) throw new Error("用法: elysiax new module <name> | elysiax new island <module>");
-    if (kind === "module") return scaffoldModule(name, logger);
-    if (kind === "island") return scaffoldIsland(name, logger);
-    throw new Error(`未知类型 "${kind}"：支持 module | island`);
+    if (!name) throw new Error("用法: elysiax new page|service|client <name>");
+    if (kind === "page") return scaffoldPage(name, logger);
+    if (kind === "service") return scaffoldService(name, logger);
+    if (kind === "client") return scaffoldClient(name, logger);
+    throw new Error(`未知类型 "${kind}"：支持 page | service | client`);
   },
 });
 
@@ -282,7 +352,7 @@ cli.addCommand({
 // ─────────────────────────────────────────────
 cli.addCommand({
   name: "doctor",
-  description: "体检：DI 图装配、跨模块路由冲突、React 岛 htmx 边界",
+  description: "体检：DI 图装配、跨模块路由冲突、client 模式浏览器边界",
   execute: async ({ logger }) => {
     const root = process.cwd();
     const { codegen, loadConfig, extractRoutes } = await import("@elysiax/core");
@@ -327,40 +397,35 @@ cli.addCommand({
     }
     if (errors === 0) logger.info(`✅ 路由无冲突（${pathOwner.size} 条）`);
 
-    // 3) React 岛边界：有 island/ 的模块，ui 片段不得把 htmx swap 目标指向岛容器
-    let islandIssues = 0;
-    for (const entry of modDirs) {
-      if (!entry.isDirectory()) continue;
-      const dir = resolve(root, modulesDir, entry.name);
-      if (!existsSync(resolve(dir, "island"))) continue;
-      // 岛是浏览器代码：import .elysiax 桶文件会把服务端图谱（modules.gen → controller
-      // → service → bun:sqlite）打进浏览器 bundle，必须直接引 .elysiax/routes.gen
-      for (const f of readdirSync(resolve(dir, "island"))) {
-        if (!/\.tsx?$/.test(f)) continue;
-        const src = readFileSync(resolve(dir, "island", f), "utf8");
-        if (/from\s+["'][^"']*\.elysiax["']/.test(src)) {
+    // 3) client 模式边界：client/ 是浏览器代码，import .elysiax 桶文件会把服务端
+    //    图谱（modules.gen → service → bun:sqlite）打进浏览器 bundle，
+    //    必须直接引 .elysiax/routes.gen；Node-only 包（dotenv/bun:sqlite）同理禁止
+    let clientIssues = 0;
+    const pagesDir = config.pages ?? "src/pages";
+    const { Glob } = await import("bun");
+    for await (const f of new Glob(`${pagesDir}/**/client/**/*.ts*`).scan({ cwd: root })) {
+      const src = readFileSync(resolve(root, f), "utf8");
+      // 只查值级 import（type import 会被擦除，不进入浏览器包）
+      for (const m of src.matchAll(/^import\s+(?!type\b)[^"']*from\s+["']([^"']+)["']/gm)) {
+        const spec = m[1]!;
+        if (/\.elysiax(\/index)?$/.test(spec) || spec === ".elysiax") {
           logger.error(
-            `❌ ${entry.name}/island/${f}: 岛（浏览器代码）import 了 .elysiax 桶文件，` +
+            `❌ ${f}: client（浏览器代码）import 了 .elysiax 桶文件，` +
               `会把服务端图谱打进浏览器 bundle——routes 请从 .elysiax/routes.gen 直接引`,
           );
-          islandIssues++;
+          clientIssues++;
           errors++;
-        }
-      }
-      for (const f of readdirSync(dir)) {
-        if (!/\.ui\.tsx$/.test(f)) continue;
-        const src = readFileSync(resolve(dir, f), "utf8");
-        if (new RegExp(`hx-target=["'{][^}"']*#${entry.name}-island`).test(src)) {
+        } else if (["dotenv", "bun:sqlite", "node:fs", "node:child_process"].some((p) => spec === p || spec.startsWith("node:"))) {
           logger.error(
-            `❌ ${entry.name}/${f}: htmx swap 目标指向岛容器 #${entry.name}-island，` +
-              `会冲掉 React 挂载点（边界规则：htmx 只渲染容器，容器内部归 React）`,
+            `❌ ${f}: client 依赖链引入 Node-only 包 "${spec}"，Bun 浏览器打包会 500` +
+              `——抽零依赖模块共用（参考 dockyard 的 env-text.ts）`,
           );
-          islandIssues++;
+          clientIssues++;
           errors++;
         }
       }
     }
-    if (!islandIssues) logger.info("✅ React 岛边界无越界");
+    if (!clientIssues) logger.info("✅ client 模式边界无越界");
 
     if (errors > 0) throw new Error(`doctor 发现 ${errors} 个问题`);
     logger.info("✅ 全部检查通过");
@@ -393,24 +458,40 @@ cli.addCommand({
 
     const config = await loadConfig(process.cwd());
     const modulesDir = config.modules ?? "src/modules";
+    const pagesDir = config.pages ?? "src/pages";
     const entry = config.build?.entry ?? "src/index.ts";
 
     await codegen(process.cwd(), config);
     logger.info("✅ .elysiax/ 已生成");
 
-    const child = spawn("bun", ["--hot", entry], {
-      stdio: "inherit",
-      cwd: process.cwd(),
-    });
+    // 当前子进程退出（非重启换掉的旧进程）→ CLI 随之退出
+    const spawnChild = () => {
+      const c = spawn("bun", ["--hot", entry], {
+        stdio: "inherit",
+        cwd: process.cwd(),
+      });
+      c.on("exit", (code) => {
+        if (child === c) process.exit(code ?? 0);
+      });
+      return c;
+    };
+    let child = spawnChild();
 
-    // 轮询模块声明（module.json / *.di.ts / infra.di.ts）变化 → 重新生成，
-    // .elysiax/ 文件变化会触发 bun --hot 重载
+    // 轮询两类变化：
+    // 1. 声明变化（module.json / *.di.ts / infra.di.ts）→ 重新 codegen，
+    //    .elysiax/ 文件变化触发 bun --hot 重载
+    // 2. 页面结构变化（page/partials/actions/client 文件增删）→ Bun.serve
+    //    routes 表不可热增，codegen 后重启子进程
     const snapshot = async () => {
       const times: string[] = [];
       for (const pattern of [
         `${modulesDir}/*/module.json`,
         `${modulesDir}/*/*.di.ts`,
+        `${pagesDir}/**/*.di.ts`,
         "src/infra.di.ts",
+        // SSR 全局样式内容变化 → 重新 codegen（assets.gen 内联文本），
+        // .elysiax/ 变化触发 bun --hot 重载；client 页 CSS 走 HTMLBundle HMR
+        config.clientCss ?? "src/global.css",
       ]) {
         for await (const f of new Glob(pattern).scan({ cwd: process.cwd() })) {
           times.push(`${f}:${(await Bun.file(f).lastModified)}`);
@@ -418,25 +499,53 @@ cli.addCommand({
       }
       return times.join("|");
     };
-    let last = await snapshot();
-    setInterval(async () => {
-      const now = await snapshot();
-      if (now !== last) {
-        last = now;
-        try {
-          await codegen(process.cwd(), config);
-          logger.info("🔄 模块声明变化，.elysiax/ 已重新生成");
-        } catch (error) {
-          logger.error((error as Error).message);
+    const structureSnapshot = async () => {
+      const files: string[] = [];
+      for (const pattern of [
+        `${pagesDir}/**/*.page.tsx`,
+        `${pagesDir}/**/*.page.ts`,
+        `${pagesDir}/**/*.partials.tsx`,
+        `${pagesDir}/**/*.partials.ts`,
+        `${pagesDir}/**/*.actions.ts`,
+        `${pagesDir}/**/*.actions.tsx`,
+        `${pagesDir}/**/client/index.tsx`,
+      ]) {
+        for await (const f of new Glob(pattern).scan({ cwd: process.cwd() })) {
+          files.push(f);
         }
+      }
+      return files.sort().join("|");
+    };
+    const restart = () => {
+      child.kill();
+      child = spawnChild();
+      logger.info("🔄 页面结构变化，dev server 已重启");
+    };
+    let last = await snapshot();
+    let lastStructure = await structureSnapshot();
+    setInterval(async () => {
+      const structure = await structureSnapshot();
+      const now = await snapshot();
+      if (structure === lastStructure && now === last) return;
+      try {
+        await codegen(process.cwd(), config);
+      } catch (error) {
+        logger.error((error as Error).message);
+        return;
+      }
+      if (structure !== lastStructure) {
+        lastStructure = structure;
+        last = now;
+        restart();
+      } else {
+        last = now;
+        logger.info("🔄 模块声明变化，.elysiax/ 已重新生成");
       }
     }, 500);
 
-    // 保持 CLI 进程存活（否则 execute 返回后 cerebro 退出，watcher 随之死亡）
-    const code = await new Promise<number>((resolve) =>
-      child.on("exit", (c) => resolve(c ?? 0)),
-    );
-    process.exit(code);
+    // 保持 CLI 进程存活（setInterval 持有事件循环；子进程退出时 spawnChild
+    // 的 exit 回调里 process.exit）
+    await new Promise(() => {});
   },
 });
 

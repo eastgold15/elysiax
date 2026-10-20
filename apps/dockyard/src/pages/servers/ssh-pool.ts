@@ -1,3 +1,4 @@
+import { ServiceError } from "@elysiax/core";
 import { readFileSync } from "node:fs";
 import net from "node:net";
 import { connect, acceptHostKeys, type Credential, type SshClient } from "@meitaim/ssh";
@@ -36,7 +37,7 @@ function nodeSocketDuplex(socket: net.Socket) {
 
 async function agentCredentials(): Promise<Credential[]> {
   const sockPath = Bun.env.SSH_AUTH_SOCK;
-  if (!sockPath) throw new Error("SSH_AUTH_SOCK 未设置（ssh-agent 不可用）");
+  if (!sockPath) throw new ServiceError("SSH_AUTH_SOCK 未设置（ssh-agent 不可用）");
   const socket = net.createConnection(sockPath);
   await new Promise<void>((resolve, reject) => {
     socket.once("connect", resolve);
@@ -44,7 +45,7 @@ async function agentCredentials(): Promise<Credential[]> {
   });
   const agent = sshAgent(nodeSocketDuplex(socket));
   const identities = await agent.identities();
-  if (identities.length === 0) throw new Error("ssh-agent 里没有可用密钥（先 ssh-add）");
+  if (identities.length === 0) throw new ServiceError("ssh-agent 里没有可用密钥（先 ssh-add）");
   return identities.map((signer) => ({ signer }));
 }
 
@@ -84,7 +85,7 @@ export class SshPool {
     } else if (server.authType === "agent") {
       credential = { credentials: await agentCredentials() };
     } else {
-      if (!server.keyPath) throw new Error("未配置私钥路径");
+      if (!server.keyPath) throw new ServiceError("未配置私钥路径");
       credential = { privateKey: readFileSync(server.keyPath, "utf8") };
     }
 

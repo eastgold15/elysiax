@@ -38,9 +38,15 @@ TOML 的键值归属最近的 `[table]`。`preload` 写在 `[serve.static]` 之�
 ### 6. 破坏性变更清单（1.x → 2.0）
 
 - 路由签名 `.post(path, handler, hook)` → `(path, hook, handler)`，旧顺序直接抛错
-- `onError` → `error`、`onAfterResponse` → `afterResponse`、`resolve` 并入 `derive`
 - scope 参数 `{ as: "scoped" }` → 字符串 `'plugin'`
 - 类泛型变为 `Elysia<BasePath, Scope, Singleton, Definitions, Metadata, Routes, Ephemeral, Volatile>`
+
+**2.0.0-rc.0 又改了一轮（实测漂移）**：
+
+- 生命周期钩子**改回 on 前缀**：`.error` → `.onError`、`.beforeHandle` → `.onBeforeHandle`、`.afterResponse` → `.onAfterResponse`（macro 的 hook 键保留旧名）
+- macro derive 短路**只认 `status()`**，返回裸 Response 不短路
+- `status(code, body)` 只收 2 个参数（没有 headers 参数）
+- 错误类注册：`.onError(Class, handler)`
 
 ### 7. `derive` 不跨 `.use()` 兄弟插件边界
 
@@ -173,3 +179,23 @@ setupTypebox({ typebox: { type: typeboxType, system: typeboxSystem, value: typeb
 1. **`env_file` 相对路径必炸**：`env_file: ../apps/x/.env.production` 相对的是仓库目录树，远端没有 → compose 直接报 "env file not found" 拒绝启动。up 前解析 compose 把每个 env_file 路径造出空占位文件（`[ -f p ] || printf ... > p`，不覆盖已有），真实环境变量由 override compose 的 `environment:` 注入
 2. **`-f` 是指定即唯一**：`docker compose -f a.yml up` 只用 a.yml。要叠加 override 必须 `-f docker-compose.yml -f override.yml` 两个都列；且 override 里**不要写 `name:`**——项目名用 `-p` 定死，override 的 name 会和 `-p` 抢（对账用的容器名全乱）
 3. **端口探测要展开默认值**：`"${API_PORT:-13080}:${API_PORT:-13080}"` 不是纯数字，正则前先 `\$\{[^}]*:-(\d+)\}` → `$1` 替换
+
+## 页面架构时代（2026-10 之后）
+
+### 27. HX-Trigger 响应头只能是 latin1——中文 toast 直接 500
+
+`toast('用户「Bob」已添加')` 把中文塞进 `HX-Trigger` JSON 头，Elysia `mergeHeaders` 抛 `Header 'hx-trigger' has invalid value`，整个 POST 变 500（Headers 只接受 latin1）。
+
+**解法**：进头前 `encodeURIComponent(message)`（`packages/htmx/src/actions.ts`），壳的 toast 脚本里 `decodeURIComponent` 还原。**两头必须一起改**——只编码不解码用户看到 %E7%94%A8。
+
+### 28. client 页浏览器打包：dotenv 会让 /canvas 500
+
+Bun 的 HTMLBundle 浏览器构建拒绝 `require("child_process")`——而 **dotenv 的 browser dist 恰恰有这句**（feature-detect 用）。client 依赖链里任何文件值级 import 了引 dotenv 的服务端模块，整页打包失败返回 500。
+
+**解法**：共享逻辑抽**零依赖模块**（dockyard 的 `src/pages/deploy/env-text.ts`），服务端文件转出口保持旧 import 不破。同类黑名单：bun:sqlite、node:*。类型 import 不受限（会被擦除）。`elysiax doctor` 会扫 client/ 的值级 import。
+
+### 29. 重复物理 elysia 安装导致 `#private` 类型不兼容（TS2769）
+
+monorepo 里 `packages/htmx/node_modules/elysia` 与根的 elysia 是两份物理拷贝（同版本不同 hash），TS 的 `#private` 字段名义类型判定让它们互不兼容，`.use(html())` 报 TS2769。
+
+**解法**：框架边界一次 `as any` 断言 + 注释说明（`packages/core/src/di.ts`），用户代码零感知。根治要等依赖去重（Bun catalog/peer 解析）。

@@ -1,5 +1,21 @@
+# dockyard
 
+docker 部署工具——elysiax 页面架构的实战项目。
 
-数据库选型Bun 原生 SQLite
-校验库：TypeBox
-使用bun-tailwind-Plugin
+服务器管理（SSH/密钥/信任）、GitHub 与本地项目导入、compose/openship.json 自动识别、
+统一部署引擎（构建/推送/up）、画布编排（React Flow）、反代域名与证书、共享中间件资源。
+
+## 开发
+
+```sh
+bun run dev        # elysiax dev（codegen + hot）
+bunx elysiax doctor
+bunx elysiax build [--desktop]
+```
+
+## 架构
+
+- `src/pages/`——页面树：projects/servers（htmx CRUD）、canvas（client 模式整页 React）、
+  deploy/edge/github/resources（纯服务模块）
+- `src/app.layout.tsx`——全局壳；`src/shared/ui/`——L4 共享渲染
+- 文档：[dockyard 实战](../website/docs/dockyard.mdx) · [画布 client 模式](../website/docs/canvas-client.mdx)

@@ -127,7 +127,7 @@ L1 的写端点（POST/PUT/DELETE）只有三种合法返回：
 
 - **加载态**：首屏由服务端同步渲染，无 loading；hx 交互的加载指示用 `hx-indicator`，样式归 L4
 - **空态**：每个列表/数据区域必须有空态分支，写在 L2 片段里（片段同源，空态自然被 hx 刷新复用）
-- **错误态**：service 抛错 → 端点捕获 → 渲染错误片段；hx 请求失败（5xx/断网）→ 全局壳监听 `htmx:responseError` 弹 toast，页面不各自处理
+- **错误态**：service 抛 `ServiceError`（带 statusCode）→ 框架统一映射（hx → statusCode + 错误横幅片段；普通 → JSON `{ error }`），端点不写 try/catch 回显，预期错误 `return status(422, { error })`；hx 请求失败（5xx/断网）→ 全局壳监听 `htmx:responseError` 弹 toast，页面不各自处理
 
 ### 7.4 URL 是唯一状态源
 

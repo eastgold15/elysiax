@@ -1,7 +1,7 @@
 # @workspace/htmx
 
 Elysia HTML 插件（基于 [@kitajs/html](https://github.com/kitajs/html)）：JSX 组件、
-suspense 流式渲染、自动 content-type / doctype 检测。
+suspense 流式渲染、PageResult 整页/片段分流、写操作三态助手、toast 全局机制。
 
 ## 使用
 
@@ -12,41 +12,46 @@ import { html } from "@workspace/htmx";
 const app = new Elysia().use(html());
 ```
 
-挂载后 **handler 直接返回 JSX 或 HTML 字符串即可**，不需要 `html()` 包裹
-（`autoDetect` 默认开启，自动设置 `content-type: text/html`）：
+挂载后 **handler 直接返回 JSX 或 HTML 字符串即可**（`autoDetect` 默认开启）。
+识别 PageResult 品牌对象时按 `HX-Request` 头分流：无 → layout 整页；有 → content 片段。
 
-```tsx
-// 片段 —— 自动 text/html，不加 doctype
-app.get("/users/ui", () => <UserList users={users} />);
+> 在本 monorepo 中，`@elysiax/core` 的 `elysiaxAPI` 已内置
+> `.use(html())` + `.use(actions())`，页面路由（page/partials/actions）
+> 零配置享受上述行为。
 
-// 整页 —— autoDoctype 默认 'full'，自动补 <!doctype html>
-app.get("/page", () => (
-  <html>
-    <body>...</body>
-  </html>
-));
+## 页面原语
+
+- `PageResult` / `brandPageResult` / `isPageResult`——页面返回值品牌（core 的 definePage 打）
+- `LayoutComponent`——全局壳签名：`({ title, meta, content, request }) => JSX`
+
+## 写操作三态（actions 插件）
+
+derive 三个 ctx 助手，协议细节（303 vs HX-Redirect、422 回显、HX-Trigger）收敛在框架：
+
+```ts
+.post("/apps", async ({ redirect, toast, formError }) => {
+  toast("部署已开始", "success");   // 合并进 HX-Trigger 头（中文自动 encodeURIComponent）
+  return redirect(routes.pages.canvas());  // hx → HX-Redirect；普通 → 303
+})
 ```
 
-> 在本 monorepo 中，`@elysiax/core` 的 `elysiaxAPI` 已内置 `.use(html())`，
-> 模块路由（`*.controller.tsx`）零配置享受上述行为。只有在 `elysiaxAPI`
-> 之外、直接挂在根 app 上的路由才需要自己 `.use(html())`。
+- `ctx.redirect(url)`
+- `ctx.toast(message, kind?)`——注意：响应头只支持 latin1，中文消息已自动编码，壳脚本负责解码
+- `ctx.formError(fragment)`——hx → 422 + 片段；普通 → 422 + layout 整页
 
-## 组件约定
+## toast 全局机制
 
-- JSX：`class`（非 `className`），`hx-*` 属性有类型提示（各 app 的
-  `src/htmx.d.ts` 通过 `import "@kitajs/html/htmx.js"` 引入增强）
-- 模块片段：`modules/<name>/<name>.ui.tsx` 默认导出组件，由
-  `moduleAggregator` 聚合；有 controller 时在路由里 `<Ui {...props}/>`
-  渲染，无 controller 时自动挂载 `GET <route>/ui`
+`ToastRoot` + `ToastScripts`（AppLayout 默认包含）：toast 容器 + 启动脚本
+（监听 `toast` 事件与 `htmx:responseError`），含 responseHandling 配置
+（422 也参与 swap，写操作失败回显表单片段）。
 
 ## API
 
 - `html(options?)` — Elysia 插件，选项见 `src/options.ts`
-  （`contentType` / `autoDetect` / `autoDoctype` / `isHtml`）
+- `actions(options?)` — 三态助手插件
 - context 辅助：`html(value)`（显式渲染）、`stream(fn, args)`（suspense 流式）
 - 类型：`Component`（别名 `FC`）、`PropsWithChildren`
 - 子路径导出：`@workspace/htmx/htmx`、`@workspace/htmx/hotwire`
-  （启用对应的 kita 属性类型）
 
 ## 测试
 

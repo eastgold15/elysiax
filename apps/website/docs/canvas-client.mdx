@@ -1,0 +1,88 @@
+---
+title: 画布 client 模式
+description: dockyard 画布从「htmx 壳 + React 岛」升舱为整页 React client 模式——三条数据通道、UiBus 模态层、浏览器打包铁律，以及 ResizeObserver loop 的收敛方案。
+---
+
+# 画布 client 模式
+
+dockyard 画布（React Flow 工作流编辑器：拖拽、连线、实时状态、部署抽屉、容器终端）是框架里交互最复杂的页面。它经历了两个阶段：
+
+1. **React 岛阶段**：htmx 壳 + 岛容器 + `htmx.ajax` 桥调服务端片段模态——754 行抽屉片段靠桥维护，成本过高
+2. **client 模式阶段（现行）**：整页 React，壳都不走 htmx。岛、桥、afterSwap 挂载器全部删除
+
+教训：**「岛」是半吊子边界**。复杂交互页就该整页升舱（L5），模态/表单/错误回显全在一套模型里。
+
+## 结构
+
+```
+src/pages/canvas/
+  client/               # 整页 React（codegen 壳 HTMLBundle 服务 /canvas）
+    index.tsx           # createRoot 挂载
+    app.tsx             # 项目解析（?project=/?path=/latest）+ UiContext + DrawerHost
+    board.tsx           # React Flow：结构 fetch + SSE + 连线建边
+    nodes.tsx           # 卡片视图（部署/删除/尺寸持久化）
+    drawers.tsx         # 754 行服务端抽屉片段的 React 重写（向导/8 Tab 服务抽屉/日志/域名/变量）
+    console.tsx         # xterm ←→ WS
+    live.ts             # SSE → LiveContext
+    api.ts              # routes.pages.canvas 类型化路径 + JSON helper
+    ui.ts               # UiBus（open/close/refresh）模态总线
+  canvas.actions.ts     # JSON API（/api/canvas/*）：board/SSE/WS/CRUD
+  canvas.service.ts / canvas.repository.ts / canvas.model.ts
+  canvas.di.ts
+```
+
+## 三条数据通道
+
+| 通道 | 内容 | 传输 | 更新时机 |
+| --- | --- | --- | --- |
+| 结构数据 | 卡片/连线/位置（nodes/edges） | `GET /api/canvas/projects/:id/board` JSON | 挂载拉一次 + body `refresh` 事件 refetch |
+| 节点几何 | 拖拽/拉伸中的位置尺寸 | **本地权威**（React state） | 合并时保留 `dragging \|\| resizing` 节点 |
+| 实时数据 | 部署状态、容器 state | SSE `/api/canvas/projects/:id/events` | 服务端 publish 即推，进 LiveContext |
+
+为什么分开：
+
+- **结构不进 SSE**：位置/连线是低频高价值数据，走 REST + 按需 refetch，不会因为一条状态推送把用户正在拖的节点重渲染掉
+- **实时不进 node.data**：状态灯这类高频数据进 React context，不触发 React Flow 的节点 diff——否则每条 SSE 全量重算 nodes/edges，拖拽帧率直接崩
+- **refresh 事件是约定**：结构变更（建/删卡、建/删边、部署向导提交）后 `document.body.dispatchEvent(new Event("refresh"))`，app.tsx 监听重拉 board
+
+## 模态层：UiBus 替代 htmx.ajax 桥
+
+旧桥（岛里按钮调全局 `htmx.ajax(url, {target:'#modal-root'})`）已删。现在：
+
+```ts
+// ui.ts：事件总线 + View 判别联合（new-app/new-db/service/env/domains/log）
+const ui = useUi();
+ui.open({ kind: "new-app", nodeId });   // 卡片/右键菜单触发
+ui.open({ kind: "log", targetId });     // 部署后自动开日志
+
+// app.tsx：DrawerHost 按 view 渲染对应抽屉，全部 React 内闭环
+```
+
+错误回显：api.ts 的 `errText` 读服务端 `{ error }`（ServiceError 映射产物），抽屉内联 ErrorBanner。
+
+## 浏览器打包铁律
+
+client/ 是浏览器代码，Bun 打包时依赖链里**任何 Node-only 包都会让页面 500**：
+
+- **dotenv**：browser dist 里 `require("child_process")`，直接炸（画布踩过）。解法：env 文本函数抽零依赖的 `src/pages/deploy/env-text.ts`，服务端 detect.ts 转出口共用
+- **.elysiax 桶文件**：会把服务端图谱（bun:sqlite）打进 bundle。routes 必须直接引 `.elysiax/routes.gen`（doctor 检查）
+- 类型 import 随意——会被擦除，不进 bundle
+
+## ResizeObserver loop 的收敛方案（依然有效）
+
+一拉伸画布就报 `ResizeObserver loop completed with undelivered notifications`——浏览器的丢帧保护警告，触发链是小数像素 round-trip + 尺寸双向改写。按有效性排序的规避：
+
+1. **尺寸取整**：dimension change 进 state 前 `Math.round`
+2. **单一写源**：`resizing` 标志的节点跳过 clamp/grow，拖拽期间只有 NodeResizer 一个写源
+3. **grow-only 只长不缩**：父卡 `Math.max` 累计，精确收敛只在结构 refetch 时做
+4. **rAF 合帧**：dimensions 类 change 攒批，每帧最多一次 setNodes
+5. **全局过滤兜底**：`window error` 监听精确过滤这一条良性警告
+
+> 教训：**任何"把 RO 测量值写回 state 再渲染回同一元素"的链路，都要保证值收敛**（取整 / epsilon 比较 / 单写源）。
+
+## 排查 checklist
+
+1. 找哪个元素在被"测量→写回→再渲染"——大概率是新节点组件把 `node.measured` 写回了 state
+2. 检查新写源是否和既有写源（fitParents / NodeResizer）在同一节点上打架
+3. 值是否收敛：小数取整了吗？grow 会不会把用户的缩小顶回去？
+4. 确认只是良性警告（功能正常）还是真振荡（尺寸持续跳动）

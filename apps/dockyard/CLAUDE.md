@@ -59,6 +59,8 @@ feature.
 
 
 
-不要让 htmx 和 React 操作同一个 DOM 元素。建议将画布区域设计为一个“纯容器”，htmx 只负责渲染这个容器本身（例如 <div id="canvas-root"></div>），而 React 负责其内部的一切渲染和更新。如果 htmx 需要更新周边内容（如工具栏），应确保 hx-swap 的目标是画布容器之外的元素，避免误伤 React 的挂载点。
+不要让 htmx 和 React 操作同一个 DOM 元素。画布已是整页 client 模式（src/pages/canvas/client/），/canvas 由壳 HTMLBundle 服务、不走 htmx；htmx 页面（servers/projects）与 React 页天然隔离，不存在共享 DOM。client 代码依赖链禁 Node-only 包（dotenv/bun:sqlite → 浏览器打包 500）。
+
+错误处理约定：services 抛 ServiceError（@elysiax/core），actions 不写 try/catch 回显；预期错误 return status(code, { error })。
 
 进行测试，需要询问我

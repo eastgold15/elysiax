@@ -1,8 +1,29 @@
 ---
-title: Introduction
-description: Welcome to your new documentation site. Edit this page or add Markdown files beside it, and Blume turns each file into a page.
+title: elysiax 文档
+description: Bun + Elysia 2 + htmx + React 的页面架构全栈框架——概念文档与 dockyard 实战案例。
 ---
 
-Welcome to **Blume**, the open-source docs framework for humans and agents.
+# elysiax 文档
 
-Edit `docs/index.mdx` and save: this page reloads with your changes.
+**elysiax** = Bun + Elysia 2 + htmx（服务端 TSX）+ React 逃生舱的全栈框架。
+一棵页面目录树（`src/pages/`）内聚前端与后端，URL = 文件夹路径，
+InferDI 容器 + codegen 把整棵树粘成类型安全的整体。
+
+文档分两条线：
+
+## 概念（框架本身）
+
+- [elysiax 框架](./elysiax.mdx)——总览：页面形态、DI、类型化路由、ServiceError、实时推送、CLI
+- [页面架构](./page-architecture.md)——L0-L5 分层规范：一目录一页面、一端点两响应、写操作三态、client 逃生舱
+- [踩坑记录](./pitfalls.mdx)——Bun / Elysia 2.0 / InferDI / webview 落地过程中的非显然问题
+
+## 实战（dockyard 案例）
+
+- [dockyard 实战](./dockyard.mdx)——部署工具怎么用页面架构落地：CRUD 页面、纯服务模块、编译分发
+- [画布 client 模式](./canvas-client.mdx)——最复杂页面（React Flow 画布）的整页 React 升舱全过程
+
+## 技术参考
+
+- [elysia2.0](./elysia2.0.md)——Elysia 2 迁移要点
+- [lifecycle](./lifecycle.md)——Elysia 生命周期
+- [drizzle](./drizzle/)——Drizzle ORM 笔记

@@ -1,0 +1,101 @@
+---
+title: dockyard 实战
+description: elysiax 页面架构在真实项目（docker 部署工具 dockyard）里的落地——CRUD 页面、纯服务模块、ServiceError、编译分发。
+---
+
+# dockyard 实战
+
+dockyard 是 elysiax 的实战项目：一个 docker 部署工具（服务器管理、GitHub/本地项目导入、compose 识别部署、画布编排、反代域名）。它验证了页面架构在**真实复杂度**下的形态——本文按页面类型讲用法，[画布单独一篇](./canvas-client.mdx)。
+
+## 页面地图
+
+```
+src/pages/
+  index              # → 重定向/项目列表
+  projects/          # htmx CRUD 页面：page + partials + actions
+  servers/           # htmx CRUD 页面（最标准的形态，脚手架照它抄）
+  canvas/            # client 模式：整页 React + JSON API（见画布篇）
+  ping/              # 最小示例页面
+  deploy/ edge/ github/ resources/   # 纯服务模块（无路由，只提供 DI）
+src/shared/ui/       # L4 共享渲染：cn()、PageHeader、Empty
+src/app.layout.tsx   # L0 全局壳
+```
+
+## 标准 CRUD 页面：servers
+
+三件套 + di + service + repository，一个文件夹全齐：
+
+```tsx
+// servers.page.tsx —— 整页（L1）
+export default definePage(async ({ di }) => ({
+  title: "服务器 · Dockyard",
+  content: <ServerList servers={await di.get("serverService").list()} />,
+}));
+
+// servers.partials.tsx —— 展示组件 + GET 片段（L2）
+export const ServerList: Component<{ servers: Server[] }> = ...
+export default defineRoutes()
+  .get("/:id/card", ({ di, params }) => <ServerCard ... />);
+
+// servers.actions.tsx —— 写端点（L2）
+export default defineRoutes()
+  .post("/", { body: serverForm }, async ({ di, body, toast }) => {
+    await di.get("serverService").create(body);
+    toast(`服务器「${body.name}」已添加`);
+    return <ServerList servers={await di.get("serverService").list()} />;
+  })
+  .delete("/:id", ...);
+```
+
+要点：
+
+- **展示组件（ServerList）放 partials**，整页和写操作后的片段刷新共用同一份渲染——这就是「一块画面一个 state 一个取数函数」的页面架构版
+- hx 目标用 `routes.pages.servers.*` 类型化助手，不手写路径
+- 弹窗（共享资源 modal）也是服务端片段，hx-get 进 `#modal-root`
+
+## 纯服务模块：deploy / edge / github
+
+没有 `.page.tsx` 的文件夹不进路由表，只向容器提供服务：
+
+```ts
+// deploy/deploy.di.ts
+export default defineModule({
+  provides: {
+    deployRepository: provide(DeployRepository, ["db"]),
+    deployService: provide(DeployService, [DeployRepository, SshPool, ...]),
+  },
+});
+```
+
+canvas 的 actions 通过 `di.get("deployService")` 使用——**页面之间零耦合，服务共享靠 DI 图**，不是靠 import 别的页面。
+
+## ServiceError 实战
+
+全项目 45 处 `throw new Error("中文")` 迁成 ServiceError 后的形态：
+
+```ts
+// deploy.service.ts
+if (!target) throw new ServiceError("部署目标不存在", 404);
+
+// canvas.actions.ts —— 没有 try/catch，错误自动变成 { error } JSON
+// 或 hx 横幅片段（看请求来源），客户端 api.ts 的 errText 读 error 字段
+```
+
+actions 里保留的 try/catch 只剩**非回显用途**：JSON.parse 兜底、ws 终端把错误写进 xterm、GitHub 拉取失败的降级（错误作为数据字段返回）。
+
+## 编译分发（已实测）
+
+```sh
+elysiax build            # → dist/dockyard（单二进制，SSR 页 + canvas HTMLBundle + 内联 CSS）
+elysiax build --desktop  # → dist/dockyard-app（webview 双进程：窗口 + --server 子进程）
+elysiax package          # → dist/packaging/（PKGBUILD + .desktop + 图标）
+```
+
+两个必须知道的点：
+
+1. **typebox 要显式 import**（`src/index.ts` 顶部）：elysia 惰性 `require("typebox/*")`，bundler 静态分析不到，编译产物启动即挂
+2. **SSR 全局样式不走 HTMLBundle**：`/api/assets/global.css` 由 codegen 内联成文本（`assets.gen.ts`），编译二进制里没有文件系统也能服务
+
+## 测试协作约定
+
+dockyard 的 CLAUDE.md 里写着「进行测试，需要询问我」——真实服务器、真实 docker，agent 不自作主张跑写操作。冒烟只读端点（GET 页面/JSON）可直接跑。

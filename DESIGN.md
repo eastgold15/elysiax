@@ -1,5 +1,10 @@
 # ElysiaX 模块化框架 · 完整构想文档
 
+> **2026-10 更新：本文是历史构想文档。** 框架已从「module + controller/ui」演进为
+> **页面架构**（`src/pages/` 一目录一页面、page/partials/actions 三件套、client 逃生舱），
+> 现行规范见 `apps/website/docs/page-architecture.md`（概念）与
+> `apps/website/docs/dockyard.mdx`（实战）。本文留存作设计脉络参考。
+>
 > **2026-09 更新**：`module.json` 已废弃 —— 模块的 name/route 收编进 `<name>.di.ts`
 > （`defineModule({ route, provides })`），依赖声明改用 `provide(Class, [Dep, lazy(Dep)])`
 > 类引用写法（编译期校验）。模块发现改为目录扫描（readdirSync），不再以 module.json 为依据。

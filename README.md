@@ -1,33 +1,32 @@
 # elysiax 开发规则
 
-## 一、模块划分
+## 一、页面划分
 
-1. **一个模块 = 屏幕上独立的一块。**
-   用户看到一块画面，就有一个模块对应它。
+1. **一个页面 = 屏幕上独立的一块。**
+   用户看到一个 URL 的画面，就有一个页面文件夹对应它。
 
-2. **模块边界 = 用户心智边界，不是技术边界。**
+2. **页面边界 = 用户心智边界，不是技术边界。**
    不按“数据库/网络/状态管理”切，按“用户看到什么”切。
 
-3. **模块内只按“屏幕上的块”切文件夹，不按技术切。**
-   每个文件夹对应屏幕上的一块。看到屏幕哪块，就知道去哪个文件夹。
+3. **一棵目录树 `src/pages/`，页面文件夹内聚一切。**
+   整页、hx 片段、写端点、DI、service、repository、可选 React client，
+   都在同一个文件夹里。URL = 文件夹路径，没有路由配置。
 
-4. **领域内细分文件夹，同样按“屏幕上的子块”切。**
-   子块是屏幕的一部分，不是数据结构、不是传输方式、不是技术层。
-
-5. **模块内标准结构：**
+4. **页面内标准结构：**
 
 ```
-<module>/
-  <module>.module.ts        ← DI 注册
-  <module>.controller.tsx   ← 路由
-  <块A>/                    ← 屏幕上的一块
-    state.ts                ← 这块的唯一 state 定义 + 取数函数
-    <块A>.ui.tsx            ← 这块的壳
-    <子块>.ui.tsx           ← 这块的子块
-  <块B>/
-  components/               ← 跨块共用的 UI 原子
-  domain/                   ← 纯逻辑，无 UI
+src/pages/<name>/
+  <name>.page.tsx         ← 整页（definePage，L1）
+  <name>.partials.tsx     ← hx 片段 + 展示组件（defineRoutes，L2）
+  <name>.actions.tsx      ← 写端点（POST/DELETE，L2）
+  <name>.di.ts            ← 服务声明（defineModule，L3）
+  <name>.service.ts       ← 业务逻辑
+  <name>.repository.ts    ← 数据访问
+  client/                 ← React 逃生舱（可选，L5）
 ```
+
+5. **没有 .page.tsx 的文件夹 = 纯服务模块。**
+   只提供 DI，不进路由表（deploy/edge/github 形态）。
 
 ## 二、UI + 逻辑一体
 
@@ -37,55 +36,48 @@
 7. **源码在仓库里，可下载、可修改。**
    没有运行时黑盒，没有“升级依赖”，只有“改自己代码”。
 
-## 三、state 与树
+## 三、渲染与状态
 
-8. **state 是唯一真相。**
-   一块画面的所有数据，收敛成一个 state。
+8. **一块画面，一个展示组件，一个取数路径。**
+   展示组件放 partials，整页（page）和写后片段刷新（actions）共用同一份渲染。
 
-9. **树是 `f(state)`。**
-   树从 state 派生，不独立存在。
+9. **整页/片段分流在框架层，页面函数零 if/else。**
+   无 HX-Request → AppLayout 整页；有 → content 片段。
 
-10. **不存在“同时维护树和 state”。**
-    只维护 state，不维护树。
+10. **写操作三态用 ctx 助手，不手写响应头。**
+    `ctx.redirect`（303 vs HX-Redirect）、`ctx.toast`、`ctx.formError`（422 回显）。
 
-11. **组件要么吃 state，要么吃 state 的字段。**
-    不允许组件自己再维护一份等价数据。
+11. **services 抛 ServiceError，actions 零 try/catch 回显。**
+    预期错误 `return status(code, { error })`；错误展示收敛在框架统一映射。
 
-12. **一块画面，一个 state 定义，一个取数函数。**
-    state 用判别联合区分这块画面的不同形态（如不同 tab）。
-    取数函数是这块画面唯一的取数入口。
-
-13. **每个子块只吃自己那一支 state。**
-    子块在类型上吃不到别的子块的字段。
+12. **client 页整页归 React，与 htmx 永不操作同一 DOM。**
+    模态/表单 React 内实现；后端走 actions 的 JSON 端点；
+    依赖链禁 Node-only 包（dotenv/bun:sqlite 会让浏览器打包 500）。
 
 ## 四、依赖方向
 
-14. **UI 块只依赖 domain，domain 不依赖 UI。**
-    domain 是纯逻辑，无 UI，可被任意块引用。
+13. **UI 只依赖 service，service 不依赖 UI。**
 
-15. **模块之间按业务方向依赖。**
-    画面模块依赖领域模块；领域模块不依赖画面模块。
+14. **页面之间零耦合，跨上下文组合上移到页面/actions 层。**
+    InferDI 不支持双向 Lazy——service 保持单向依赖。
 
 ## 五、事件
 
-16. **同一模块内的事件是模块内实现细节。**
-    发布者和订阅者在同一模块，事件不构成跨模块契约。
+15. **实时推送走 defineRealtime（SSE），结构数据走 REST + refetch。**
+    高频状态不进低频结构通道。
 
-17. **跨模块通信用显式接口，不用字符串事件。**
+16. **跨页面通信用 DI 图（di.get），不用字符串事件。**
 
 ## 六、新增功能
 
-18. **加一块画面 = 加一个文件夹。**
-    文件夹内包含：state + 取数函数 + 壳 + 子块。
-
-19. **加一个子块 = 加一个文件。**
-    子块签名统一吃自己那一支 state。
-
-20. **加一个领域逻辑 = 放 `domain/`。**
-    不新建技术层文件夹。
+17. **加一个页面 = 加一个文件夹**（或 `elysiax new page <name>`）。
+18. **加一个纯服务 = 加 di + service**（或 `elysiax new service <name>`）。
+19. **页面升舱 React = 加 client/**（或 `elysiax new client <name>`）。
 
 ---
 
 **一句话总纲：**
 
-> 模块 = 屏幕上的一块；文件夹 = 屏幕上的子块；state 是唯一真相，树是 `f(state)`；UI 只依赖 domain，domain 不依赖 UI。
+> 一棵目录树，页面即文件夹，URL 即路径；htmx 优先、React 兜底；判定收敛框架层，业务代码零样板。
+
+**完整文档见 [apps/website/docs](./apps/website/docs/)**：[框架概念](./apps/website/docs/elysiax.mdx) · [页面架构 L0-L5](./apps/website/docs/page-architecture.md) · [dockyard 实战](./apps/website/docs/dockyard.mdx) · [踩坑记录](./apps/website/docs/pitfalls.mdx)

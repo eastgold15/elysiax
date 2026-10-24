@@ -1,7 +1,7 @@
 /**
  * Options for @elysiajs/html plugin.
  *
- * @link https://elysiajs.com/plugins/html.html
+ * @link https://next.elysiajs.com/plugins/html
  */
 export interface HtmlOptions {
   /**

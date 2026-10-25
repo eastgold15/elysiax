@@ -2,7 +2,7 @@ import { ServiceError } from "@elysiax/core";
 import type { Lazy } from "@inferdi/inferdi";
 import type { UserRepository } from "./user.repository";
 // 跨原子 import 只走插座（契约 §3）
-import type { OrderService } from "../order/order.socket";
+import type { OrderService } from "@/pages/order/order.socket";
 import type { CreateUserInput } from "./user.model";
 
 export class UserService {

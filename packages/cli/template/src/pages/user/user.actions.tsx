@@ -1,6 +1,6 @@
 import { t } from "elysia";
-import { defineRoutes, routes } from "../../../.elysiax";
-import { UserList } from "./user.ui";
+import { defineRoutes, routes } from "@gen";
+import { UserList } from "./user.view";
 
 /** 写端点：挂在 /api/user 前缀下；校验失败由框架 422 回显（不写 try/catch） */
 export default defineRoutes().post(

@@ -2,8 +2,25 @@
 import { createCerebro } from "@visulima/cerebro";
 import { errorHandlerPlugin } from "@visulima/cerebro/plugins/error-handler";
 import { existsSync, cpSync, readFileSync, writeFileSync, readdirSync, mkdirSync } from "node:fs";
-import { resolve, basename } from "node:path";
+import { resolve, basename, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+
+/** 解析 socket 文件的导出符号表（named/type re-export + 本地声明） */
+function socketExports(src: string): Set<string> {
+  const names = new Set<string>();
+  // export { A, B as C } / export type { ... }（可多行）
+  for (const m of src.matchAll(/export\s+(?:type\s+)?\{([^}]*)\}/gs))
+    for (const part of m[1]!.split(",")) {
+      const p = part.trim().replace(/^type\s+/, "");
+      if (!p) continue;
+      const asM = /\bas\s+(\w+)$/.exec(p);
+      names.add(asM ? asM[1]! : p);
+    }
+  // export class/function/const/interface/type X
+  for (const m of src.matchAll(/^export\s+(?:async\s+)?(?:class|function|const|let|var|interface|type|enum)\s+(\w+)/gm))
+    names.add(m[1]!);
+  return names;
+}
 
 const templateDir = fileURLToPath(new URL("../template", import.meta.url));
 
@@ -87,8 +104,7 @@ async function scaffoldPage(name: string, logger: { info: (m: string) => void })
   const dir = resolve(root, pagesDir, name);
   if (existsSync(dir)) throw new Error(`页面已存在: ${dir}`);
 
-  // 页面目录到 .elysiax/ 的相对深度（如 src/pages/user → ../../../）
-  const up = "../".repeat(pagesDir.split("/").length + 1);
+  // .elysiax 产物经 tsconfig paths 别名 @gen 引入，不再算相对深度
   const P = pascal(name);
   const C = camel(name);
 
@@ -157,7 +173,7 @@ export default definePage(({ di }) => ({
   writeFileSync(
     resolve(dir, `${name}.partials.tsx`),
     `import type { Component } from "@workspace/htmx";
-import { defineRoutes } from "${up}.elysiax";
+import { defineRoutes } from "@gen";
 
 /** 展示组件（整页与片段刷新共用） */
 export const ${P}List: Component = () => (
@@ -173,7 +189,7 @@ export default defineRoutes();
   );
   writeFileSync(
     resolve(dir, `${name}.actions.tsx`),
-    `import { defineRoutes } from "${up}.elysiax";
+    `import { defineRoutes } from "@gen";
 
 /** 写端点：校验失败框架 422 回显；业务错误由 service 抛 ServiceError，不写 try/catch */
 export default defineRoutes();
@@ -210,8 +226,7 @@ async function scaffoldModule(
   const dir = resolve(root, pagesDir, name);
   if (existsSync(dir)) throw new Error(`模块已存在: ${dir}`);
 
-  // 原子目录到 .elysiax/ 的相对深度（如 src/pages/user → ../../../）
-  const up = "../".repeat(pagesDir.split("/").length + 1);
+  // .elysiax 产物经 tsconfig paths 别名 @gen 引入，不再算相对深度
   const P = pascal(name);
   const C = camel(name);
 
@@ -314,7 +329,7 @@ export default definePage(({ di }) => ({
     writeFileSync(
       resolve(dir, `${name}.partials.tsx`),
       `import type { Component } from "@workspace/htmx";
-import { defineRoutes } from "${up}.elysiax";
+import { defineRoutes } from "@gen";
 
 /** 展示组件（整页与片段刷新共用） */
 export const ${P}List: Component = () => (
@@ -330,7 +345,7 @@ export default defineRoutes();
     );
     writeFileSync(
       resolve(dir, `${name}.actions.tsx`),
-      `import { defineRoutes } from "${up}.elysiax";
+      `import { defineRoutes } from "@gen";
 
 /** 写端点（返回 partial）：校验失败框架 422 回显；业务错误由 service 抛 ServiceError，
  *  预期错误 return status(code, { error })，actions 不写 try/catch（契约 §4） */
@@ -346,7 +361,7 @@ export default defineRoutes();
     // 纯 API 的 Elysia 实例：default export 供 Eden 推导类型（socket.ts 的 ${P}Api）
     writeFileSync(
       resolve(dir, `${name}.actions.ts`),
-      `import { defineRoutes } from "${up}.elysiax";
+      `import { defineRoutes } from "@gen";
 
 /** 纯 JSON API（react 形态无 .page.tsx，壳由 codegen 的 HTMLBundle 服务）。
  *  default export 是本原子的类型出口：${name}.socket.ts 用 typeof 导出给 Eden 推导。
@@ -664,7 +679,7 @@ cli.addCommand({
       // 只查值级 import（type import 会被擦除，不进入浏览器包）
       for (const m of src.matchAll(/^import\s+(?!type\b)[^"']*from\s+["']([^"']+)["']/gm)) {
         const spec = m[1]!;
-        if (/\.elysiax(\/index)?$/.test(spec) || spec === ".elysiax") {
+        if (/\.elysiax(\/index)?$/.test(spec) || spec === ".elysiax" || spec === "@gen") {
           logger.error(
             `❌ ${f}: client（浏览器代码）import 了 .elysiax 桶文件，` +
               `会把服务端图谱打进浏览器 bundle——routes 请从 .elysiax/routes.gen 直接引`,
@@ -688,7 +703,9 @@ cli.addCommand({
     //    指向原子内部其他文件 = 私拉电线（type import 同样算——类型也是契约）
     let socketIssues = 0;
     const atomsDirs: string[] = [];
+    const socketFiles: string[] = [];
     for await (const f of new Glob(`${pagesDir}/**/*.{di,socket}.ts`).scan({ cwd: root })) {
+      if (f.endsWith(".socket.ts")) socketFiles.push(resolve(root, f));
       const d = resolve(root, f, "..");
       if (!atomsDirs.includes(d)) atomsDirs.push(d);
     }
@@ -700,17 +717,34 @@ cli.addCommand({
         .sort((a, b) => b.length - a.length)[0];
     };
     const resolveImport = (fromFile: string, spec: string): string | undefined => {
-      const base = resolve(fromFile, "..", spec);
+      // 路径别名（模板 tsconfig paths 约定）：@gen → .elysiax/，@/ → src/
+      const base = spec.startsWith("@gen")
+        ? resolve(root, ".elysiax", spec.slice(4))
+        : spec.startsWith("@/")
+          ? resolve(root, "src", spec.slice(2))
+          : resolve(fromFile, "..", spec);
       for (const cand of [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`])
         if (existsSync(cand)) return cand;
       return undefined;
     };
+    // 插座导出符号缓存（适配检查用）
+    const socketSymbols = new Map<string, Set<string>>();
+    const symbolsOf = (sf: string) => {
+      let syms = socketSymbols.get(sf);
+      if (!syms) {
+        syms = socketExports(readFileSync(sf, "utf8"));
+        socketSymbols.set(sf, syms);
+      }
+      return syms;
+    };
     for await (const f of new Glob(`${pagesDir}/**/*.ts*`).scan({ cwd: root })) {
       const abs = resolve(root, f);
       const src = readFileSync(abs, "utf8");
-      for (const m of src.matchAll(/^import\s+(?:type\s+)?[^"']*from\s+["']([^"']+)["']/gm)) {
-        const spec = m[1]!;
-        if (!spec.startsWith(".")) continue; // 包与 shared 基建不查
+      for (const m of src.matchAll(/^import\s+(?:type\s+)?([^"']*?)from\s+["']([^"']+)["']/gm)) {
+        const clause = m[1]!;
+        const spec = m[2]!;
+        // 只查相对 import 与 @/ 别名（指向 src/ 内部）；包与 shared 基建不查
+        if (!spec.startsWith(".") && !spec.startsWith("@/")) continue;
         const target = resolveImport(abs, spec);
         if (!target || !target.includes(`/${pagesDir}/`)) continue;
         const srcAtom = atomOf(abs);
@@ -723,10 +757,142 @@ cli.addCommand({
           );
           socketIssues++;
           errors++;
+          continue;
+        }
+        // 5) 适配检查（符号级）：插头引用的每个符号，插座必须真实导出——
+        //    源码分发场景下"接口对不上"在安装期就报出来，而不是运行时炸
+        const named = /^\{([^}]*)\}/s.exec(clause.trim())?.[1];
+        if (!named) continue; // default/namespace import：插座无 default（§3.1），tsc 会抓
+        for (const part of named.split(",")) {
+          const sym = part.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0]!.trim();
+          if (!sym) continue;
+          if (!symbolsOf(target).has(sym)) {
+            logger.error(
+              `❌ ${f}: 插头插不上——插座 ${relative(root, target)} 没有导出 "${sym}"` +
+                `（插座出口被删/改名，或复制来的原子与对方插座版本不匹配）`,
+            );
+            socketIssues++;
+            errors++;
+          }
         }
       }
     }
-    if (!socketIssues) logger.info(`✅ 插座门禁通过（${atomsDirs.length} 个原子）`);
+    if (!socketIssues) logger.info(`✅ 插座门禁 + 适配检查通过（${atomsDirs.length} 个原子）`);
+
+    // 6) 插座纯度（契约 §3.1）：socket 只含 named/type export，
+    //    不 export default、不导出实例（共享可变状态绕过 DI）
+    let purityIssues = 0;
+    for (const sf of socketFiles) {
+      const src = readFileSync(sf, "utf8");
+      const rel = relative(root, sf);
+      if (/^export\s+default\s/m.test(src)) {
+        logger.error(`❌ ${rel}: 插座含 export default——插座只许 named/type export（契约 §3.1）`);
+        purityIssues++;
+        errors++;
+      }
+      if (/^export\s+const\s+\w+\s*=\s*new\s/m.test(src)) {
+        logger.error(`❌ ${rel}: 插座导出了实例（export const = new …）——共享可变状态必须走 DI，不进插座`);
+        purityIssues++;
+        errors++;
+      }
+    }
+    if (!purityIssues) logger.info("✅ 插座纯度通过（无 default / 实例出口）");
+
+    // 7) 插座只增不减（additive-only）：插座出口是承诺，对比 git HEAD，
+    //    出口减少 = 拔插头。未入库的新文件跳过。
+    let removedTotal = 0;
+    for (const sf of socketFiles) {
+      const rel = relative(root, sf).replaceAll("\\", "/");
+      const old = Bun.spawnSync(["git", "show", `HEAD:${rel}`], { cwd: root, stdout: "pipe", stderr: "ignore" });
+      if (old.exitCode !== 0) continue;
+      const removed = [...socketExports(old.stdout.toString())].filter((s) => !symbolsOf(sf).has(s));
+      if (removed.length) {
+        logger.error(
+          `❌ ${rel}: 插座出口减少了 ${removed.map((s) => `"${s}"`).join(", ")}——` +
+            `插座只增不减；确需删改请先确认没有插头在使用（doctor 适配检查）`,
+        );
+        removedTotal += removed.length;
+        errors++;
+      }
+    }
+    if (!removedTotal) logger.info("✅ 插座出口只增不减");
+
+    // 8) 数据层门禁（契约 §8）：表名全局唯一、迁移 timestamp 全局唯一、
+    //    迁移只许动自己的表（外键 REFERENCES 别家表是插头，允许；CREATE/ALTER 别家表禁止）
+    let dataIssues = 0;
+    const tableOwner = new Map<string, string>(); // 表名 → schema.ts 绝对路径
+    for await (const f of new Glob(`${pagesDir}/**/schema.ts`).scan({ cwd: root })) {
+      const abs = resolve(root, f);
+      const src = readFileSync(abs, "utf8");
+      for (const m of src.matchAll(/sqliteTable\(\s*["'`](\w+)["'`]/g)) {
+        const owner = tableOwner.get(m[1]!);
+        if (owner && owner !== abs) {
+          logger.error(`❌ 表名撞车: "${m[1]}" 同时定义在 ${relative(root, owner)} 与 ${f}——复制原子时请改表名前缀`);
+          dataIssues++;
+          errors++;
+        } else tableOwner.set(m[1]!, abs);
+      }
+    }
+    // timestamp 撞名判定：同 timestamp + 同 name = 合法（拆分片段）；
+    // 同 timestamp + 不同 name = 撞车（执行顺序不确定，shared/db 按 import 序兜底太脆）
+    const seenTs = new Map<number, Map<string, string>>(); // ts → (name → file)
+    for await (const f of new Glob(`${pagesDir}/**/migrations.ts`).scan({ cwd: root })) {
+      const abs = resolve(root, f);
+      const src = readFileSync(abs, "utf8");
+      // 逐条 journal 抓 name + timestamp（条目形如 { name: "...", timestamp: N, ... }）
+      for (const m of src.matchAll(/\{[^{}]*?name:\s*["'`]([^"'`]+)["'`][^{}]*?timestamp:\s*(\d+)[^{}]*?\}/gs)) {
+        const [, name, tsRaw] = m;
+        const ts = Number(tsRaw);
+        const names = seenTs.get(ts) ?? new Map<string, string>();
+        const prev = names.get(name!);
+        if (prev && prev !== f) {
+          // 同名同 timestamp 跨文件 = 合法拆分片段，只记一次
+        } else if (!prev) names.set(name!, f);
+        const others = [...names.keys()].filter((n) => n !== name);
+        if (others.length > 0) {
+          logger.error(
+            `❌ 迁移 timestamp ${ts} 撞车: "${name}"（${f}）与 "${others[0]}"（${names.get(others[0]!)}）` +
+              `——同 timestamp 只允许是同一条迁移的拆分片段（同 name），新迁移请用新 timestamp`,
+          );
+          dataIssues++;
+          errors++;
+        }
+        seenTs.set(ts, names);
+      }
+      const fileAtom = atomOf(abs);
+      for (const m of src.matchAll(/\b(?:CREATE\s+TABLE|ALTER\s+TABLE|DROP\s+TABLE)\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?["`](\w+)["`]/gi)) {
+        const owner = tableOwner.get(m[1]!);
+        if (owner && atomOf(owner) !== fileAtom) {
+          logger.error(`❌ ${f}: 迁移改动了别家原子的表 "${m[1]}"（属 ${relative(root, owner)}）——跨原子 DDL 禁止，外键引用才是插头`);
+          dataIssues++;
+          errors++;
+        }
+      }
+    }
+    if (!dataIssues) logger.info(`✅ 数据层门禁通过（${tableOwner.size} 张表 / ${seenTs.size} 条迁移）`);
+
+    // 9) 端点 schema 完整性（警告，不 fail）：2-arg 形态的端点 handler
+    //    解构了 params/query/body 但路由没声明 schema——Eden/OpenAPI 的类型缺口
+    let schemaWarnings = 0;
+    for await (const f of new Glob(`${pagesDir}/**/*.actions.ts*`).scan({ cwd: root })) {
+      const src = readFileSync(resolve(root, f), "utf8");
+      for (const m of src.matchAll(/\.(get|post|put|patch|delete)\(\s*["'`]([^"'`]+)["'`]\s*,\s*(?:async\s*)?\(\s*\{([^}]*)\}/g)) {
+        const keys = m[3]!;
+        if (/\bparams\b/.test(keys)) {
+          logger.warn(`⚠️  ${f}: ${m[1]!.toUpperCase()} ${m[2]} handler 读了 params 但路由无 schema——Eden/OpenAPI 缺参数类型`);
+          schemaWarnings++;
+        }
+        if (/\bbody\b/.test(keys)) {
+          logger.warn(`⚠️  ${f}: ${m[1]!.toUpperCase()} ${m[2]} handler 读了 body 但路由无 schema`);
+          schemaWarnings++;
+        }
+        if (/\bquery\b/.test(keys)) {
+          logger.warn(`⚠️  ${f}: ${m[1]!.toUpperCase()} ${m[2]} handler 读了 query 但路由无 schema`);
+          schemaWarnings++;
+        }
+      }
+    }
+    if (!schemaWarnings) logger.info("✅ 端点 schema 完整（Eden/OpenAPI 类型无缺口）");
 
     if (errors > 0) throw new Error(`doctor 发现 ${errors} 个问题`);
     logger.info("✅ 全部检查通过");

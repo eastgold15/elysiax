@@ -108,3 +108,31 @@ export type XxxApi = typeof xxxApi;
 | `board` | react client | `apps/demo/src/pages/board/` |
 
 两者都按本契约自含 di/socket；demo 层复用现有 `src/shared/db.ts` 的 `"db"` 值服务。
+
+## 7. 适配检查（凸清单）
+
+di 的 deps 是原子的"凸"（要插哪些插座）；doctor 在 import 扫描时做**符号级适配检查**：
+
+- 跨原子 import 指向插座后，引用的**每个符号**插座必须真实导出；
+- 插不上 = 插座出口被删/改名，或复制来的原子与对方插座版本不匹配——**安装期报错，不是运行时炸**。
+
+这是"框架在安装时检测接口是否对得上"的落地形态：不生成独立清单文件，doctor 扫描即检查。
+
+## 8. 插座演进规则
+
+1. **只增不减（additive-only）**：插座出口是承诺。doctor 对比 `git HEAD` 的插座导出快照，出口减少即报错；确需删改，先确认没有插头在用（§7 适配检查反向就是消费者清单）。
+2. **纯度**：socket 只含 named/type export——不 `export default`、不 `export const x = new …`（实例出口 = 共享可变状态绕过 DI）。doctor 机械强制。
+
+## 9. 数据层门禁
+
+1. **表名全局唯一**：两张表撞名即报错（复制原子进项目时最先撞的就是表名）。约定俗成：表名带原子名前缀（`canvas_nodes`、`deploy_targets`）。
+2. **迁移 journal 只增不改**：旧条目不删不改；`timestamp` 全项目唯一——**唯一例外**是同一条迁移的拆分片段共享 `name + timestamp`（垂直切片拆分时产生，执行序由 `shared/db.ts` 的稳定排序保证）。
+3. **禁止跨原子 DDL**：本原子的 `migrations.ts` 只许 CREATE/ALTER/DROP 自己的表；外键 `REFERENCES` 别家表是插头（正当），ALTER 别家表是拆墙（报错）。
+
+## 10. 端点 schema 完整性
+
+Eden Treaty 与 OpenAPI 的类型质量取决于端点的 t schema 完备度：
+
+- handler 读了 `params` / `query` / `body`，路由就必须声明对应 schema；
+- doctor 对缺口**警告**（不 fail）——类型缺口不挡构建，但会让 Eden 客户端和 /openapi 文档失聪；
+- `.ws()` 端点同样适用（params/query schema）。

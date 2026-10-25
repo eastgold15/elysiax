@@ -26,6 +26,10 @@
 
     "paths": {
       "@/*": ["./src/*"],
+      // codegen 产物别名：import { defineRoutes, routes } from "@gen"，
+      // 替代 ../../../.elysiax 的相对深度写法（Bun 运行时/打包同样认 tsconfig paths）
+      "@gen": ["./.elysiax/index.ts"],
+      "@gen/*": ["./.elysiax/*"],
       "webview-bun": ["./src/types/webview-bun.d.ts"]
     },
 

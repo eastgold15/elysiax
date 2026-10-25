@@ -1,6 +1,6 @@
 import { definePage } from "@elysiax/core";
-import { routes } from "../../../.elysiax";
-import { UserList } from "./user.ui";
+import { routes } from "@gen";
+import { UserList } from "./user.view";
 
 export default definePage(({ di }) => ({
   title: "用户 · elysiax demo",

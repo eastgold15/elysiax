@@ -1,4 +1,4 @@
-import { defineRoutes } from "../../../.elysiax";
+import { defineRoutes } from "@gen";
 
 /** GET 片段子路由：挂在 /api/order 前缀下 */
 export default defineRoutes()

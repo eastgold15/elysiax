@@ -1,5 +1,5 @@
 import { start } from "@elysiax/core";
 import "./app.layout";
-import * as gen from "../.elysiax";
+import * as gen from "@gen";
 
 await start({ port: 3000, gen });

@@ -1,6 +1,13 @@
 ## Dockyard
 
+## UI - 设计规范（先读）
 
+任何 UI 任务（新页面、改样式、加组件、视觉审查）开始前，先读：
+
+1. `.interface-design/system.md` — 视觉契约：颜色/排版/间距/组件规格/例外边界
+2. `docs/design/pages.md` — 页面进度表：现状差异、实施状态、验收记录
+
+规范没有覆盖到的新模式：先与用户确认，确认后同步更新 system.md 与 pages.md。不得仅凭本轮对话记忆另起风格。状态纪律：文档已写 ≠ 源码已改 ≠ 浏览器验收通过；进度表只认三态（未开始 / 待视觉验收 / 已验收）。
 
 ## UI - shadcn-htmx
 
@@ -20,7 +27,7 @@ UI 组件优先用 shadcn-htmx（htmx v4 + Tailwind v4，flavour=html）。组�
 
 
 
-不要让 htmx 和 React 操作同一个 DOM 元素。画布已是整页 client 模式（src/pages/canvas/client/），/canvas 由壳 HTMLBundle 服务、不走 htmx；htmx 页面（servers/projects）与 React 页天然隔离，不存在共享 DOM。client 代码依赖链禁 Node-only 包（dotenv/bun:sqlite → 浏览器打包 500）。
+不要让 htmx 和 Solid 操作同一个 DOM 元素。画布已是整页 Solid client 模式（src/pages/canvas/client/），/canvas 由壳 HTMLBundle 服务、不走 htmx；htmx 页面（servers/projects）与 Solid 页天然隔离，不存在共享 DOM。client 代码依赖链禁 Node-only 包（dotenv/bun:sqlite → 浏览器打包 500）。
 
 错误处理约定：services 抛 ServiceError（@elysiax/core），actions 不写 try/catch 回显；预期错误 return status(code, { error })。
 

@@ -171,7 +171,8 @@ elysiax new service auth   # 纯服务模块（di + service，无路由）
 elysiax new client canvas  # 已有页面升舱 client 模式
 elysiax dev                # codegen + bun --hot；页面结构变化自动重启，声明变化自动重生成
 elysiax gen                # 手动重生成 .elysiax/
-elysiax doctor             # 体检：DI 图、路由冲突、client 浏览器边界
+elysiax doctor [--db x.db] # 体检 12 项：DI 图、路由冲突、岛边界、插座门禁/纯度/只增不减、
+                           #   数据层、端点 schema、schema 漂移（--db）、迁移只追加、错误约定
 elysiax build [--desktop]  # 编译二进制 / webview 桌面应用
 ```
 

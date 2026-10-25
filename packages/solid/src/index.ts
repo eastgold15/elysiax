@@ -1,3 +1,4 @@
+/// <reference path="./types.d.ts" />
 /**
  * @elysiax/solid：elysiax 框架自造的 Solid 构建插件。
  *
@@ -18,11 +19,11 @@ import tsPreset from "@babel/preset-typescript";
 import syntaxJsx from "@babel/plugin-syntax-jsx";
 import solidPreset from "babel-preset-solid";
 
-export function solidPlugin(): Bun.BunPlugin {
+export function solidPlugin(options?: { filter?: RegExp }): Bun.BunPlugin {
   return {
     name: "elysiax-solid",
     setup(build) {
-      build.onLoad({ filter: /\.tsx$/ }, async (args) => {
+      build.onLoad({ filter: options?.filter ?? /\.tsx$/ }, async (args) => {
         const code = await Bun.file(args.path).text();
         const out = await transformAsync(code, {
           filename: args.path,

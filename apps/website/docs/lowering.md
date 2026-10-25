@@ -47,7 +47,7 @@
 | 思想 | 落地 |
 |---|---|
 | 降级产物可见 | `.elysiax/` codegen 落盘成真实文件（routes.gen.ts、shells/*.html），可 cat 可 diff |
-| 每步可判断 | `elysiax doctor` 八项检查 = 人在降级链上的判断助手，装期报错而非运行时炸 |
+| 每步可判断 | `elysiax doctor` 十二项检查 = 人在降级链上的判断助手，装期报错而非运行时炸 |
 | 抽象/原料分离 | 原子 = 纯抽象分发单元；构建时才降级出原料 |
 | 产物坐标化 | 原子分发 = 复制一个坐标点，闭包完整、可单独摘走 |
 | 构建链框架自造 | `@elysiax/solid`：框架自己的 Bun 插件把 client JSX 降级成纯 JS（落盘 `.elysiax/shells/*.client.js`），应用零配置；babel 内核是包内实现细节，可整体替换 |

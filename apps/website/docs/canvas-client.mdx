@@ -29,7 +29,7 @@ src/pages/canvas/
     index.tsx           # render() 挂载
     app.tsx             # 透镜选择器（?project= 初始透镜）+ UiContext + DrawerHost
     board.tsx           # 世界地图：结构 fetch + SSE + 透镜过滤 + 本机/远程分区
-    flow/flow.tsx       # 自研 Solid 画布基座（替代 @xyflow/react）：panzoom/拖拽/Resizer/Handle/边
+    flow.test.tsx       # client 测试样例（happy-dom + solid render，bunfig [test].preload）
     nodes.tsx           # 卡片视图（部署/删除/尺寸持久化/项目徽章）
     drawers.tsx         # 抽屉/弹窗（向导/服务抽屉/日志/域名/变量）
     console.tsx         # xterm ←→ WS
@@ -56,9 +56,9 @@ src/pages/canvas/
 - **实时不进 node.data**：状态灯这类高频数据进 Solid store 的细粒度订阅（`live().status` accessor），不触发 nodes 数组重算
 - **refresh 事件是约定**：结构变更后 `document.body.dispatchEvent(new Event("refresh"))`，board 监听重拉
 
-## 自研 flow 基座的关键坑
+## 自研 flow 基座（已升舱 `@elysiax/flow`）
 
-`flow/flow.tsx` 是纯 DOM + SVG 实现（panzoom/拖拽/连线/拉伸全部透明指针事件，无 VDOM 无 d3）。两个踩过的坑：
+画布基座已升舱为框架包 `packages/flow`（`@elysiax/flow`）：纯 DOM + SVG 实现（panzoom/拖拽/连线/拉伸全部透明指针事件，无 VDOM 无 d3）。主题色走 CSS 变量（`--flow-dot`、`--flow-handle-bg` 等，带 fallback），行为钩子是结构属性（`data-nodrag`、`data-flow-menu`、`data-handle-id`）。两个踩过的坑：
 
 1. **`<For>` 按引用渲染会把被拖节点 DOM 重建**——拖拽每帧 `setNodes` 换新对象 → 指针捕获丢、拖拽断成"每次只动一点"。解法：节点按 id 进 `createStore` + `reconcile` 原地合并，代理引用稳定，DOM 不重建；store 要同步初始化（首帧 `createEffect` 还没跑，异步初始化会 undefined 崩溃）
 2. **整页壳没有 AppLayout**：`h-full` 高度链在 `#root` 断掉（画布 0 高、fitView 算出 minZoom）。根组件必须自带 `h-screen`
@@ -74,6 +74,35 @@ ui.open({ kind: "new-app", nodeId });   // 卡片/右键菜单触发
 ```
 
 错误回显：api.ts 的 `unwrap` 读服务端 `{ error }`（ServiceError 映射产物），抽屉内联 ErrorBanner。
+
+## client 测试约定
+
+client/ 是浏览器代码，bun test 直接跑有两个坑，都有既定解法：
+
+1. **Solid JSX 不是 React JSX**：自动运行时找不到 `solid-js/jsx-runtime` 的 `jsx` 导出——Solid 必须经 babel-preset-solid 编译。`@elysiax/solid/testing` 的 `setupClientTest()` 在测试进程挂与构建同一套 `solidPlugin`（测试里所有 .tsx 按 Solid 编译）。
+2. **solid-js/web 默认解析到 server build**：bun test 不带 browser 条件会拿到 server.js 抛 "Client-only API"。解法：测试命令带 `--conditions=browser`。
+
+落地三件套（dockyard 已配好，可直接抄）：
+
+```toml
+# bunfig.toml
+[test]
+preload = ["./test/preload.ts"]
+```
+
+```ts
+// test/preload.ts
+import { setupClientTest } from "@elysiax/solid/testing";
+setupClientTest(); // happy-dom 全局 DOM + Solid JSX 预编译
+```
+
+```json
+// package.json
+"devDependencies": { "@happy-dom/global-registrator": "…" },
+"scripts": { "test": "bun test --conditions=browser" }
+```
+
+测试文件放组件旁边（`*.test.tsx`，无需 jsx pragma——编译走插件）。只断 DOM 结构与行为钩子（data-* 属性、文本），不断样式像素。样例见 `client/flow.test.tsx`。
 
 ## 浏览器打包铁律
 

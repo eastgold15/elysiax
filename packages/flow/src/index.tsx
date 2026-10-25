@@ -1,10 +1,23 @@
 /** @jsxImportSource solid-js */
 /**
- * Solid 迷你流程画布：替代 @xyflow/react 的节点编辑器基座，纯 DOM + SVG 实现。
- * 只做 dockyard 画布用到的子集：平移缩放视口、父子相对定位节点（DOM 嵌套直接表达）、
- * 指针拖拽、Resizer 四角拉伸、Handle 拖线连接、bezier 边 + 箭头、Delete 删边。
+ * @elysiax/flow：Solid 迷你流程画布基座——替代 @xyflow/react 的节点编辑器内核，
+ * 纯 DOM + SVG 实现，无 VDOM 无 d3，指针事件全透明。
+ *
+ * 能力子集：平移缩放视口、父子相对定位节点（DOM 嵌套直接表达）、指针拖拽、
+ * Resizer 拉伸、Handle 拖线连接、bezier 边 + 箭头、Delete/Backspace 删边。
  * 状态主权全在调用方：nodes/edges 是 props 数组，所有变化经回调上报——
  * 产物（DOM）与状态（信号）之间没有隐藏中间层。
+ *
+ * 主题约定：颜色一律走 CSS 变量（带 fallback），消费方在全局 CSS 覆盖即可：
+ *   --flow-dot          背景点阵颜色（默认 #2a3444）
+ *   --flow-handle-bg    Handle 圆点填充（默认 #d9a441）
+ *   --flow-handle-border Handle 圆点描边（默认 #0f172a）
+ *   --flow-resizer-bg   Resizer 填充（默认 #0f172a）
+ *   --flow-resizer-border Resizer 描边（默认 #d9a441）
+ *   --flow-conn         拖线中的临时连线颜色（默认 #d9a441）
+ * 结构类名（.flow-node / [data-nodrag] / [data-flow-menu]）是行为钩子，勿改：
+ *   - data-nodrag：元素不触发节点拖拽 / 视口平移
+ *   - data-flow-menu：浮层菜单（右键菜单等），点击不触发 pane 的取消选中
  */
 import {
   createContext, createEffect, createMemo, createSignal, For, onCleanup, onMount,
@@ -72,9 +85,13 @@ export function HandleView(props: {
       data-handle-type={props.type}
       data-nodrag
       title={props.title}
-      class={`absolute top-1/2 z-10 h-2.5 w-2.5 -translate-y-1/2 cursor-crosshair rounded-full border-2 border-harbor-950 bg-brass-500 ${
+      class={`absolute top-1/2 z-10 h-2.5 w-2.5 -translate-y-1/2 cursor-crosshair rounded-full border-2 ${
         side() === "right" ? "-right-[5px]" : "-left-[5px]"
       }`}
+      style={{
+        "border-color": "var(--flow-handle-border, #0f172a)",
+        background: "var(--flow-handle-bg, #d9a441)",
+      }}
     />
   );
 }
@@ -120,9 +137,13 @@ export function Resizer(props: {
   return (
     <div
       data-nodrag
-      class={`absolute right-0 bottom-0 z-10 h-3 w-3 cursor-nwse-resize rounded-sm border border-brass-500 bg-harbor-950 ${
+      class={`absolute right-0 bottom-0 z-10 h-3 w-3 cursor-nwse-resize rounded-sm border ${
         props.visible ? "" : "hidden"
       }`}
+      style={{
+        "border-color": "var(--flow-resizer-border, #d9a441)",
+        background: "var(--flow-resizer-bg, #0f172a)",
+      }}
       onPointerDown={onDown}
       onPointerMove={onMove}
       onPointerUp={onUp}
@@ -230,8 +251,19 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
   // ── 视口平移/缩放 ──
   let panStart: { px: number; py: number; tx: number; ty: number } | null = null;
   const onPanePointerDown = (e: PointerEvent) => {
-    // 点在节点/手柄/菜单上不 pan
-    if ((e.target as HTMLElement).closest("[data-nodrag], .flow-node, .dy-menu")) return;
+    // 事件委托接 Handle 拖线起点（HandleView 带 data-nodrag，下面的 nodrag 早退会拦掉它，
+    // 必须先判）：点到 source handle = 开始拖线
+    const handle = (e.target as HTMLElement).closest("[data-handle-type='source']");
+    if (handle) {
+      const nodeId = handle.closest("[data-node-id]")?.getAttribute("data-node-id");
+      const handleId = handle.getAttribute("data-handle-id");
+      if (nodeId && handleId) {
+        onHandlePointerDown(e, nodeId, handleId);
+        return;
+      }
+    }
+    // 点在节点/手柄/浮层菜单上不 pan
+    if ((e.target as HTMLElement).closest("[data-nodrag], .flow-node, [data-flow-menu]")) return;
     props.onMoveStart?.();
     panStart = { px: e.clientX, py: e.clientY, tx: t().x, ty: t().y };
     pane.setPointerCapture(e.pointerId);
@@ -427,7 +459,7 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
         class="relative h-full w-full overflow-hidden outline-none"
         style={{
           // 背景点阵随视口平移缩放
-          "background-image": "radial-gradient(circle, #2a3444 1px, transparent 1px)",
+          "background-image": "radial-gradient(circle, var(--flow-dot, #2a3444) 1px, transparent 1px)",
           "background-size": `${24 * t().k}px ${24 * t().k}px`,
           "background-position": `${t().x}px ${t().y}px`,
         }}
@@ -435,7 +467,7 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
         onPointerMove={onPanePointerMove}
         onPointerUp={onPanePointerUp}
         onClick={(e) => {
-          if (!(e.target as HTMLElement).closest(".flow-node, .dy-menu")) {
+          if (!(e.target as HTMLElement).closest(".flow-node, [data-flow-menu]")) {
             props.onNodeSelect?.(null);
             props.onEdgeSelect?.(null);
             props.onPaneClick?.();
@@ -505,9 +537,9 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
               <path
                 d={`M ${conn()!.x1} ${conn()!.y1} L ${conn()!.x2} ${conn()!.y2}`}
                 fill="none"
-                stroke="#d9a441"
                 stroke-width="1.5"
                 stroke-dasharray="5 3"
+                style={{ stroke: "var(--flow-conn, #d9a441)" }}
               />
             ) : null}
           </svg>

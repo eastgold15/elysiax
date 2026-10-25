@@ -10,7 +10,7 @@ import { api, canvasApi, unwrap } from "./api";
 import { lens } from "./lens";
 import { useServiceState, useTargetLive } from "./live";
 import { emitRefresh, useUi } from "./ui";
-import { HandleView, Resizer, type FlowNodeBase } from "./flow/flow";
+import { HandleView, Resizer, type FlowNodeBase } from "@elysiax/flow";
 
 export type ServerFlowNode = FlowNodeBase & { type: "server"; data: { server: CardModel["server"] } };
 export type AppFlowNode = FlowNodeBase & { type: "app"; data: { t: TargetModel } };

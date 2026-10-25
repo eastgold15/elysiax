@@ -636,10 +636,10 @@ cli.addCommand({
 // ─────────────────────────────────────────────
 cli.addCommand({
   name: "add",
-  description: "源码安装模块：把模块源码复制到 ./modules/<name>/",
+  description: "源码安装原子：把原子源码复制到 ./modules/<name>/（--kind page 装到 pages/）",
   argument: {
     name: "source",
-    description: "模块源码目录（本地路径；module.json 可选，名字取目录名）",
+    description: "原子源码目录（本地路径；含 <name>.di.ts 身份证，名字取目录名）",
     type: String,
   },
   options: [
@@ -649,6 +649,12 @@ cli.addCommand({
       type: Boolean,
       description: "目标已存在时直接覆盖（跳过确认）",
     },
+    {
+      name: "kind",
+      alias: "k",
+      type: String,
+      description: "安装目标：module（默认，src/modules/）或 page（src/pages/ 页面原子）",
+    },
   ],
   execute: async ({ argument, options, logger }) => {
     const source = resolve(process.cwd(), argument[0] ?? "");
@@ -656,7 +662,7 @@ cli.addCommand({
       throw new Error(`源码目录不存在: ${source}`);
     }
 
-    // module.json 可选：模块名取清单名或目录名，装配正确性由 gen/codegen 校验
+    // module.json 可选（旧约定）：原子名取清单名或目录名，装配正确性由 gen/codegen 校验
     let manifest: ModuleManifest | undefined;
     try {
       manifest = readManifest(source);
@@ -666,8 +672,9 @@ cli.addCommand({
     const name = manifest?.name ?? basename(source);
 
     const { loadConfig } = await import("@elysiax/core");
-    const modulesDir = (await loadConfig(process.cwd())).modules ?? "src/modules";
-    const target = resolve(process.cwd(), modulesDir, name);
+    const config = await loadConfig(process.cwd());
+    const baseDir = options.kind === "page" ? (config.pages ?? "src/pages") : (config.modules ?? "src/modules");
+    const target = resolve(process.cwd(), baseDir, name);
 
     if (source === target) {
       throw new Error(`源和目标相同: ${source}`);
@@ -675,12 +682,12 @@ cli.addCommand({
 
     if (existsSync(target) && !options.force) {
       throw new Error(
-        `${modulesDir}/${name} 已存在。源码安装原则：不做静默覆盖。请先手动 diff，或用 --force 覆盖。`,
+        `${baseDir}/${name} 已存在。源码安装原则：不做静默覆盖。请先手动 diff，或用 --force 覆盖。`,
       );
     }
 
     cpSync(source, target, { recursive: true });
-    logger.info(`✅ 已安装 ${name} → ${modulesDir}/${name}/`);
+    logger.info(`✅ 已安装 ${name} → ${baseDir}/${name}/`);
     if (manifest?.route) logger.info(`   路由前缀: ${manifest.route}`);
     // 装配校验（依赖是否都有提供者）交给 gen，错误会在那里集中报出
     const { codegen } = await import("@elysiax/core");
@@ -728,12 +735,20 @@ cli.addCommand({
 });
 
 // ─────────────────────────────────────────────
-// elysiax doctor — 模块约定体检（路由冲突 / 岛边界 / DI 图）
+// elysiax doctor — 模块约定体检（路由冲突 / 岛边界 / DI 图 / 插座门禁 /
+// 数据层 / schema 漂移 / 迁移只追加 / 错误约定）
 // ─────────────────────────────────────────────
 cli.addCommand({
   name: "doctor",
-  description: "体检：DI 图装配、跨模块路由冲突、client 模式浏览器边界",
-  execute: async ({ logger }) => {
+  description: "体检：DI 图、路由冲突、岛边界、插座门禁、数据层、schema 漂移、迁移只追加、错误约定",
+  options: [
+    {
+      name: "db",
+      type: String,
+      description: "schema 漂移检查用的 sqlite 库路径（默认在项目内 data/.data/ 探测 .db 文件）",
+    },
+  ],
+  execute: async ({ options, logger }) => {
     const root = process.cwd();
     const { codegen, loadConfig, extractRoutes } = await import("@elysiax/core");
     const config = await loadConfig(root);
@@ -915,7 +930,8 @@ cli.addCommand({
     let removedTotal = 0;
     for (const sf of socketFiles) {
       const rel = relative(root, sf).replaceAll("\\", "/");
-      const old = Bun.spawnSync(["git", "show", `HEAD:${rel}`], { cwd: root, stdout: "pipe", stderr: "ignore" });
+      // HEAD:./<rel>：./ 前缀让 git 按 cwd 解析（monorepo 子目录下裸相对路径会解析到仓库根）
+      const old = Bun.spawnSync(["git", "show", `HEAD:./${rel}`], { cwd: root, stdout: "pipe", stderr: "ignore" });
       if (old.exitCode !== 0) continue;
       const removed = [...socketExports(old.stdout.toString())].filter((s) => !symbolsOf(sf).has(s));
       if (removed.length) {
@@ -1033,6 +1049,102 @@ cli.addCommand({
       }
     }
     if (!schemaWarnings) logger.info("✅ 端点 schema 完整（Eden/OpenAPI 类型无缺口）");
+
+    // 10) schema 漂移：schema.ts 声明的表 vs 存量库 sqlite_master 实际表。
+    //    教训：改过历史迁移 SQL 后存量库不会重跑，表名漂移靠运行时 500 才暴露。
+    //    无 DB 文件（CI/新克隆）跳过；`--db <路径>` 可显式指定，否则按约定位置探测。
+    let driftIssues = 0;
+    const dbFlag = typeof options.db === "string" ? options.db : undefined;
+    const dbCandidates = dbFlag
+      ? [resolve(root, dbFlag)]
+      : ["data", ".data", ""].flatMap((d) => {
+          const dir = resolve(root, d);
+          return existsSync(dir)
+            ? readdirSync(dir)
+                .filter((f) => f.endsWith(".db") || f.endsWith(".sqlite"))
+                .map((f) => resolve(dir, f))
+            : [];
+        });
+    const dbFile = dbCandidates.find((p) => existsSync(p));
+    if (dbFile && tableOwner.size > 0) {
+      const { Database } = await import("bun:sqlite");
+      const sqlite = new Database(dbFile, { readonly: true });
+      const actual = new Set(
+        sqlite
+          .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table'")
+          .all()
+          .map((r) => r.name)
+          // drizzle 迁移元表与 sqlite 内部表不算业务表
+          .filter((n) => !n.startsWith("__") && !n.startsWith("sqlite_")),
+      );
+      sqlite.close();
+      const declared = new Set(tableOwner.keys());
+      for (const t of declared) {
+        if (!actual.has(t)) {
+          logger.error(`❌ schema 漂移: 表 "${t}" 在 schema.ts 声明但库里不存在（${relative(root, dbFile)}）——历史迁移被改过？存量库需手工对齐`);
+          driftIssues++;
+          errors++;
+        }
+      }
+      for (const t of actual) {
+        if (!declared.has(t)) {
+          logger.error(`❌ schema 漂移: 库里存在表 "${t}" 但没有任何 schema.ts 声明它（${relative(root, dbFile)}）——疑似旧表名残留`);
+          driftIssues++;
+          errors++;
+        }
+      }
+      if (!driftIssues) logger.info(`✅ schema 与存量库一致（${actual.size} 张表）`);
+    } else {
+      logger.info("⏭️  跳过 schema 漂移检查（未找到 .db 文件，或用 --db <路径> 指定）");
+    }
+
+    // 11) 迁移只追加：历史迁移条目（name+timestamp）对比 git HEAD，
+    //     内容被改或整条被删 = 存量库漂移源头。新条目随意加。
+    //     与插座只增不减（检查 7）同款思路：入口是承诺。
+    let migrationIssues = 0;
+    for await (const f of new Glob(`${pagesDir}/**/migrations.ts`).scan({ cwd: root })) {
+      const rel = f.replaceAll("\\", "/");
+      // HEAD:./<rel> 的 ./ 前缀让 git 按 cwd 解析（monorepo 子目录下裸相对路径会解析到仓库根）
+      const old = Bun.spawnSync(["git", "show", `HEAD:./${rel}`], { cwd: root, stdout: "pipe", stderr: "ignore" });
+      if (old.exitCode !== 0) continue; // 未入库的新文件跳过
+      // 抓迁移条目的原始文本块：name/timestamp → 整块文本（到下一个条目或数组尾）
+      const entriesOf = (src: string) => {
+        const map = new Map<string, string>();
+        for (const m of src.matchAll(/\{[^{}]*?name:\s*["'`]([^"'`]+)["'`][^{}]*?timestamp:\s*(\d+)[^{}]*?\}/gs))
+          map.set(`${m[1]}@${m[2]}`, m[0].replaceAll(/\s+/g, ""));
+        return map;
+      };
+      const oldEntries = entriesOf(old.stdout.toString());
+      const newEntries = entriesOf(readFileSync(resolve(root, f), "utf8"));
+      for (const [key, text] of oldEntries) {
+        const now = newEntries.get(key);
+        if (!now) {
+          logger.error(`❌ ${f}: 历史迁移 "${key}" 被删除——迁移只追加，删除会让新库建不出存量结构`);
+          migrationIssues++;
+          errors++;
+        } else if (now !== text) {
+          logger.error(`❌ ${f}: 历史迁移 "${key}" 的 SQL 被修改——存量库不会重跑已执行的迁移，改历史 = 制造 schema 漂移；请追加新迁移条目`);
+          migrationIssues++;
+          errors++;
+        }
+      }
+    }
+    if (!migrationIssues) logger.info("✅ 迁移只追加（历史条目未变）");
+
+    // 12) 错误约定：services 抛 ServiceError（框架统一映射），禁裸 Error 回显。
+    //     actions 零 try/catch 靠 review 把关，这里先抓最机械的一条。
+    let errorIssues = 0;
+    for await (const f of new Glob(`${pagesDir}/**/*.service.ts`).scan({ cwd: root })) {
+      const src = stripComments(readFileSync(resolve(root, f), "utf8"));
+      for (const m of src.matchAll(/throw\s+new\s+(\w+)/g)) {
+        if (m[1] === "Error" || m[1] === "TypeError") {
+          logger.error(`❌ ${f}: service 抛了裸 ${m[1]}——请抛 ServiceError（@elysiax/core），由框架统一映射为 { error }`);
+          errorIssues++;
+          errors++;
+        }
+      }
+    }
+    if (!errorIssues) logger.info("✅ 错误约定通过（services 只抛 ServiceError）");
 
     if (errors > 0) throw new Error(`doctor 发现 ${errors} 个问题`);
     logger.info("✅ 全部检查通过");

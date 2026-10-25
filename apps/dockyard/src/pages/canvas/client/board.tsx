@@ -9,7 +9,7 @@ import {
 import { api, canvasApi, unwrap } from "./api";
 import { emptyLive, LiveContext, type LiveState } from "./live";
 import { useUi } from "./ui";
-import { FlowView, type ConnectResult, type FlowEdge, type NodeViewProps } from "./flow/flow";
+import { FlowView, type ConnectResult, type FlowEdge, type NodeViewProps } from "@elysiax/flow";
 
 /** 全局 SSE 端点（世界地图：无 projectId 路径段；routes.gen 由 dev server 再生成，这里用字面量） */
 const EVENTS_URL = "/api/canvas/events";
@@ -542,7 +542,7 @@ export function Board(props: { lens: () => number | null }) {
       <Show when={menu()}>
         {(m) => (
           <div
-            class="dy-menu fixed z-50 min-w-40 rounded border border-harbor-700 bg-harbor-900 py-1 shadow-2xl"
+            data-flow-menu class="fixed z-50 min-w-40 rounded border border-harbor-700 bg-harbor-900 py-1 shadow-2xl"
             style={{ left: `${m().x}px`, top: `${m().y}px` }}
             onClick={closeMenu}
           >

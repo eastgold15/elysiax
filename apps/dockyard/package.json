@@ -8,6 +8,7 @@
     "start": "elysiax gen && bun src/index.ts",
     "build": "elysiax build",
     "typecheck": "elysiax gen && tsc --noEmit",
+    "test": "bun test --conditions=browser",
     "build:desktop": "elysiax build --desktop",
     "package": "elysiax package"
   },
@@ -36,10 +37,13 @@
   },
   "devDependencies": {
     "@elysiax/cli": "workspace:*",
+    "@elysiax/flow": "workspace:*",
     "@elysiax/solid": "workspace:*",
+    "@happy-dom/global-registrator": "^21.0.4",
     "@types/bun": "latest",
     "@types/dockerode": "^4.0.1",
     "drizzle-kit": "^1.0.0-rc.4",
+    "happy-dom": "^21.0.4",
     "webview-bun": "^2.4.0"
   },
   "peerDependencies": {

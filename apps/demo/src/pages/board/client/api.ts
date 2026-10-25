@@ -1,6 +1,6 @@
 /** client 的 API 层：Eden Treaty 端到端类型客户端（路径/params/body 全类型安全）。
  *  类型唯一来源是 board.socket 的 BoardApi 出口（契约 §3）；
- *  依赖链只允许浏览器安全包（react + @elysia/eden），禁 Node-only。 */
+ *  依赖链只允许浏览器安全包（solid-js + @elysia/eden），禁 Node-only。 */
 import { treaty } from "@elysia/eden";
 import type { BoardApi } from "../board.socket";
 

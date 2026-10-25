@@ -1,13 +1,13 @@
 ---
 title: elysiax 框架
-description: Bun + Elysia 2 + htmx + React 逃生舱的页面架构全栈框架——一棵目录树内聚一切，URL = 文件夹路径，DI 装配、代码生成、类型化路由、SSE 实时、桌面打包。
+description: Bun + Elysia 2 + htmx + Solid client 逃生舱的页面架构全栈框架——一棵目录树内聚一切，URL = 文件夹路径，DI 装配、代码生成、类型化路由、SSE 实时、桌面打包。
 ---
 
 # elysiax
 
-Bun + Elysia 2 + htmx（服务端 TSX）+ React 逃生舱的全栈框架。**一棵目录树 `src/pages/`，页面文件夹内聚前端与后端**（整页、hx 片段、写端点、DI、service、repository、可选 React client），URL = 文件夹路径。InferDI 容器装配服务，codegen 把所有声明粘成类型安全的整体。
+Bun + Elysia 2 + htmx（服务端 TSX）+ Solid client 逃生舱的全栈框架。**一棵目录树 `src/pages/`，页面文件夹内聚前端与后端**（整页、hx 片段、写端点、DI、service、repository、可选 Solid client），URL = 文件夹路径。InferDI 容器装配服务，codegen 把所有声明粘成类型安全的整体。
 
-交互模型是混合的：**htmx 管页面和表单**（服务端渲染，整页/片段一端点两响应），**React client 页管复杂交互区**（如画布，整页逃生舱）——两者永远不操作同一个 DOM 元素。
+交互模型是混合的，且**渲染器单选**（[契约 §1.3](./module-contract.md)）：**htmx 管页面和表单**（服务端渲染，端点只吐 HTML 片段），**Solid client 页管复杂交互区**（如画布，端点只吐 JSON，Eden 消费）——一个原子选一种渲染器，两者永远不操作同一个 DOM 元素。设计哲学见[逐级降级](./lowering.md)：人只操作抽象，构建链把抽象降级成落盘的原料，每级产物可审查。
 
 ## 特点一览
 
@@ -20,7 +20,7 @@ Bun + Elysia 2 + htmx（服务端 TSX）+ React 逃生舱的全栈框架。**一
 | ServiceError | services 抛类型化错误，框架统一映射（hx → 横幅片段，普通 → JSON），actions 零 try/catch |
 | 代码生成 | 扫描页面树生成容器/服务/路由/壳，改声明自动重生成（`.elysiax/`，类 `.next` 模式） |
 | 类型化路由 | `routes.pages.servers.ByIdCard(s.id)` —— 改路由时引用处编译报错 |
-| client 逃生舱 | 页面目录放 `client/index.tsx` → 整页 React（Bun HTMLBundle 壳），JSON API 走 actions |
+| client 逃生舱 | 页面目录放 `client/index.tsx` → 整页 Solid（框架自造插件 `@elysiax/solid` 预打包落盘，壳走 Bun HTMLBundle），JSON API 走 actions + Eden |
 | defineRealtime | 进程内事件总线 + SSE，心跳/快照/断开自动退订 |
 | 测试容器 | `createTestContainer(gen, { mock })` 一行起容器，override 换实现 |
 | CLI | 脚手架、dev（codegen + hot + 结构变化重启）、doctor 体检、`bun build --compile` 桌面打包 |
@@ -40,7 +40,7 @@ src/pages/
     deploy.di.ts
     deploy.service.ts
   canvas/                 # client 模式（L5 逃生舱）
-    client/index.tsx      # 整页 React，壳 HTML 由 codegen 生成
+    client/index.tsx      # 整页 Solid client，壳 HTML 由 codegen 生成
     canvas.actions.ts     # JSON API（/api/canvas/*）
     canvas.service.ts
 ```
@@ -136,10 +136,10 @@ hx-post={routes.pages.servers.index()}
 
 ## client 模式（L5 逃生舱）
 
-页面目录放 `client/index.tsx` → codegen 生成 `.elysiax/shells/<slug>.html`（`<div id="root">` + script），URL 由 `Bun.serve` 的 HTMLBundle 直接服务，整页归 React：
+页面目录放 `client/index.tsx` → codegen 生成 `.elysiax/shells/<slug>.html`（`<div id="root">` + script）；装了 `@elysiax/solid` 时 client 入口被框架插件预打包成落盘的 `<slug>.client.js`，URL 由 `Bun.serve` 的 HTMLBundle 直接服务，整页归 Solid：
 
 - 后端数据走 actions 的 **JSON 端点**（不是 hx 片段）
-- 模态/抽屉在 React 内实现（事件总线 + Host 组件），不跨 htmx/React 边界
+- 模态/抽屉在 client 内实现（事件总线 + Host 组件），不跨 htmx/client 边界
 - **铁律：client 依赖链不得 import Node-only 包**（dotenv、bun:sqlite、node:*），Bun 浏览器打包会 500。共享逻辑抽零依赖模块
 
 ## 实时推送：defineRealtime

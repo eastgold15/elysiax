@@ -3,6 +3,6 @@
 export { BoardService } from "./board.service";
 export type { Card, Column } from "./board.repository";
 
-// react 形态追加：Eden Treaty 的 API 类型出口（同原子 client 引用）
+// client 形态追加：Eden Treaty 的 API 类型出口（同原子 client 引用）
 import type boardApi from "./board.actions";
 export type BoardApi = typeof boardApi;

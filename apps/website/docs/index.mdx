@@ -1,11 +1,11 @@
 ---
 title: elysiax 文档
-description: Bun + Elysia 2 + htmx + React 的页面架构全栈框架——概念文档与 dockyard 实战案例。
+description: Bun + Elysia 2 + htmx + Solid 的页面架构全栈框架——概念文档与 dockyard 实战案例。
 ---
 
 # elysiax 文档
 
-**elysiax** = Bun + Elysia 2 + htmx（服务端 TSX）+ React 逃生舱的全栈框架。
+**elysiax** = Bun + Elysia 2 + htmx（服务端 TSX）+ Solid client 逃生舱的全栈框架。
 一棵页面目录树（`src/pages/`）内聚前端与后端，URL = 文件夹路径，
 InferDI 容器 + codegen 把整棵树粘成类型安全的整体。
 
@@ -15,6 +15,8 @@ InferDI 容器 + codegen 把整棵树粘成类型安全的整体。
 
 - [elysiax 框架](./elysiax.mdx)——总览：页面形态、DI、类型化路由、ServiceError、实时推送、CLI
 - [页面架构](./page-architecture.md)——L0-L5 分层规范：一目录一页面、一端点两响应、写操作三态、client 逃生舱
+- [模块契约](./module-contract.md)——凹凸插座：socket.ts 唯一门、渲染器单选（htmx 片段 / Solid JSON）、doctor 八项检查
+- [逐级降级哲学](./lowering.md)——框架思想：人只操作抽象，工具/AI 降级出原料，每级产物落盘可审查
 - [踩坑记录](./pitfalls.mdx)——Bun / Elysia 2.0 / InferDI / webview 落地过程中的非显然问题
 
 ## 实战（dockyard 案例）

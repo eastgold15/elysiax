@@ -1,9 +1,9 @@
-/** @jsxImportSource react */
+/** @jsxImportSource solid-js */
 /**
  * 画布 client 页根组件：项目解析（?project=<id> / ?path=<本地路径> / 缺省最近项目）
- * + 页头（项目切换）+ Board + DrawerHost（React 模态层，替代 #modal-root + htmx.ajax）。
+ * + 页头（项目切换）+ Board + DrawerHost（Solid 模态层）。
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { createSignal, Match, onMount, Show, Switch } from "solid-js";
 import { canvasApi, unwrap } from "./api";
 import { Board } from "./board";
 import { DeployLogModal, DomainsModal, EnvDrawer, NewAppWizard, NewDbModal, ServiceDrawer } from "./drawers";
@@ -29,86 +29,94 @@ async function resolveProject(): Promise<number | null> {
   }
 }
 
-function DrawerHost({ view, close }: { view: View; close: () => void }) {
-  // 每个 view 一份独立组件实例（key 保证切换 view 时状态重置）
-  const key = `${view.kind}-${"nodeId" in view ? view.nodeId : view.targetId}-${"svc" in view ? view.svc ?? "" : ""}`;
+/** 按 kind 收窄 view（给 Match 的 when 用，顺带带出该分支的字段类型） */
+const viewAs = <K extends View["kind"]>(k: K, v: View) => (v.kind === k ? (v as Extract<View, { kind: K }>) : null);
+
+function DrawerHost(props: { view: View }) {
   return (
-    <div key={key}>
-      {view.kind === "new-app" ? <NewAppWizard nodeId={view.nodeId} /> : null}
-      {view.kind === "new-db" ? <NewDbModal nodeId={view.nodeId} /> : null}
-      {view.kind === "service" ? <ServiceDrawer targetId={view.targetId} svc={view.svc} initialTab={view.tab} /> : null}
-      {view.kind === "env" ? <EnvDrawer targetId={view.targetId} /> : null}
-      {view.kind === "domains" ? <DomainsModal targetId={view.targetId} /> : null}
-      {view.kind === "log" ? <DeployLogModal targetId={view.targetId} dep={view.dep} /> : null}
-    </div>
+    <Switch>
+      <Match when={viewAs("new-app", props.view)}>{(v) => <NewAppWizard nodeId={v().nodeId} />}</Match>
+      <Match when={viewAs("new-db", props.view)}>{(v) => <NewDbModal nodeId={v().nodeId} />}</Match>
+      <Match when={viewAs("service", props.view)}>
+        {(v) => <ServiceDrawer targetId={v().targetId} svc={v().svc} initialTab={v().tab} />}
+      </Match>
+      <Match when={viewAs("env", props.view)}>{(v) => <EnvDrawer targetId={v().targetId} />}</Match>
+      <Match when={viewAs("domains", props.view)}>{(v) => <DomainsModal targetId={v().targetId} />}</Match>
+      <Match when={viewAs("log", props.view)}>{(v) => <DeployLogModal targetId={v().targetId} dep={v().dep} />}</Match>
+    </Switch>
   );
 }
 
 export function App() {
-  const [projectId, setProjectId] = useState<number | null>(null);
-  const [missing, setMissing] = useState(false);
-  const [projects, setProjects] = useState<ProjectBrief[]>([]);
-  const [view, setView] = useState<View | null>(null);
+  const [projectId, setProjectId] = createSignal<number | null>(null);
+  const [missing, setMissing] = createSignal(false);
+  const [projects, setProjects] = createSignal<ProjectBrief[]>([]);
+  const [view, setView] = createSignal<View | null>(null);
 
-  useEffect(() => {
+  onMount(() => {
     resolveProject().then((id) => {
       if (id) setProjectId(id);
       else setMissing(true);
     });
     unwrap(canvasApi.projects.get()).then(setProjects).catch(() => {});
-  }, []);
+  });
 
-  const bus: UiBus = useMemo(() => ({
+  // bus 是稳定引用：open/close/refresh 全是 setView 的薄壳，无需 memo
+  const bus: UiBus = {
     open: setView,
     close: () => setView(null),
     refresh: emitRefresh,
-  }), []);
-
-  const close = useCallback(() => setView(null), []);
-
-  if (missing) {
-    return (
-      <div className="flex h-full items-center justify-center text-sm text-neutral-500">
-        先创建一个项目空间（左侧「项目」）
-      </div>
-    );
-  }
-  if (!projectId) {
-    return <div className="flex h-full items-center justify-center text-sm text-neutral-600">加载中…</div>;
-  }
+  };
 
   return (
     <UiContext.Provider value={bus}>
-      <div className="flex h-full flex-col">
-        <div className="flex h-14 shrink-0 items-center justify-between border-b border-harbor-800 px-6">
-          <div className="flex flex-col">
-            <h1 className="text-sm font-semibold text-neutral-100">
-              {projects.find((p) => p.id === projectId)?.name ?? "画布"}
-            </h1>
-            <p className="text-xs text-neutral-500">画布 · 空白处右键添加服务器，拖动行尾圆点连线建依赖</p>
-          </div>
-          {projects.length > 1 ? (
-            <select
-              className="rounded border border-harbor-700 bg-harbor-950 px-2 py-1 text-sm text-neutral-300"
-              value={projectId}
-              onChange={(e) => {
-                const id = Number(e.target.value);
-                history.replaceState(null, "", `/canvas?project=${id}`);
-                setView(null);
-                setProjectId(id);
-              }}
-            >
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </select>
-          ) : null}
+      <Show when={missing()}>
+        <div class="flex h-full items-center justify-center text-sm text-neutral-500">
+          先创建一个项目空间（左侧「项目」）
         </div>
-        <div className="relative flex-1">
-          <Board projectId={projectId} />
-        </div>
-      </div>
-      {view ? <DrawerHost view={view} close={close} /> : null}
+      </Show>
+      <Show when={!missing() && !projectId()}>
+        <div class="flex h-full items-center justify-center text-sm text-neutral-600">加载中…</div>
+      </Show>
+      <Show when={projectId()}>
+        {(pid) => (
+          <>
+            <div class="flex h-full flex-col">
+              <div class="flex h-14 shrink-0 items-center justify-between border-b border-harbor-800 px-6">
+                <div class="flex flex-col">
+                  <h1 class="text-sm font-semibold text-neutral-100">
+                    {projects().find((p) => p.id === pid())?.name ?? "画布"}
+                  </h1>
+                  <p class="text-xs text-neutral-500">画布 · 空白处右键添加服务器，拖动行尾圆点连线建依赖</p>
+                </div>
+                <Show when={projects().length > 1}>
+                  <select
+                    class="rounded border border-harbor-700 bg-harbor-950 px-2 py-1 text-sm text-neutral-300"
+                    value={pid()}
+                    onChange={(e) => {
+                      const id = Number(e.currentTarget.value);
+                      history.replaceState(null, "", `/canvas?project=${id}`);
+                      setView(null);
+                      setProjectId(id);
+                    }}
+                  >
+                    {projects().map((p) => (
+                      <option value={p.id}>{p.name}</option>
+                    ))}
+                  </select>
+                </Show>
+              </div>
+              <div class="relative flex-1">
+                <Board projectId={pid()} />
+              </div>
+            </div>
+            {/* keyed：view 换对象即整体重建抽屉，等价 React 版的 key 状态重置 */}
+            <Show when={view()} keyed>
+              {(v) => <DrawerHost view={v} />}
+            </Show>
+          </>
+        )}
+      </Show>
     </UiContext.Provider>
   );
 }

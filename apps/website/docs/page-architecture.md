@@ -12,7 +12,7 @@ L1 页面层   原子：一个 URL 的完整渲染单元
 L2 片段层   partial：属于且只属于一个页面的局部渲染函数
 L3 服务层   领域逻辑：DI provider，无 UI
 L4 渲染件层 shared/ui：无状态、无业务的纯渲染函数
-L5 client层 页面内逃生舱：整页 React，仅交互超标时存在
+L5 client层 页面内逃生舱：整页 Solid client，仅交互超标时存在
 ```
 
 **依赖规则（写死）：**
@@ -96,7 +96,7 @@ pages/projects/[id]/deploy/
 
 ## 六、L5 client 逃生舱
 
-当某页 hx 属性多到读不懂、或出现 htmx ↔ React 桥接需求时，**整页升舱**，不在 htmx 里硬撑：
+当某页 hx 属性多到读不懂、或出现 htmx ↔ client 桥接需求时，**整页升舱**为 Solid client 页（渲染器单选，见 module-contract §1.3），不在 htmx 里硬撑：
 
 - `client/index.tsx` 为入口，elysiax 构建时自动 bundle
 - controller 变为：出 JSON API + 一个 shell 页（`<div id="root">` + script 标签）

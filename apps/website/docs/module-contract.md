@@ -21,26 +21,30 @@
 | `migrations.ts` | 本原子的迁移 |
 | `<name>.repository.ts` | 数据访问，依赖 `"db"` 值服务 |
 
-### 1.3 UI 层：两种形态，二选一
+### 1.3 UI 层：渲染器单选，格式单一
 
-**形态 A：htmx 模块**（L1-L3，服务端渲染 + 局部刷新）
+**一个业务原子动手前先想清楚用哪种渲染器，选定后端点只吐一种格式。**统一的是目录骨架与对称地位，不是响应格式；不做内容协商、不双写端点（Eden 返回类型会被联合类型污染）。换渲染器 = 重写该原子的端点层，service/数据层不动。
+
+**渲染器 A：htmx**（L1-L3，表单/列表类业务，服务端渲染 + 局部刷新）
 
 | 文件 | 作用 |
 |---|---|
 | `<name>.page.tsx` | default export `definePage(...)`，整页 |
-| `<name>.actions.tsx` | htmx action 端点（返回 partial） |
-| `<name>.partials.tsx` | 局部模板组件 |
+| `<name>.actions.tsx` | 能力端点，**只吐 HTML 片段** |
+| `<name>.partials.tsx` | 模板组件（端点渲染用） |
 
-**形态 B：react 模块**（L5 整页 client 模式）
+**渲染器 B：Solid client**（L5 整页 client 模式，界面类业务；无 VDOM、编译产物透明，见 [逐级降级哲学](./lowering.md)；React 已弃用于新原子）
 
 | 文件 | 作用 |
 |---|---|
-| `client/index.tsx` | React 入口（浏览器包） |
-| `client/api.ts` | Eden Treaty 客户端，类型来自 socket 的 API 出口 |
-| `<name>.actions.ts` | 纯 API 的 Elysia 实例，**default export**，供 Eden 推导类型 |
+| `<name>.actions.ts` | 能力端点，**只吐 JSON**；default export 供 Eden 推导类型 |
+| `client/index.tsx` | Solid 入口（浏览器包），`/** @jsxImportSource solid-js */` |
+| `client/api.ts` | Eden Treaty 客户端，类型来自 socket 的 API 类型出口 |
 | （无 `.page.tsx`） | 壳由 HTMLBundle 服务，不走 htmx |
 
-约束：`client/` 的依赖链**禁止 Node-only 包**（dotenv、bun:sqlite 等），否则浏览器打包 500。
+约束：
+1. `client/` 的依赖链**禁止 Node-only 包**（dotenv、bun:sqlite 等），否则浏览器打包 500。
+2. Solid 编译是框架自造的 Bun 插件包 **`@elysiax/solid`**：应用装了它，codegen 自动把 client 入口预打包成 `.elysiax/shells/<slug>.client.js`（产物落盘可见）；未装则直引 .tsx 走 Bun 内置 JSX（React/实验用途）。用户侧零构建配置。
 
 ## 2. DI 规则
 

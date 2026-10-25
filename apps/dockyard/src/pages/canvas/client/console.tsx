@@ -1,20 +1,19 @@
-/** @jsxImportSource react */
+/** @jsxImportSource solid-js */
 /**
  * 容器交互式终端（Console Tab）：xterm.js ←→ WebSocket ←→ docker exec TTY（SSH 中继）。
- * client 模式下直接挂在 ServiceDrawer 的 Console Tab 里，组件卸载即断开。
+ * 挂在 ServiceDrawer 的 Console Tab 里，组件卸载（onCleanup）即断开。
  */
-import { useEffect, useRef } from "react";
+import { onCleanup, onMount } from "solid-js";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { api } from "./api";
 
-export function ConsoleView({ targetId, service }: { targetId: number; service?: string }) {
-  const ref = useRef<HTMLDivElement>(null);
+export function ConsoleView(props: { targetId: number; service?: string }) {
+  let el!: HTMLDivElement;
 
-  useEffect(() => {
-    const el = ref.current;
-    if (!el) return;
+  // 宿主按 tab 条件渲染本组件，挂载即建连、卸载即断开（targetId/service 在生命周期内不变）
+  onMount(() => {
     const term = new Terminal({
       fontSize: 12,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
@@ -27,7 +26,7 @@ export function ConsoleView({ targetId, service }: { targetId: number; service?:
     fit.fit();
 
     // Eden Treaty WS：路径/params/query 类型安全（协议 ws/wss 由 treaty 自动推导）
-    const sock = api.console({ id: targetId }).subscribe({ query: { svc: service || undefined } });
+    const sock = api.console({ id: props.targetId }).subscribe({ query: { svc: props.service || undefined } });
     sock.on("message", ({ data }) => term.write(typeof data === "string" ? data : ""));
     sock.on("close", () => term.write("\r\n\x1b[90m[连接已关闭]\x1b[0m\r\n"));
     const send = (msg: { type: string } & Record<string, unknown>) => sock.send(msg);
@@ -40,12 +39,12 @@ export function ConsoleView({ targetId, service }: { targetId: number; service?:
     });
     ro.observe(el);
 
-    return () => {
+    onCleanup(() => {
       ro.disconnect();
       sock.close();
       term.dispose();
-    };
-  }, [targetId, service]);
+    });
+  });
 
-  return <div ref={ref} className="h-full w-full" />;
+  return <div ref={el} class="h-full w-full" />;
 }

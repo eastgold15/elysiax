@@ -603,6 +603,31 @@ export async function codegen(
         parts.push("client: true");
         mkdirSync(shellsDir, { recursive: true });
         const slug = shellSlug(p.url);
+        // client 入口预打包：应用装了框架自造的 @elysiax/solid 插件包 →
+        // 经它的 Bun 插件把 client 入口编成纯 JS 产物（落盘可见，见 lowering.md），
+        // 壳 HTML 引用产物；没装（如 React 应用）→ 照旧直引 .tsx 走 Bun 内置 JSX。
+        // core 只按包名探测，不认识 Solid/babel 的任何细节。
+        let scriptSrc = relative(shellsDir, p.clientIndex).replaceAll("\\", "/");
+        let clientPlugin: Bun.BunPlugin | null = null;
+        try {
+          const mod = (await import(Bun.resolveSync("@elysiax/solid", root))) as {
+            solidPlugin: () => Bun.BunPlugin;
+          };
+          clientPlugin = mod.solidPlugin();
+        } catch {
+          /* 应用未装 @elysiax/solid → 走 Bun 内置 JSX transform */
+        }
+        if (clientPlugin) {
+          await Bun.build({
+            entrypoints: [p.clientIndex],
+            outdir: shellsDir,
+            naming: `${slug}.client.[ext]`,
+            plugins: [clientPlugin],
+            target: "browser",
+            throw: true,
+          });
+          scriptSrc = `./${slug}.client.js`;
+        }
         const cssLink = existsSync(cssPath)
           ? `    <link rel="stylesheet" href="${relative(shellsDir, cssPath).replaceAll("\\", "/")}" />\n`
           : "";
@@ -618,7 +643,7 @@ export async function codegen(
             `  </head>`,
             `  <body>`,
             `    <div id="root"></div>`,
-            `    <script type="module" src="${relative(shellsDir, p.clientIndex).replaceAll("\\", "/")}"></script>`,
+            `    <script type="module" src="${scriptSrc}"></script>`,
             `  </body>`,
             `</html>`,
             "",

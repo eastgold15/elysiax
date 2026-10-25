@@ -1,12 +1,11 @@
-/** @jsxImportSource react */
 /**
- * 画布 client 的 UI 总线：抽屉/弹窗的开合 + 结构刷新。
- * 替代旧 island/actions.ts 的 htmx.ajax 桥——React 自己管理模态层，
- * 结构变更后 dispatch body 的 refresh 事件，board.tsx 监听重拉（约定保留）。
+ * 画布 client 的 UI 总线：抽屉/弹窗的开合 + 结构刷新（Solid 版）。
+ * Solid 的 context/useContext 与 React 语义一致，只是 provider 值是稳定引用、
+ * 细粒度订阅发生在 JSX 读取处。
  */
-import { createContext, useContext } from "react";
+import { createContext, useContext } from "solid-js";
 
-/** 模态视图描述：App 层的 DrawerHost 按 kind 渲染对应 React 抽屉 */
+/** 模态视图描述：App 层的 DrawerHost 按 kind 渲染对应抽屉 */
 export type View =
   | { kind: "new-app"; nodeId: number }
   | { kind: "new-db"; nodeId: number }

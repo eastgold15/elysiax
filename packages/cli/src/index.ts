@@ -135,6 +135,7 @@ export { ${P}Service } from "./${name}.service";
 import { ${P}Service } from "./${name}.service";
 
 export default defineModule({
+  route: "/${name}",
   provides: {
     // 键 = camelCase 类名；依赖写类引用（编译期校验），懒加载用 lazy(Class)
     ${C}Service: provide(${P}Service),
@@ -188,6 +189,209 @@ export default defineRoutes();
   logger.info(`   URL: /${name}，API 前缀: /api/${name}，服务键: ${C}Service`);
 }
 
+/**
+ * 契约 §1 原子脚手架：`elysiax new module <name> --ui htmx|react [--db]`
+ * 两种形态共用：service + di（含 route）+ socket（唯一对外插座）；
+ * --db 追加数据层骨架（schema.ts + migrations.ts）。
+ */
+async function scaffoldModule(
+  name: string,
+  ui: "htmx" | "react",
+  withDb: boolean,
+  logger: { info: (m: string) => void },
+) {
+  if (!/^[a-z][a-z0-9-]*$/.test(name))
+    throw new Error(`模块名须为 kebab-case: ${name}`);
+
+  const root = process.cwd();
+  const { loadConfig, codegen } = await import("@elysiax/core");
+  const config = await loadConfig(root);
+  const pagesDir = config.pages ?? "src/pages";
+  const dir = resolve(root, pagesDir, name);
+  if (existsSync(dir)) throw new Error(`模块已存在: ${dir}`);
+
+  // 原子目录到 .elysiax/ 的相对深度（如 src/pages/user → ../../../）
+  const up = "../".repeat(pagesDir.split("/").length + 1);
+  const P = pascal(name);
+  const C = camel(name);
+
+  // 依赖预检：数据层需要 drizzle-orm；react 形态需要 react + react-dom + @elysia/eden。
+  // 没装就直接报错提示，避免生成后类型检查挂
+  const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
+  const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+  if (withDb && !deps["drizzle-orm"])
+    throw new Error(`--db 数据层骨架需要 drizzle-orm，请先 bun add drizzle-orm`);
+  if (ui === "react" && !deps["react-dom"])
+    throw new Error(
+      `react 形态需要 react + react-dom + @elysia/eden，请先 bun add react react-dom @elysia/eden`,
+    );
+
+  mkdirSync(dir, { recursive: true });
+
+  // 服务类：业务错误抛 ServiceError（契约 §4）
+  writeFileSync(
+    resolve(dir, `${name}.service.ts`),
+    `export class ${P}Service {
+  // 依赖在构造函数里声明，${name}.di.ts 的 provide() 按顺序给类引用：
+  // constructor(private readonly db: Db) {}
+  // 业务错误抛 ServiceError（@elysiax/core），框架统一映射回显
+}
+`,
+  );
+
+  // 模块身份证（契约 §1.1 / §2）：default export defineModule({ route, provides })
+  writeFileSync(
+    resolve(dir, `${name}.di.ts`),
+    `import { defineModule, provide } from "@elysiax/core";
+import { ${P}Service } from "./${name}.service";
+
+// 模块身份证：codegen 据此自动发现，无需手工注册（契约 §1.1）
+export default defineModule({
+  route: "/${name}",
+  provides: {
+    // 键 = camelCase 类名；依赖写类引用（编译期校验），值服务用字符串键，
+    // 跨上下文单向依赖用 lazy(Class)（InferDI 不支持双向 lazy 循环，契约 §2）
+    ${C}Service: provide(${P}Service),
+  },
+});
+`,
+  );
+
+  // 插座（契约 §3）：唯一对外出口，只含 named/type export，不含运行时逻辑
+  writeFileSync(
+    resolve(dir, `${name}.socket.ts`),
+    `// ${name} 原子的插座：对外承诺的全部契约（契约 §3）。
+// 跨原子 import 的唯一合法形式：
+//   import { ${P}Service } from "../${name}/${name}.socket";
+// 禁止穿透 import 原子内部文件（父子原子也走插座，doctor 插座门禁强制）。
+export { ${P}Service } from "./${name}.service";
+${
+  ui === "react"
+    ? `
+// Eden Treaty 的 API 类型出口（react 形态追加）：本原子 client/api.ts 据此获得端到端类型
+import type ${C}Api from "./${name}.actions";
+export type ${P}Api = typeof ${C}Api;
+`
+    : ""
+}`,
+  );
+
+  // 数据层骨架（--db，契约 §1.2）
+  if (withDb) {
+    writeFileSync(
+      resolve(dir, "schema.ts"),
+      `import { sqliteTable, integer } from "drizzle-orm/sqlite-core";
+
+// 本原子的表锚点；跨原子的外键经对方插座 import（插头），不穿透对方 schema.ts
+// export const ${C}Items = sqliteTable("${C}_items", {
+//   id: integer().primaryKey({ autoIncrement: true }),
+// });
+// export type ${P}Item = typeof ${C}Items.$inferSelect;
+`,
+    );
+    writeFileSync(
+      resolve(dir, "migrations.ts"),
+      `// drizzle-kit generate 生成 SQL 后，把语句放进这里（保留 name/timestamp）；
+// shared/db 聚合所有原子的片段后按 timestamp 排序重放
+export default [] as { name: string; timestamp: number; sql: string }[];
+`,
+    );
+  }
+
+  if (ui === "htmx") {
+    // ── 形态 A：htmx 模块（契约 §1.3-A，L1-L3 服务端渲染 + 局部刷新）──
+    writeFileSync(
+      resolve(dir, `${name}.page.tsx`),
+      `import { definePage } from "@elysiax/core";
+import { ${P}List } from "./${name}.partials";
+
+export default definePage(({ di }) => ({
+  title: "${name}",
+  content: <${P}List />,
+}));
+`,
+    );
+    writeFileSync(
+      resolve(dir, `${name}.partials.tsx`),
+      `import type { Component } from "@workspace/htmx";
+import { defineRoutes } from "${up}.elysiax";
+
+/** 展示组件（整页与片段刷新共用） */
+export const ${P}List: Component = () => (
+  <div id="${C}-list">
+    <h2 class="text-lg font-semibold">${P}</h2>
+  </div>
+);
+
+/** GET 片段子路由：挂在 /api/${name} 前缀下（页面 URL = 文件夹路径） */
+export default defineRoutes();
+  // .get("/:id", ({ di, params }) => <${P}List />)
+`,
+    );
+    writeFileSync(
+      resolve(dir, `${name}.actions.tsx`),
+      `import { defineRoutes } from "${up}.elysiax";
+
+/** 写端点（返回 partial）：校验失败框架 422 回显；业务错误由 service 抛 ServiceError，
+ *  预期错误 return status(code, { error })，actions 不写 try/catch（契约 §4） */
+export default defineRoutes();
+  // .post("/", { body: t.Object({ name: t.String() }) }, ({ di, body, toast }) => {
+  //   toast("已创建");
+  //   return <${P}List />;
+  // })
+`,
+    );
+  } else {
+    // ── 形态 B：react 模块（契约 §1.3-B，L5 整页 client 模式）──
+    // 纯 API 的 Elysia 实例：default export 供 Eden 推导类型（socket.ts 的 ${P}Api）
+    writeFileSync(
+      resolve(dir, `${name}.actions.ts`),
+      `import { defineRoutes } from "${up}.elysiax";
+
+/** 纯 JSON API（react 形态无 .page.tsx，壳由 codegen 的 HTMLBundle 服务）。
+ *  default export 是本原子的类型出口：${name}.socket.ts 用 typeof 导出给 Eden 推导。
+ *  预期错误 return status(code, { error })，actions 不写 try/catch（契约 §4） */
+export default defineRoutes().get("/", () => ({ name: "${name}", ok: true }));
+`,
+    );
+
+    mkdirSync(resolve(dir, "client"), { recursive: true });
+    writeFileSync(
+      resolve(dir, "client/index.tsx"),
+      `/** @jsxImportSource react */
+// client 模式（L5）：/${name} 由壳 HTMLBundle 服务、不走 htmx，整页归 React。
+// 铁律：client/ 依赖链禁止 Node-only 包（dotenv/bun:sqlite → 浏览器打包 500）；
+// 后端数据经 client/api.ts 的 Eden Treaty 客户端访问（契约 §1.3-B）。
+import { createRoot } from "react-dom/client";
+
+function App() {
+  return <div>${P} client</div>;
+}
+
+createRoot(document.getElementById("root")!).render(<App />);
+`,
+    );
+    writeFileSync(
+      resolve(dir, "client/api.ts"),
+      `/** client 的 API 层：Eden Treaty 端到端类型客户端（路径/params/body/query 全类型安全）。
+ *  类型唯一来源是插座的 ${P}Api（../${name}.socket），禁止穿透 import ${name}.actions */
+import { treaty } from "@elysia/eden";
+import type { ${P}Api } from "../${name}.socket";
+
+export const api = treaty<${P}Api>(\`\${location.origin}/api/${name}\`);
+`,
+    );
+  }
+
+  await codegen(root, config);
+  logger.info(`✅ ${ui} 模块已创建: ${pagesDir}/${name}/（.elysiax/ 已重新生成）`);
+  logger.info(
+    ui === "htmx"
+      ? `   URL: /${name}，API 前缀: /api/${name}，服务键: ${C}Service`
+      : `   URL: /${name}（壳 HTMLBundle），API 前缀: /api/${name}，Eden 类型: ${P}Api`,
+  );
+}
+
 /** 纯服务模块：只有 di + service，不进路由表（deploy/edge/github 形态） */
 async function scaffoldService(name: string, logger: { info: (m: string) => void }) {
   if (!/^[a-z][a-z0-9-]*$/.test(name))
@@ -218,6 +422,14 @@ export default defineModule({
     ${C}Service: provide(${P}Service),
   },
 });
+`,
+  );
+  // 契约 §1.1：socket.ts 是原子必选文件，纯服务模块也要经插座对外承诺
+  writeFileSync(
+    resolve(dir, `${name}.socket.ts`),
+    `// ${name} 原子的插座：对外承诺的全部契约（契约 §3）。
+// 跨原子 import 只允许指向这个文件，禁止穿透 import 内部文件。
+export { ${P}Service } from "./${name}.service";
 `,
   );
   await codegen(root, config);
@@ -263,18 +475,35 @@ createRoot(document.getElementById("root")!).render(<App />);
 
 cli.addCommand({
   name: "new",
-  description: "脚手架：new page <name> 页面；new service <name> 纯服务模块；new client <page> 升舱 React",
+  description:
+    "脚手架：new module <name> --ui htmx|react [--db] 契约原子；new page|service|client 旧形态",
   arguments: [
-    { name: "kind", description: "page | service | client", type: String },
+    { name: "kind", description: "module | page | service | client", type: String },
     { name: "name", description: "名称（client 时为目标页面）", type: String },
   ],
-  execute: async ({ argument, logger }) => {
+  options: [
+    {
+      name: "ui",
+      type: String,
+      description: "module 的 UI 形态：htmx（默认）| react（L5 整页 client 模式）",
+    },
+    {
+      name: "db",
+      type: Boolean,
+      description: "module 附带数据层骨架（schema.ts + migrations.ts，契约 §1.2）",
+    },
+  ],
+  execute: async ({ argument, options, logger }) => {
     const [kind, name] = argument;
-    if (!name) throw new Error("用法: elysiax new page|service|client <name>");
+    if (!name) throw new Error("用法: elysiax new module|page|service|client <name>");
+    if (kind === "module") {
+      const ui = options.ui === "react" ? "react" : ("htmx" as const);
+      return scaffoldModule(name, ui, Boolean(options.db), logger);
+    }
     if (kind === "page") return scaffoldPage(name, logger);
     if (kind === "service") return scaffoldService(name, logger);
     if (kind === "client") return scaffoldClient(name, logger);
-    throw new Error(`未知类型 "${kind}"：支持 page | service | client`);
+    throw new Error(`未知类型 "${kind}"：支持 module | page | service | client`);
   },
 });
 

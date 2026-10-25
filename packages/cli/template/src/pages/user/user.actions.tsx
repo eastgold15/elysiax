@@ -1,6 +1,6 @@
 import { t } from "elysia";
-import { defineRoutes } from "../../../.elysiax";
-import { UserList } from "./user.partials";
+import { defineRoutes, routes } from "../../../.elysiax";
+import { UserList } from "./user.ui";
 
 /** 写端点：挂在 /api/user 前缀下；校验失败由框架 422 回显（不写 try/catch） */
 export default defineRoutes().post(
@@ -9,6 +9,12 @@ export default defineRoutes().post(
   ({ di, body, toast }) => {
     di.get("userService").addUser(body);
     toast(`用户「${body.name}」已添加`);
-    return <UserList users={di.get("userService").listUsers()} />;
+    return (
+      <UserList
+        users={di.get("userService").listUsers()}
+        postUrl={routes.pages.user.index()}
+        ordersUrl={routes.pages.user.ByIdOrders(1)}
+      />
+    );
   },
 );

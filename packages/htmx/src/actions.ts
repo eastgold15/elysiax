@@ -54,8 +54,15 @@ export function actions(options: ActionsOptions = {}) {
          */
         toast(message: string, kind: ToastKind = 'info'): void {
           const prev = set.headers[TRIGGER_HEADER]
-          const events: Record<string, unknown> =
-            typeof prev === 'string' ? JSON.parse(prev) : {}
+          // 上游插件可能写过非 JSON 的 HX-Trigger（裸事件名等）：解析失败按无既有事件处理，不让 toast 把请求炸成 500
+          let events: Record<string, unknown> = {}
+          if (typeof prev === 'string') {
+            try {
+              const parsed: unknown = JSON.parse(prev)
+              if (parsed && typeof parsed === 'object')
+                events = parsed as Record<string, unknown>
+            } catch { /* 非 JSON 头：覆盖为全新事件对象 */ }
+          }
           const list = Array.isArray(events.toast) ? (events.toast as unknown[]) : []
           // 响应头只能是 latin1：中文消息 encodeURIComponent，壳脚本负责解码
           list.push({ message: encodeURIComponent(message), kind })
@@ -65,7 +72,8 @@ export function actions(options: ActionsOptions = {}) {
 
         /**
          * 校验失败回显：hx → 422 + 表单片段（全局壳的 responseHandling
-         * 配置允许 swap 422）；普通表单 → 422 + layout 整页回显。
+         * 配置允许 swap 422）；普通表单 → 422 + layout 整页回显
+         * （仅当 actions() 传了 layout；未传时非 HX 路径也是裸片段 422）。
          * 禁止返回 200 + 空白（7.2）。
          */
         formError(fragment: unknown): Promise<Response> | Response {

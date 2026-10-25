@@ -145,12 +145,17 @@ export interface ModuleDiInput extends Omit<ModuleDi, "provides"> {
  * 声明一个模块（或 infra）向容器提供什么。仅收集声明，装配由 codegen 生成。
  * 依赖里的类引用 / lazy() 在声明时归一化成字符串键，codegen 逻辑不变。
  */
+/** defineModule 归一化的运行时品牌：loadDi 据此拒绝裸对象穿透（契约 §1.1） */
+const moduleBrand: unique symbol = Symbol.for(
+  "elysiax.module",
+) as typeof moduleBrand;
+
 export function defineModule<T extends ModuleDiInput>(di: T): T {
   const provides = Object.fromEntries(
     Object.entries(di.provides).map(([k, e]) => [k, normalizeEntry(k, e)]),
   );
-  // 运行时归一化成 ModuleDi；类型上保留输入形态供 services.gen 推导
-  return { ...di, provides } as unknown as T;
+  // 运行时归一化成 ModuleDi + 打品牌；类型上保留输入形态供 services.gen 推导
+  return { ...di, provides, [moduleBrand]: true } as unknown as T;
 }
 
 /**
@@ -165,6 +170,15 @@ async function loadDi(diPath: string, root: string): Promise<ModuleDi> {
     throw new Error(
       `[elysiax] ${relative(root, diPath)} 必须 default export defineModule({ route, provides })` +
       `（契约 §1.1：di 文件是模块身份证，codegen 据此自动发现）`,
+    );
+  }
+  // 品牌校验：裸对象 / 裸类简写未经过 defineModule 归一化（deps 还是类引用而非字符串键），
+  // 放行会穿透 socket 门禁与依赖拓扑，生成的容器 registerClass(undefined) 运行时才炸
+  if ((di as unknown as Record<symbol, unknown>)[moduleBrand] !== true) {
+    throw new Error(
+      `[elysiax] ${relative(root, diPath)} 的 default export 没有经过 defineModule() 归一化` +
+      `（契约 §1.1）。请改为 export default defineModule({ route, provides: { ... } })，` +
+      `provides 条目用 provide(Class, [deps]) 或 { value } 声明`,
     );
   }
   return di;
@@ -317,8 +331,9 @@ export function extractRoutes(
   src: string,
   fallbackPrefix: string,
 ): { prefix: string; paths: string[] } {
+  // prefix 允许出现在 options 对象的任意位置（不再要求必须是第一个属性）
   const prefixMatch = src.match(
-    /defineController(?:<[^>]*>)?\(\s*\{\s*prefix:\s*["'`]([^"'`]+)["'`]/,
+    /defineController(?:<[^>]*>)?\(\s*\{[\s\S]*?\bprefix\s*:\s*["'`]([^"'`]+)["'`]/,
   );
   const prefix = prefixMatch?.[1] ?? fallbackPrefix;
   const routeRe =
@@ -685,11 +700,18 @@ export async function codegen(
     rl.push(`  pages: {`);
     const usedPageKeys = new Set<string>();
     for (const p of pageScan.pages) {
-      const key = camel(p.stem);
+      let key = camel(p.stem);
+      if (usedPageKeys.has(key)) {
+        // stem 撞车（典型：嵌套的 index.page.tsx）→ 用 URL 段消歧：
+        // /foo 的 index 组 → fooIndex；不破坏既有的按 stem 命名约定
+        const segs = p.url.split("/").filter(Boolean).map(camel);
+        if (segs.length)
+          key = segs.join("") + (p.stem === "index" ? "Index" : pascalCase(p.stem));
+      }
       if (usedPageKeys.has(key))
         throw new Error(
-          `页面路由助手键冲突：多个页面 stem 都是 "${p.stem}"（${p.url}），` +
-          `routes.pages.${key} 无法区分，请给页面文件换名`,
+          `页面路由助手键冲突：多个页面都推导出键 "${key}"（含 URL 消歧后仍撞车，` +
+          `当前页面 ${p.url}），请给页面文件换名`,
         );
       usedPageKeys.add(key);
       rl.push(`    ${JSON.stringify(key)}: {`);

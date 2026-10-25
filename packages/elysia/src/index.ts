@@ -29,8 +29,9 @@
  * @module
  */
 
-// 已从 @inferdi/elysia 6.1.0（面向 Elysia 1.x）移植到 Elysia 2.0：
-// - 钩子改名：onError → error、onAfterResponse → afterResponse、resolve 并入 derive
+// 已从 @inferdi/elysia 6.1.0（面向 Elysia 1.x）移植到 Elysia 2.0（rc）：
+// - 钩子加作用域首参：.onError('plugin', ...)、.onAfterResponse('plugin', ...)
+//   （注意：rc 的钩子名仍是 onError/onAfterResponse，error/afterResponse 新名尚未落地）
 // - 作用域参数从 { as: 'scoped' } 改为字符串 'plugin'（EventScope = 'global' | 'local' | 'plugin'）
 // - Elysia 泛型参数列表重排（BasePath, Scope, Singleton, ...）
 // - Context 类型不再从 elysia 导入，改为结构性最小契约（避免与 Elysia 内部 RouteSchema 耦合）
@@ -785,6 +786,7 @@ export function inferdiElysia(options: unknown): unknown {
 
     withValidatedScope = withValidatedScope.derive(
       'plugin',
+      // any：derive 的 context 泛型在本插件边界不可表达，下方立即收窄为 InferdiElysiaValidatedContext
       async (context: any) => {
         const state = requestState.get(context.request)
 

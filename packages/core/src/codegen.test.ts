@@ -92,3 +92,14 @@ test("页面 URL 重复（index.page 与 <目录名>.page 同目录）：报错"
   });
   await expect(codegen(root, CONFIG)).rejects.toThrow(/页面 URL "\/todo" 重复/);
 });
+
+test("裸对象 di（未经 defineModule 归一化）：品牌校验拒绝，不再静默生成坏容器", async () => {
+  const root = makeFixture({
+    "src/pages/todo/todo.di.ts": `
+export class TodoService {}
+export default { route: "/todo", provides: { todoService: TodoService } };
+`,
+    "src/pages/todo/todo.socket.ts": `export { TodoService } from "./todo.di";\n`,
+  });
+  await expect(codegen(root, CONFIG)).rejects.toThrow(/没有经过 defineModule\(\) 归一化/);
+});

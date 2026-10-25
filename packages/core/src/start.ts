@@ -96,8 +96,6 @@ export async function start(opts: {
   routes["/api/*"] = handle;
 
   // auth 由 elysiaxAPI 的 auth 宏按路由挂载（7.5），不再包全局 URL 匹配守卫
-  for (const k of Object.keys(routes))
-    if (typeof routes[k] === "function") routes[k] = handle;
 
   serve({
     port: opts.port ?? 3000,

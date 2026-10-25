@@ -825,12 +825,21 @@ cli.addCommand({
       const abs = resolve(root, f);
       const src = readFileSync(abs, "utf8");
       for (const m of src.matchAll(/sqliteTable\(\s*["'`](\w+)["'`]/g)) {
-        const owner = tableOwner.get(m[1]!);
+        const tbl = m[1]!;
+        const owner = tableOwner.get(tbl);
         if (owner && owner !== abs) {
-          logger.error(`❌ 表名撞车: "${m[1]}" 同时定义在 ${relative(root, owner)} 与 ${f}——复制原子时请改表名前缀`);
+          logger.error(`❌ 表名撞车: "${tbl}" 同时定义在 ${relative(root, owner)} 与 ${f}——复制原子时请改表名前缀`);
           dataIssues++;
           errors++;
-        } else tableOwner.set(m[1]!, abs);
+        } else tableOwner.set(tbl, abs);
+        // 表名前缀 = 原子名（下划线化）：复制原子进项目时防撞、一眼知归属
+        const atomDir = atomOf(abs);
+        const prefix = atomDir ? basename(atomDir).replaceAll("-", "_") : undefined;
+        if (prefix && !tbl.startsWith(prefix)) {
+          logger.error(`❌ ${f}: 表 "${tbl}" 未以原子名 "${prefix}" 开头（契约 §9.1：表名前缀 = 原子名）`);
+          dataIssues++;
+          errors++;
+        }
       }
     }
     // timestamp 撞名判定：同 timestamp + 同 name = 合法（拆分片段）；

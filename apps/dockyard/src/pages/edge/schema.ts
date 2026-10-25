@@ -3,7 +3,7 @@ import { sqliteTable, text, integer, unique } from "drizzle-orm/sqlite-core";
 import { deployTargets } from "../deploy/deploy.socket";
 
 // ── 域名绑定：app target 的自定义域名（edge 反代 + 自动证书的状态机）──
-export const domains = sqliteTable("domains", {
+export const domains = sqliteTable("edge_domains", {
   id: integer().primaryKey({ autoIncrement: true }),
   targetId: integer().notNull().references(() => deployTargets.id, { onDelete: "cascade" }),
   hostname: text().notNull(),

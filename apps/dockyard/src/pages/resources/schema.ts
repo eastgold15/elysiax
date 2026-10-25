@@ -4,7 +4,7 @@ import { servers } from "../servers/servers.socket";
 
 // ── 服务器共享资源清单：绑定到单台服务器的中间件（视角 B 预部署产物）──
 // 任意项目部署到该服务器时可引用其连接串（envKey 下拉），不再重复部署中间件
-export const serverResources = sqliteTable("server_resources", {
+export const serverResources = sqliteTable("resources", {
   id: integer().primaryKey({ autoIncrement: true }),
   serverId: integer().notNull().references(() => servers.id, { onDelete: "cascade" }),
   name: text().notNull(),

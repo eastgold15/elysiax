@@ -55,7 +55,7 @@ export const deployTargets = sqliteTable("deploy_targets", {
 ]);
 
 // ── 部署历史 ──
-export const deployments = sqliteTable("deployments", {
+export const deployments = sqliteTable("deploy_runs", {
   id: integer().primaryKey({ autoIncrement: true }),
   targetId: integer().notNull().references(() => deployTargets.id, { onDelete: "cascade" }),
   status: text({

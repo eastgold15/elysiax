@@ -15,7 +15,7 @@ export const canvasNodes = sqliteTable("canvas_nodes", {
 });
 
 // ── 服务分组：画布上的命名分组容器，归属某张服务器卡 ──
-export const serviceGroups = sqliteTable("service_groups", {
+export const serviceGroups = sqliteTable("canvas_groups", {
   id: integer().primaryKey({ autoIncrement: true }),
   nodeId: integer().notNull().references(() => canvasNodes.id, { onDelete: "cascade" }),
   name: text().notNull(),

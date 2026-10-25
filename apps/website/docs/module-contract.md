@@ -125,7 +125,7 @@ di 的 deps 是原子的"凸"（要插哪些插座）；doctor 在 import 扫描
 
 ## 9. 数据层门禁
 
-1. **表名全局唯一**：两张表撞名即报错（复制原子进项目时最先撞的就是表名）。约定俗成：表名带原子名前缀（`canvas_nodes`、`deploy_targets`）。
+1. **表名前缀 = 原子名**（下划线化，如 `canvas_nodes`、`deploy_targets`、`edge_domains`）：doctor 强制。复制原子进项目时防撞名、一眼知归属；撞名本身也报错。
 2. **迁移 journal 只增不改**：旧条目不删不改；`timestamp` 全项目唯一——**唯一例外**是同一条迁移的拆分片段共享 `name + timestamp`（垂直切片拆分时产生，执行序由 `shared/db.ts` 的稳定排序保证）。
 3. **禁止跨原子 DDL**：本原子的 `migrations.ts` 只许 CREATE/ALTER/DROP 自己的表；外键 `REFERENCES` 别家表是插头（正当），ALTER 别家表是拆墙（报错）。
 

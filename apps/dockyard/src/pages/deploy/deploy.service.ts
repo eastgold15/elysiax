@@ -1067,6 +1067,11 @@ export class DeployService {
       await this.deployRollback(target, src, log);
       await setStatus("success", { finishedAt: new Date() });
       await log("✅ 回滚完成");
+      // 回滚是「留旧版」的明确意图：auto 策略不降级的话，下一轮轮询会立刻把坏 sha 自动部回去
+      if (target.deployPolicy === "auto") {
+        await this.repo.updateTarget(targetId, { deployPolicy: "notify" });
+        await log("⚠️ 部署策略已从「自动部署」降级为「仅提醒」——确认修复后可在抽屉里改回");
+      }
       await this.repo.pruneRuns(targetId, RUNS_KEEP);
     } catch (error) {
       await log(`❌ ${(error as Error).message}`);

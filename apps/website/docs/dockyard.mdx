@@ -81,7 +81,9 @@ export default defineModule({
 
 **日志健壮性**：`logText` 单列读改写改为 `deploy_log_chunks` 分块追加（`MAX(seq)+1` 廉价查询换多写者正确性）；SSE 推送按 50 行/100ms 窗口合并（`execLongRemote` 单窗口可达千行）；客户端去轮询——HTTP 一次性回填 + SSE 增量 + 终态最后一次 HTTP 对齐。
 
-**部署策略三态**（`deploy_targets.deployPolicy`）：manual 不轮询（省 GitHub 配额）/ notify 只亮「有更新」徽章（默认）/ auto 检出更新即触发部署（`trigger=auto` 入血缘，内存记已触发 sha 防失败重试风暴）。
+**部署策略三态**（`deploy_targets.deployPolicy`）：manual 不轮询（省 GitHub 配额）/ notify 只亮「有更新」徽章（默认）/ auto 检出更新即触发部署（`trigger=auto` 入血缘，内存记已触发 sha 防失败重试风暴）。回滚成功时 auto 自动降级为 notify——回滚是「留旧版」的明确意图，不降级的话下一轮轮询会立刻把坏 sha 部回去。
+
+**开放问题（记录在案，暂不实施）**：远端镜像 run tag 的磁盘膨胀（观察后决定是否保留 N 个超出 rmi）；宿主预装 DB 轨道（倾向检测+接管而非自动安装）；SSE log 高频若拖累画布徽章再拆独立频道；进程重启后 lastAutoSha 清空（auto 目标极端情况下可能重复触发一次，可接受）。
 
 **部署通道（本机/远程硬隔离语义化）**
 

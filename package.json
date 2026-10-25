@@ -4,6 +4,7 @@
   "type": "module",
   "private": true,
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@types/bun": "latest",
     "turbo": "^2.11.4"
   },

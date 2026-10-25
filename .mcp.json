@@ -1,9 +1,22 @@
 {
   "mcpServers": {
-    "playwright": {
+    "bunbrowser": {
       "command": "bunx",
       "args": [
         "@bunbrowser/mcp"
+      ]
+    },
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest"
+      ]
+    },
+    "elysiax-atoms": {
+      "command": "bun",
+      "args": [
+        "run",
+        "scripts/atoms-mcp.ts"
       ]
     }
   }

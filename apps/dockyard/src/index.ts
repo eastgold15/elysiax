@@ -12,7 +12,15 @@ import "./app.layout";
 import * as gen from "../.elysiax";
 import type { ServiceMap } from "../.elysiax";
 
-const { root } = await start({ port: 3003, gen });
+const { root } = await start({
+  port: 3003,
+  gen,
+  api: {
+    // OpenAPI 文档：/openapi（Scalar UI）。运行时路由注册表生成 spec，
+    // 端点都有显式 t schema，无需 fromTypes
+    openapi: { documentation: { info: { title: "dockyard API", version: "0.1.0" } } },
+  },
+});
 
 // 后台轮询器与请求共用同一个根容器（DI 服务单例：SSH 连接池只有一份）
 const di = root as Container<ServiceSpecs<ServiceMap>>;

@@ -77,7 +77,8 @@ const svcEditSchema = t.Object({
   domain: t.Optional(t.String()),
   cpuCores: t.Optional(t.Number()),
   memoryMb: t.Optional(t.Number()),
-  env: t.Record(t.String(), t.String()),
+  // env 值是 { value, secret } 结构（EnvValue/OpenshipEnvValue），不是裸字符串
+  env: t.Record(t.String(), t.Object({ value: t.String(), secret: t.Boolean() })),
 });
 
 export default defineRoutes()
@@ -141,13 +142,18 @@ export default defineRoutes()
     instances: await ctxOf(di).deploy.instancesOfNode(params.nodeId, "postgres"),
   }))
   // dbType 切换时拉取该服务器上可托管的同类型实例（redis 不支持逻辑库）
-  .get("/instances", async ({ di, query }) => {
-    const dbType = (query.dbType ?? "postgres") as DbType;
-    const instances = LOGICAL_DB_SUPPORT[dbType]
-      ? await ctxOf(di).deploy.instancesOfNode(Number(query.nodeId), dbType)
-      : [];
-    return { instances };
-  })
+  // query 显式声明（Eden 客户端类型需要）
+  .get(
+    "/instances",
+    { query: t.Object({ nodeId: t.Numeric(), dbType: t.Optional(t.String()) }) },
+    async ({ di, query }) => {
+      const dbType = (query.dbType ?? "postgres") as DbType;
+      const instances = LOGICAL_DB_SUPPORT[dbType]
+        ? await ctxOf(di).deploy.instancesOfNode(query.nodeId, dbType)
+        : [];
+      return { instances };
+    },
+  )
   .post(
     "/targets/app",
     {
@@ -378,6 +384,7 @@ export default defineRoutes()
   )
   // Console Tab：容器交互式终端（xterm ←→ WS ←→ docker exec TTY）
   .ws("/console/:id", {
+    params: t.Object({ id: t.Number() }),
     query: t.Object({ svc: t.Optional(t.String()) }),
     async open(ws) {
       // Elysia 2.0：ws handler 收到的是上下文与 socket 方法的合并对象（无 .data 层）

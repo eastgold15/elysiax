@@ -7,7 +7,7 @@
 import { memo } from "react";
 import { Handle, NodeResizer, Position, type Node, type NodeProps } from "@xyflow/react";
 import type { CardModel, DomainBadge, GroupModel, ServiceRow, TargetModel } from "../canvas.model";
-import { api, canvasApi, delJSON, patchJSON, postJSON } from "./api";
+import { api, canvasApi, unwrap } from "./api";
 import { useServiceState, useTargetLive } from "./live";
 import { emitRefresh, useUi } from "./ui";
 
@@ -74,17 +74,17 @@ const StateDot = ({ targetId, svcName }: { targetId: number; svcName: string }) 
 
 /** NodeResizer 拉伸结束 → 持久化手动尺寸（refetch 后作自动收敛的下限） */
 const persistServerSize = (nodeId: number, w: number, h: number) =>
-  patchJSON(canvasApi.nodesById(nodeId), { w: Math.round(w), h: Math.round(h) });
+  unwrap(canvasApi.nodes({ id: nodeId }).patch({ w: Math.round(w), h: Math.round(h) }));
 const persistGroupSize = (groupId: number, w: number, h: number) =>
-  patchJSON(canvasApi.groupsById(groupId), { w: Math.round(w), h: Math.round(h) });
+  unwrap(canvasApi.groups({ id: groupId }).patch({ w: Math.round(w), h: Math.round(h) }));
 const persistTargetSize = (targetId: number, w: number, h: number) =>
-  patchJSON(api.targetsByIdLayout(targetId), { w: Math.round(w), h: Math.round(h) });
+  unwrap(api.targets({ id: targetId }).layout.patch({ w: Math.round(w), h: Math.round(h) }));
 
 /** Railway 式体验：点部署即打开日志面板盯进度（React 抽屉内 1s 轮询到终态） */
 function useDeployTarget() {
   const ui = useUi();
   return async (targetId: number) => {
-    await postJSON(api.targetsByIdDeploy(targetId));
+    await unwrap(api.targets({ id: targetId }).deploy.post());
     ui.open({ kind: "log", targetId });
   };
 }
@@ -96,7 +96,7 @@ function useRemoveTarget() {
       : `移除部署目标「${t.name}」？（远端容器不动）`;
     if (!confirm(hint)) return;
     try {
-      await delJSON(api.targetsById(t.id));
+      await unwrap(api.targets({ id: t.id }).delete());
     } catch (e) {
       // 例如：实例下还有逻辑库，被阻止（409 + 错误文本）
       alert((e as Error).message);

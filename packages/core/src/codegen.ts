@@ -153,6 +153,23 @@ export function defineModule<T extends ModuleDiInput>(di: T): T {
   return { ...di, provides } as unknown as T;
 }
 
+/**
+ * 导入并校验 di 声明文件（契约 §1.1：必须 default export defineModule({ route, provides })）。
+ * 缺 default export / provides 不是对象时给出指向契约的清晰报错，
+ * 而不是让后续 Object.keys(undefined) 抛出费解的运行时错误。
+ */
+async function loadDi(diPath: string, root: string): Promise<ModuleDi> {
+  const mod = (await import(pathToFileURL(diPath).href)) as { default?: unknown };
+  const di = mod.default as ModuleDi | undefined;
+  if (!di || typeof di !== "object" || typeof di.provides !== "object" || di.provides === null) {
+    throw new Error(
+      `[elysiax] ${relative(root, diPath)} 必须 default export defineModule({ route, provides })` +
+      `（契约 §1.1：di 文件是模块身份证，codegen 据此自动发现）`,
+    );
+  }
+  return di;
+}
+
 interface LoadedModule {
   dir: string; // 绝对路径
   manifest: ModuleManifest;
@@ -268,6 +285,18 @@ async function scanPages(root: string, pagesDir: string): Promise<PageScan> {
   };
   await walk(base, "");
 
+  // URL 冲突校验：不同页面组推导出同一 URL 时挂载结果不可预测，直接报错
+  const urlOwner = new Map<string, string>();
+  for (const [key, p] of groups) {
+    const prev = urlOwner.get(p.url);
+    if (prev)
+      throw new Error(
+        `[elysiax] 页面 URL "${p.url}" 重复："${prev}" 与 "${key.replace(`${base}/`, "")}" 都映射到它，` +
+        `请调整目录结构或页面文件名（URL = 文件夹路径 + stem）`,
+      );
+    urlOwner.set(p.url, key.replace(`${base}/`, ""));
+  }
+
   // P2-4：旧约定从警告升级为拒绝——controller/ui 形态已被页面约定取代
   if (legacy.length)
     throw new Error(
@@ -328,7 +357,7 @@ export async function codegen(
   const infraPath = await firstExisting(join(root, "src"), "infra.di");
   let infra: ModuleDi | undefined;
   if (infraPath) {
-    infra = (await import(pathToFileURL(infraPath).href)).default as ModuleDi;
+    infra = await loadDi(infraPath, root);
   }
 
   const mods: LoadedModule[] = [];
@@ -355,7 +384,7 @@ export async function codegen(
 
     let di: ModuleDi | undefined;
     if (diPath) {
-      di = (await import(pathToFileURL(diPath).href)).default as ModuleDi;
+      di = await loadDi(diPath, root);
     }
     // di 声明优先，module.json 兜底，最后默认值
     const manifest: ModuleManifest = {
@@ -372,15 +401,43 @@ export async function codegen(
   // 页面树里的 di 声明：与模块 di 一视同仁进拓扑排序（纯服务文件夹 = 无
   // page/partials/actions 只有 di 的目录，deploy/edge/github 即此形态）
   for (const d of pageScan.dis) {
-    const di = (await import(pathToFileURL(d.path).href)).default as ModuleDi;
+    const di = await loadDi(d.path, root);
+    const dir = join(d.path, "..");
+    // 契约 §1.1/§3：原子对外暴露能力时必须提供 <name>.socket.ts 唯一插座。
+    // 触发条件：目录有 schema.ts（表锚点要出口）或 di 提供了类服务（供外原子注入）。
+    // 纯值服务聚合（如 infra）不强制。
+    const needsSocket =
+      existsSync(join(dir, "schema.ts")) ||
+      Object.values(di.provides).some((e) => "class" in e);
+    if (needsSocket && !(await firstExisting(dir, `${d.stem}.socket`))) {
+      throw new Error(
+        `[elysiax] 原子 "${d.stem}" 缺少 ${d.stem}.socket.ts（契约 §3：socket 是唯一对外插座，` +
+        `跨原子 import 只能走它）。目录 ${relative(root, dir)} 含 schema.ts 或 di 提供类服务时必须提供。`,
+      );
+    }
     const name = di.name ?? d.stem;
     mods.push({
-      dir: join(d.path, ".."),
+      dir,
       manifest: { name, version: di.version ?? "0.0.0", route: di.route },
       di,
       diPath: d.path,
       diVar: `${ident(name)}Di`,
     });
+  }
+
+  // route 冲突校验：两个原子声明同一路由前缀会导致请求落点不确定，直接报错
+  {
+    const routeOwner = new Map<string, string>();
+    for (const mod of mods) {
+      const route = mod.manifest.route ?? `/${mod.manifest.name}`;
+      const prev = routeOwner.get(route);
+      if (prev)
+        throw new Error(
+          `[elysiax] route "${route}" 重复：原子 "${prev}" 与 "${mod.manifest.name}" 都声明了它，` +
+          `请在各自的 <name>.di.ts 里换用不同 route`,
+        );
+      routeOwner.set(route, mod.manifest.name);
+    }
   }
 
   // ── 拓扑排序：dep 的提供者必须先装配 ──

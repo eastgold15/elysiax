@@ -12,13 +12,14 @@
     "package": "elysiax package"
   },
   "dependencies": {
+    "@elysia/eden": "^2.0.0-rc.0",
     "@elysiax/core": "workspace:*",
+    "@inferdi/elysia": "workspace:*",
     "@inferdi/inferdi": "^6.1.0",
+    "@workspace/htmx": "workspace:*",
     "bun-plugin-tailwind": "^0.1.2",
     "elysia": "catalog:",
     "tailwindcss": "^4.1.11",
-    "@inferdi/elysia": "workspace:*",
-    "@workspace/htmx": "workspace:*",
     "webview-bun": "^2.4.0"
   },
   "devDependencies": {

@@ -1,5 +1,7 @@
 import { Elysia, ValidationError } from "elysia";
 import { websocket } from "elysia/websocket";
+import { compress } from "@elysia/compress";
+import { openapi } from "@elysia/openapi";
 import { inferdiElysia } from "@inferdi/elysia";
 import { actions, html, type LayoutComponent } from "@workspace/htmx";
 import type { Container, Lifetime, Spec } from "@inferdi/inferdi";
@@ -133,6 +135,19 @@ export interface ElysiaxAPIOptions {
    * partials/actions）同样受保护。模块 controller 需自行 .use(elysiaxAuth)。
    */
   auth?: GuardOptions;
+  /**
+   * 响应压缩（@elysia/compress，Elysia 2 RC 官方插件）：br/zstd/gzip/deflate
+   * 按 Accept-Encoding 协商，≥1KB 才压，SSE（text/event-stream）自动排除。
+   * 传 false 关闭；默认开启。
+   */
+  compress?: false | Parameters<typeof compress>[0];
+  /**
+   * OpenAPI 文档（@elysia/openapi）：挂载 /openapi（Scalar UI）+ /openapi/json。
+   * 路由与运行时 schema 从路由注册表生成——我们的端点 body/query/params 都有
+   * 显式 t schema，spec 天然完整。fromTypes() 不适用：elysiaxAPI 在框架边界
+   * 把组合类型断言回基链（路由类型不进 App 类型），等类型管道打通后再启用。
+   */
+  openapi?: boolean | Parameters<typeof openapi>[0];
 }
 
 /** 默认校验错误横幅（errorBanner 统一样式） */
@@ -152,6 +167,9 @@ export function elysiaxAPI<T extends Record<string | symbol, any>>(
     .use(html({ layout: options.layout }) as any)
     .use(actions({ layout: options.layout }) as any)
     .use(websocket());
+
+  // 响应压缩：默认开启（SSE/小响应/已编码响应插件自动跳过）
+  if (options.compress !== false) api.use(compress(options.compress ?? {}));
 
   if (options.validationError !== false) {
     const banner = options.validationError ?? defaultValidationBanner;
@@ -227,5 +245,10 @@ export function elysiaxAPI<T extends Record<string | symbol, any>>(
       }
     }
   }
+  // OpenAPI 文档：最后挂载（reflect 运行时路由注册表，顺序无关）
+  if (options.openapi)
+    app = app.use(
+      openapi(options.openapi === true ? {} : options.openapi),
+    ) as unknown as typeof app;
   return app
 }

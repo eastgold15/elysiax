@@ -1,43 +1,40 @@
-/** client 的 fetch 助手：JSON 进出，错误统一抛 Error(message)。
- *  端点分流：部署语境在 /api/deploy/*（api），画布原生在 /api/canvas/*（canvasApi） */
+/** client 的 API 层：Eden Treaty 端到端类型客户端（路径/params/body/query 全类型安全）。
+ *  端点分流：部署语境在 /api/deploy/*（api），画布原生在 /api/canvas/*（canvasApi）。
+ *  浏览器原生场景（href 下载、EventSource SSE、裸文本流）Eden 管不到，
+ *  仍用 routes.gen 的 URL 助手（deployPaths / canvasPaths）。 */
+import { treaty } from "@elysia/eden";
 import { routes } from "../../../../.elysiax/routes.gen";
+import type { DeployApi } from "../../deploy/deploy.socket";
+import type { CanvasApi } from "../canvas.socket";
 
-export const api = routes.pages.deploy;
-export const canvasApi = routes.pages.canvas;
+export const api = treaty<DeployApi>(`${location.origin}/api/deploy`);
+export const canvasApi = treaty<CanvasApi>(`${location.origin}/api/canvas`);
 
-export async function getJSON<T>(url: string): Promise<T> {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(await errText(res));
-  return (await res.json()) as T;
-}
+export const deployPaths = routes.pages.deploy;
+export const canvasPaths = routes.pages.canvas;
 
-export async function sendJSON<T = { ok: true }>(
-  method: "POST" | "PUT" | "PATCH" | "DELETE",
-  url: string,
-  body?: unknown,
-): Promise<T> {
-  const res = await fetch(url, {
-    method,
-    headers: body !== undefined ? { "content-type": "application/json" } : undefined,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) throw new Error(await errText(res));
-  if (res.status === 204) return { ok: true } as T;
-  const text = await res.text();
-  return (text ? JSON.parse(text) : { ok: true }) as T;
-}
+/** Eden TreatyResponse 的宽松形状（data 按状态码收窄，这里只取成功分支） */
+type AnyTreaty = {
+  data: unknown;
+  // 端点未声明错误状态码时 Eden 推断为 { status: unknown; value: unknown }
+  error: { status: unknown; value: unknown } | null;
+};
 
-async function errText(res: Response): Promise<string> {
-  const text = await res.text();
-  try {
-    const j = JSON.parse(text) as { error?: string; message?: string };
-    return j.error ?? j.message ?? text;
-  } catch {
-    return text || `HTTP ${res.status}`;
+/** 从错误体提取消息：ServiceError 映射是 { error } JSON，校验错误是 422 对象，兜底原文 */
+function errMessage(value: unknown): string | null {
+  if (value && typeof value === "object") {
+    const v = value as { error?: unknown; message?: unknown };
+    if (typeof v.error === "string") return v.error;
+    if (typeof v.message === "string") return v.message;
   }
+  return typeof value === "string" ? value : null;
 }
 
-export const postJSON = <T>(url: string, body?: unknown) => sendJSON<T>("POST", url, body);
-export const patchJSON = <T>(url: string, body?: unknown) => sendJSON<T>("PATCH", url, body);
-export const putJSON = <T>(url: string, body?: unknown) => sendJSON<T>("PUT", url, body);
-export const delJSON = <T>(url: string) => sendJSON<T>("DELETE", url);
+/** Eden 的 { data, error } → 抛错式（沿用旧助手语义：失败抛 Error(message)） */
+export async function unwrap<R extends AnyTreaty>(
+  p: Promise<R>,
+): Promise<NonNullable<R["data"]>> {
+  const { data, error } = await p;
+  if (error) throw new Error(errMessage(error.value) ?? `HTTP ${String(error.status)}`);
+  return data as NonNullable<R["data"]>;
+}

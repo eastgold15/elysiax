@@ -10,3 +10,8 @@ export { ContainerPoller } from "./container-poller";
 export { UpdatePoller } from "./update-poller";
 export { detectRepo, detectLocal, detectToEnvText, detectToOverrideCompose, guessDbType } from "./detect";
 export type { DetectResult, DetectedService } from "./detect";
+
+// Eden Treaty 的 API 类型出口：canvas client（跨原子）经插座引用，
+// type-only 在浏览器打包时被擦除，不进 bundle
+import type deployApi from "./deploy.actions";
+export type DeployApi = typeof deployApi;

@@ -12,6 +12,7 @@
     "package": "elysiax package"
   },
   "dependencies": {
+    "@elysia/eden": "^2.0.0-rc.0",
     "@elysiax/core": "workspace:*",
     "@inferdi/elysia": "workspace:*",
     "@inferdi/inferdi": "^6.1.0",

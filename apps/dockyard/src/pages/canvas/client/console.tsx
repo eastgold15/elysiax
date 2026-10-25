@@ -7,6 +7,7 @@ import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
+import { api } from "./api";
 
 export function ConsoleView({ targetId, service }: { targetId: number; service?: string }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -25,17 +26,13 @@ export function ConsoleView({ targetId, service }: { targetId: number; service?:
     term.open(el);
     fit.fit();
 
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    const sock = new WebSocket(
-      `${proto}://${location.host}/api/deploy/console/${targetId}?svc=${encodeURIComponent(service ?? "")}`,
-    );
-    sock.onmessage = (e) => term.write(typeof e.data === "string" ? e.data : "");
-    sock.onclose = () => term.write("\r\n\x1b[90m[连接已关闭]\x1b[0m\r\n");
-    const send = (msg: unknown) => {
-      if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify(msg));
-    };
+    // Eden Treaty WS：路径/params/query 类型安全（协议 ws/wss 由 treaty 自动推导）
+    const sock = api.console({ id: targetId }).subscribe({ query: { svc: service || undefined } });
+    sock.on("message", ({ data }) => term.write(typeof data === "string" ? data : ""));
+    sock.on("close", () => term.write("\r\n\x1b[90m[连接已关闭]\x1b[0m\r\n"));
+    const send = (msg: { type: string } & Record<string, unknown>) => sock.send(msg);
     term.onData((d) => send({ type: "input", data: d }));
-    sock.onopen = () => send({ type: "resize", cols: term.cols, rows: term.rows });
+    sock.on("open", () => send({ type: "resize", cols: term.cols, rows: term.rows }));
 
     const ro = new ResizeObserver(() => {
       fit.fit();

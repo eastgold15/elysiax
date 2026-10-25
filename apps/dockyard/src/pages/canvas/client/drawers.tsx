@@ -12,7 +12,7 @@ import type { DbRef } from "../../deploy/deploy.socket";
 import type { DetectResult, DetectedService } from "../../deploy/deploy.socket";
 // env 文本函数从零依赖模块引（detect.ts 依赖链里的 dotenv 无法进浏览器包）
 import { serviceEnvToText, textToEnvMap } from "../../../shared/env-text";
-import { api, delJSON, getJSON, postJSON } from "./api";
+import { api, deployPaths, unwrap } from "./api";
 import { ConsoleView } from "./console";
 import { emitRefresh, useUi } from "./ui";
 
@@ -112,7 +112,7 @@ export function NewAppWizard({ nodeId }: { nodeId: number }) {
   const [loadError, setLoadError] = useState<string>();
 
   useEffect(() => {
-    getJSON<NewAppData>(api.newAppByNodeId(nodeId))
+    unwrap(api["new-app"]({ nodeId }).get())
       .then((d) => {
         if (d.mode === "local") setStep2(d);
         else setData(d);
@@ -141,13 +141,13 @@ function NewAppStep1({ nodeId, repos, initialError, prefillRepo, onDetected }: {
     setBusy(true);
     setError(undefined);
     try {
-      const d = await postJSON<DetectStepData>(api.detect(), {
+      const d = await unwrap(api.detect.post({
         nodeId,
         name: String(fd.get("name") ?? ""),
         repoUrl: String(fd.get("repoUrl") ?? ""),
         branch: String(fd.get("branch") ?? "main") || "main",
         remoteDir: String(fd.get("remoteDir") ?? ""),
-      });
+      }));
       onDetected(d);
     } catch (err) {
       setError(`识别失败：${(err as Error).message}`);
@@ -233,7 +233,7 @@ function AppDetectStep({ data, onBack }: { data: DetectStepData; onBack?: () => 
     setBusy(true);
     setError(undefined);
     try {
-      const { targetId } = await postJSON<{ targetId: number }>(api.targetsApp(), {
+      const { targetId } = await unwrap(api.targets.app.post({
         nodeId: carry.nodeId,
         name: carry.name,
         repoUrl: carry.repoUrl || undefined,
@@ -252,7 +252,7 @@ function AppDetectStep({ data, onBack }: { data: DetectStepData; onBack?: () => 
         })),
         depIds,
         reuse: [...reuse],
-      });
+      }));
       emitRefresh();
       ui.open({ kind: "log", targetId });
     } catch (err) {
@@ -445,7 +445,7 @@ export function NewDbModal({ nodeId }: { nodeId: number }) {
 
   useEffect(() => {
     setInstanceId("");
-    getJSON<{ instances: DeployTarget[] }>(`${api.instances()}?nodeId=${nodeId}&dbType=${dbType}`)
+    unwrap(api.instances.get({ query: { nodeId, dbType } }))
       .then((d) => setInstances(d.instances))
       .catch(() => setInstances([]));
   }, [nodeId, dbType]);
@@ -456,13 +456,13 @@ export function NewDbModal({ nodeId }: { nodeId: number }) {
     setBusy(true);
     setError(undefined);
     try {
-      await postJSON(api.targetsDb(), {
+      await unwrap(api.targets.db.post({
         nodeId,
         name: String(fd.get("name") ?? ""),
         dbType,
         instanceId: instanceId || undefined,
         remoteDir: String(fd.get("remoteDir") ?? "") || undefined,
-      });
+      }));
       emitRefresh();
       ui.close();
     } catch (err) {
@@ -531,14 +531,14 @@ export function DomainsModal({ targetId }: { targetId: number }) {
   const [error, setError] = useState<string>();
 
   const load = useCallback(() => {
-    getJSON<DomainsData>(api.targetsByIdDomains(targetId)).then(setData).catch((e) => setError((e as Error).message));
+    unwrap(api.targets({ id: targetId }).domains.get()).then(setData).catch((e) => setError((e as Error).message));
   }, [targetId]);
   useEffect(load, [load]);
 
   const remove = async (d: Domain) => {
     if (!confirm(`解绑 ${d.hostname}？`)) return;
     try {
-      await delJSON(api.domainsById(d.id));
+      await unwrap(api.domains({ id: d.id }).delete());
       emitRefresh();
       load();
     } catch (e) {
@@ -551,10 +551,10 @@ export function DomainsModal({ targetId }: { targetId: number }) {
     const fd = new FormData(e.currentTarget);
     setError(undefined);
     try {
-      await postJSON(api.targetsByIdDomains(targetId), {
+      await unwrap(api.targets({ id: targetId }).domains.post({
         hostname: String(fd.get("hostname") ?? ""),
         targetPort: Number(fd.get("targetPort")),
-      });
+      }));
       e.currentTarget.reset();
       emitRefresh();
       load();
@@ -610,7 +610,7 @@ export function EnvDrawer({ targetId }: { targetId: number }) {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    getJSON<EnvData>(api.targetsByIdEnv(targetId)).then((d) => {
+    unwrap(api.targets({ id: targetId }).env.get()).then((d) => {
       setData(d);
       setEnvText(d.envText);
       setDepIds(d.selectedDeps);
@@ -622,7 +622,7 @@ export function EnvDrawer({ targetId }: { targetId: number }) {
     setBusy(true);
     setError(undefined);
     try {
-      await postJSON(api.targetsByIdEnv(targetId), { envText, depIds });
+      await unwrap(api.targets({ id: targetId }).env.post({ envText, depIds }));
       emitRefresh();
       ui.close();
     } catch (err) {
@@ -663,7 +663,8 @@ export function EnvDrawer({ targetId }: { targetId: number }) {
 
 // ── 部署日志（1s 轮询直到终态）──
 
-interface LogData { target: DeployTarget; dep: Deployment | null }
+// 与服务端返回对齐：dep 缺部署记录时是 undefined（Eden 推断的真实形状）
+interface LogData { target: DeployTarget; dep?: Deployment | null }
 
 export function DeployLogModal({ targetId, dep }: { targetId: number; dep?: number }) {
   const ui = useUi();
@@ -674,7 +675,7 @@ export function DeployLogModal({ targetId, dep }: { targetId: number; dep?: numb
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | undefined;
     activeRef.current = true;
-    getJSON<LogData>(`${api.targetsByIdLog(targetId)}${dep ? `?dep=${dep}` : ""}`)
+    unwrap(api.targets({ id: targetId }).log.get({ query: { dep } }))
       .then((d) => {
         setData(d);
         setLogText(d.dep?.logText ?? "尚未部署");
@@ -682,11 +683,12 @@ export function DeployLogModal({ targetId, dep }: { targetId: number; dep?: numb
         if (active) {
           timer = setInterval(async () => {
             try {
-              const res = await fetch(`${api.targetsByIdLogBody(targetId)}${dep ? `?dep=${dep}` : ""}`);
+              // 日志体是裸文本流（非 JSON），走原生 fetch + 路径助手
+              const res = await fetch(`${deployPaths.targetsByIdLogBody(targetId)}${dep ? `?dep=${dep}` : ""}`);
               const text = await res.text();
               setLogText(text || "尚未部署");
               // 终态停轮询：再拉一次头信息确认
-              const head = await getJSON<LogData>(`${api.targetsByIdLog(targetId)}${dep ? `?dep=${dep}` : ""}`);
+              const head = await unwrap(api.targets({ id: targetId }).log.get({ query: { dep } }));
               if (head.dep && (head.dep.status === "success" || head.dep.status === "failed")) {
                 setData(head);
                 if (timer) clearInterval(timer);
@@ -734,7 +736,7 @@ interface ServiceDrawerData {
   selectedDeps?: number[];
   domains?: Domain[];
   resources?: { cpuCores?: number; memoryMb?: number };
-  backups?: { file: string; size: number; at: string }[];
+  backups?: { file: string; size: number; at: string | Date }[];
   metrics?: Metrics | null;
 }
 
@@ -756,7 +758,7 @@ const MetricsPanel = ({ targetId, svc }: { targetId: number; svc?: string }) => 
     let stop = false;
     const tick = async () => {
       try {
-        const m = await getJSON<Metrics | null>(`${api.targetsByIdServiceMetrics(targetId)}${svc ? `?svc=${encodeURIComponent(svc)}` : ""}`);
+        const m = await unwrap(api.targets({ id: targetId }).service.metrics.get({ query: { svc } }));
         if (!stop) setStats(m);
       } catch {
         if (!stop) setStats(null);
@@ -801,7 +803,7 @@ const ServiceLogs = ({ targetId, svc }: { targetId: number; svc?: string }) => {
     let stop = false;
     const tick = async () => {
       try {
-        const res = await fetch(`${api.targetsByIdServiceLogs(targetId)}${svc ? `?svc=${encodeURIComponent(svc)}` : ""}`);
+        const res = await fetch(`${deployPaths.targetsByIdServiceLogs(targetId)}${svc ? `?svc=${encodeURIComponent(svc)}` : ""}`);
         if (!stop) setText(await res.text());
       } catch { /* 下轮再说 */ }
     };
@@ -832,9 +834,7 @@ export function ServiceDrawer({ targetId, svc, initialTab }: { targetId: number;
 
   const load = useCallback(async () => {
     try {
-      const d = await getJSON<ServiceDrawerData>(
-        `${api.targetsByIdService(targetId)}?tab=${tab}${svc ? `&svc=${encodeURIComponent(svc)}` : ""}`,
-      );
+      const d = await unwrap(api.targets({ id: targetId }).service.get({ query: { tab, svc } }));
       setData(d);
     } catch (e) {
       setError((e as Error).message);
@@ -930,7 +930,7 @@ function DeploymentsTab({ data, svc, mutate }: { data: ServiceDrawerData; svc?: 
         <button
           className="rounded bg-brass-500 px-3 py-1.5 text-xs font-semibold text-harbor-950 hover:bg-brass-600"
           onClick={async () => {
-            await postJSON(api.targetsByIdDeploy(t.id));
+            await unwrap(api.targets({ id: t.id }).deploy.post());
             ui.open({ kind: "log", targetId: t.id });
           }}
         >
@@ -938,7 +938,7 @@ function DeploymentsTab({ data, svc, mutate }: { data: ServiceDrawerData; svc?: 
         </button>
         <button
           className="rounded border border-harbor-700 px-3 py-1.5 text-xs text-neutral-300 hover:bg-harbor-800"
-          onClick={() => void mutate(() => postJSON(api.targetsByIdServiceRestart(t.id), { svc }), { reload: false })}
+          onClick={() => void mutate(() => unwrap(api.targets({ id: t.id }).service.restart.post({ svc })), { reload: false })}
         >
           重启{svc ? "服务" : "容器"}
         </button>
@@ -973,7 +973,7 @@ function ServiceEnvTab({ data, svc, mutate }: { data: ServiceDrawerData; svc: st
       className="flex flex-col gap-3"
       onSubmit={(e) => {
         e.preventDefault();
-        void mutate(() => postJSON(api.targetsByIdServiceEnv(t.id), { svc, envText, depIds }), { refreshBoard: true, reload: false });
+        void mutate(() => unwrap(api.targets({ id: t.id }).service.env.post({ svc, envText, depIds })), { refreshBoard: true, reload: false });
       }}
     >
       <p className="text-xs text-neutral-500">
@@ -1026,11 +1026,11 @@ function HardwareTab({ data, svc, mutate }: { data: ServiceDrawerData; svc: stri
           e.preventDefault();
           const fd = new FormData(e.currentTarget);
           void mutate(
-            () => postJSON(api.targetsByIdServiceResources(t.id), {
+            () => unwrap(api.targets({ id: t.id }).service.resources.post({
               svc,
               cpuCores: numOrUndef(String(fd.get("cpuCores") ?? "")),
               memoryMb: numOrUndef(String(fd.get("memoryMb") ?? "")),
-            }),
+            })),
             { reload: false },
           );
         }}
@@ -1067,12 +1067,12 @@ function SourceTab({ data, svc, mutate }: { data: ServiceDrawerData; svc?: strin
               e.preventDefault();
               const fd = new FormData(e.currentTarget);
               void mutate(
-                () => postJSON(api.targetsByIdSource(t.id), {
+                () => unwrap(api.targets({ id: t.id }).source.post({
                   repoUrl: String(fd.get("repoUrl") ?? "") || undefined,
                   branch: String(fd.get("branch") ?? "") || undefined,
                   composePath: String(fd.get("composePath") ?? "") || undefined,
                   remoteDir: String(fd.get("remoteDir") ?? "") || undefined,
-                }),
+                })),
                 { reload: false },
               );
             }}
@@ -1125,7 +1125,7 @@ function NetworkTab({ data, svc, mutate }: { data: ServiceDrawerData; svc?: stri
               onClick={() => {
                 if (!confirm(`解绑 ${d.hostname}？`)) return;
                 void mutate(
-                  () => delJSON(`${api.targetsByIdServiceDomainsByDomainId(t.id, d.id)}${svc ? `?svc=${encodeURIComponent(svc)}` : ""}`),
+                  () => unwrap(api.targets({ id: t.id }).service.domains({ domainId: d.id }).delete({ query: { svc } })),
                   { refreshBoard: true },
                 );
               }}
@@ -1140,11 +1140,11 @@ function NetworkTab({ data, svc, mutate }: { data: ServiceDrawerData; svc?: stri
             e.preventDefault();
             const fd = new FormData(e.currentTarget);
             void mutate(
-              () => postJSON(api.targetsByIdServiceDomains(t.id), {
+              () => unwrap(api.targets({ id: t.id }).service.domains.post({
                 svc,
                 hostname: String(fd.get("hostname") ?? ""),
                 targetPort: Number(fd.get("targetPort")),
-              }),
+              })),
               { refreshBoard: true },
             );
             e.currentTarget.reset();
@@ -1172,7 +1172,7 @@ function BackupsTab({ data, mutate }: { data: ServiceDrawerData; mutate: Mutate 
       <div>
         <button
           className="rounded bg-brass-500 px-3 py-1.5 text-xs font-semibold text-harbor-950 hover:bg-brass-600"
-          onClick={() => void mutate(() => postJSON(api.targetsByIdBackup(t.id)))}
+          onClick={() => void mutate(() => unwrap(api.targets({ id: t.id }).backup.post()))}
         >
           立即备份
         </button>
@@ -1184,7 +1184,7 @@ function BackupsTab({ data, mutate }: { data: ServiceDrawerData; mutate: Mutate 
             <span className="mono text-neutral-300">{b.file}</span>
             <span className="text-neutral-600">{fmtBytes(b.size)}</span>
             <span className="text-neutral-500">{fmtAgo(b.at)}</span>
-            <a className="ml-auto text-tide-400 hover:text-tide-300" href={api.backupsByIdByFile(t.id, b.file)} download={b.file}>
+            <a className="ml-auto text-tide-400 hover:text-tide-300" href={deployPaths.backupsByIdByFile(t.id, b.file)} download={b.file}>
               下载
             </a>
           </div>

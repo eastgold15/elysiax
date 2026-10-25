@@ -15,6 +15,7 @@ export { ServiceError, errorBanner } from "./errors";
 export { codegen, defineModule, provide, lazy, extractRoutes } from "./codegen";
 export type { DiEntry, DiEntryInput, LazyRef, ModuleDi, ModuleDiInput, ProvideOptions } from "./codegen";
 export { createTestContainer } from "./testing";
+export type { Substitute } from "./testing";
 export { defineRealtime } from "./realtime";
 export type { RealtimeOptions } from "./realtime";
 export { start } from "./start";

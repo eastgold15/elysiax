@@ -86,8 +86,10 @@ export default defineRoutes()
   // 本地文件夹导入的项目直接给出识别结果（跳过仓库选择步）
   .get("/new-app/:nodeId", { params: t.Object({ nodeId: t.Number() }) }, async ({ di, params }) => {
     const ctx = ctxOf(di);
-    const node = await ctx.canvas.byId(params.nodeId);
-    const project = node ? await ctx.project.byId(node.projectId) : undefined;
+    // 世界地图：节点不再携带项目——从卡上已有 target 的归属推项目（新卡无归属则按通用 github 流程）
+    const nodeTargets = await ctx.deploy.targetsOfNode(params.nodeId);
+    const nodeProjectId = nodeTargets.find((t) => t.projectId)?.projectId;
+    const project = nodeProjectId ? await ctx.project.byId(nodeProjectId) : undefined;
     const isLocal = project?.sourceType === "local" || (!!project?.localPath && !project?.repoUrl);
     if (isLocal && project?.localPath) {
       const detect = await detectLocal({ localPath: project.localPath, rootDir: project.rootDir ?? undefined });

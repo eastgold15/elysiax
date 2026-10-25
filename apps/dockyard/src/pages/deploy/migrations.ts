@@ -52,4 +52,11 @@ export const migrations: MigrationsJournal = [
     timestamp: 12,
     sql: "ALTER TABLE `deploy_targets` ADD `upServices` text;",
   },
+  // 世界地图前置：deploy_targets 增加 projectId（项目归属从 canvas_nodes 下沉到 target），
+  // 并从旧 canvas_nodes 回填——必须先于 canvas 的 0020 重建跑（timestamp 13 < 14），回填后旧表才被 DROP。
+  {
+    name: "0013_target_project",
+    timestamp: 13,
+    sql: "ALTER TABLE `deploy_targets` ADD `projectId` integer REFERENCES projects(id);\n--> statement-breakpoint\nUPDATE `deploy_targets` SET `projectId` = (SELECT `projectId` FROM `canvas_nodes` WHERE `canvas_nodes`.`id` = `deploy_targets`.`nodeId`);",
+  },
 ];

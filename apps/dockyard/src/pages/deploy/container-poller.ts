@@ -3,7 +3,7 @@ import type { Db } from "../../shared/db";
 import { canvasNodes } from "../canvas/canvas.socket";
 import type { ServerService } from "../servers/servers.socket";
 import { deployTargets, type TargetServicesDoc } from "./schema";
-import { events, type CanvasEvent } from "./events";
+import { CANVAS_CHANNEL, events, type CanvasEvent } from "./events";
 
 const INTERVAL_MS = 10_000;
 
@@ -12,14 +12,12 @@ type SvcState = "running" | "exited" | "unknown";
 /**
  * 后台容器状态轮询：每台服务器一次 docker ls（SSH 中继），对账到 compose 服务级状态，
  * 与上轮快照 diff，只把变化推上事件总线（SSE 下游）。SSH 频率与前端用户数无关；
- * 无任何 SSE 订阅者的 project 直接跳过，不建连接。
+ * 画布 SSE 是全局频道（世界地图）——无任何订阅者时整轮跳过，不建连接。
  * DI 装配（deploy.di.ts provide），index.ts 从根容器取出后 start()。
  */
 export class ContainerPoller {
   /** key = `${targetId}:${service}`；not-found 也记 unknown，容器消失时能推出变化 */
   private readonly snapshot = new Map<string, SvcState>();
-  /** targetId → projectId（每轮重建，本地 sqlite 查询成本可忽略） */
-  private readonly targetProject = new Map<number, number>();
   private timer?: ReturnType<typeof setInterval>;
 
   constructor(
@@ -27,14 +25,12 @@ export class ContainerPoller {
     private readonly db: Db,
   ) {}
 
-  /** SSE 端点订阅时的首帧：把该 project 已知的容器状态重发一遍 */
-  containerStatesOf(projectId: number): CanvasEvent[] {
+  /** SSE 端点订阅时的首帧：把已知的容器状态全量重发一遍（世界地图无项目过滤） */
+  statesAll(): CanvasEvent[] {
     const out: CanvasEvent[] = [];
     for (const [key, state] of this.snapshot) {
       const sep = key.indexOf(":");
-      const targetId = Number(key.slice(0, sep));
-      if (this.targetProject.get(targetId) !== projectId) continue;
-      out.push({ type: "state", targetId, service: key.slice(sep + 1), state });
+      out.push({ type: "state", targetId: Number(key.slice(0, sep)), service: key.slice(sep + 1), state });
     }
     return out;
   }
@@ -50,15 +46,11 @@ export class ContainerPoller {
       .select({
         targetId: deployTargets.id,
         serverId: canvasNodes.serverId,
-        projectId: canvasNodes.projectId,
         servicesJson: deployTargets.servicesJson,
       })
       .from(deployTargets)
       .innerJoin(canvasNodes, eq(deployTargets.nodeId, canvasNodes.id))
       .where(eq(deployTargets.kind, "app"));
-
-    this.targetProject.clear();
-    for (const r of rows) this.targetProject.set(r.targetId, r.projectId);
 
     const byServer = new Map<number, typeof rows>();
     for (const r of rows) {
@@ -74,10 +66,12 @@ export class ContainerPoller {
       for (const s of r.servicesJson?.services ?? []) known.add(`${r.targetId}:${s.name}`);
     for (const key of this.snapshot.keys()) if (!known.has(key)) this.snapshot.delete(key);
 
+    // 全局频道无观众 → 整轮不 SSH（仍保留上面的快照清理）
+    if (!events.hasSubs(CANVAS_CHANNEL)) return;
+
     for (const [serverId, targets] of byServer) {
       const apps = targets.filter((t) => t.servicesJson?.services?.length);
       if (!apps.length) continue;
-      if (!apps.some((t) => events.hasSubs(`project:${t.projectId}`))) continue; // 无观众不 SSH
       let containers: { Labels?: Record<string, string>; State?: string }[];
       try {
         const docker = await this.serverService.docker(serverId);
@@ -97,7 +91,7 @@ export class ContainerPoller {
           const key = `${t.targetId}:${s.name}`;
           if (this.snapshot.get(key) === state) continue;
           this.snapshot.set(key, state);
-          events.publish(`project:${t.projectId}`, { type: "state", targetId: t.targetId, service: s.name, state });
+          events.publish(CANVAS_CHANNEL, { type: "state", targetId: t.targetId, service: s.name, state });
         }
       }
     }

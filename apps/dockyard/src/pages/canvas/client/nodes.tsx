@@ -7,6 +7,7 @@
 import { For, Show, type JSX } from "solid-js";
 import type { CardModel, DomainBadge, GroupModel, ServiceRow, TargetModel } from "../canvas.model";
 import { api, canvasApi, unwrap } from "./api";
+import { lens } from "./lens";
 import { useServiceState, useTargetLive } from "./live";
 import { emitRefresh, useUi } from "./ui";
 import { HandleView, Resizer, type FlowNodeBase } from "./flow/flow";
@@ -178,6 +179,8 @@ export const AppNodeView = (props: { id: string; data: { t: TargetModel }; selec
       <div class="flex items-center justify-between gap-2 px-2.5 pt-1.5">
         <span class="truncate text-xs font-medium text-neutral-100">📦 {t().name}</span>
         <div class="flex shrink-0 items-center gap-1">
+          {/* 世界视图（无透镜）下标注项目归属 */}
+          <Show when={lens() == null && t().projectName}><Badge tone="muted">{t().projectName}</Badge></Show>
           <For each={t().edges}>{(e) => <Badge tone="warn">⇠ {e.dbName}</Badge>}</For>
           <Show when={t().updateAvailable}><Badge tone="warn">有更新</Badge></Show>
           <StatusBadge targetId={t().id} />
@@ -251,7 +254,11 @@ export const DbNodeView = (props: { id: string; data: { t: TargetModel }; select
         <span class="truncate text-xs font-medium text-neutral-100">
           {t().logical ? "⛁" : "🗄"} {t().name}
         </span>
-        <StatusBadge targetId={t().id} />
+        <div class="flex shrink-0 items-center gap-1">
+          {/* 世界视图（无透镜）下标注项目归属 */}
+          <Show when={lens() == null && t().projectName}><Badge tone="muted">{t().projectName}</Badge></Show>
+          <StatusBadge targetId={t().id} />
+        </div>
       </div>
       <div class="mt-auto flex items-center gap-1 pt-1" onClick={(e) => e.stopPropagation()}>
         <button class={`${btn} bg-harbor-800 text-neutral-300 hover:bg-harbor-700`}

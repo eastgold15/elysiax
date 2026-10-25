@@ -4,7 +4,7 @@ export { deployTargets, deployments } from "./schema";
 export type { DeployTarget, Deployment, TargetService, TargetServicesDoc, DepEdge } from "./schema";
 export { DeployService } from "./deploy.service";
 export type { DbRef } from "./deploy.service";
-export { events } from "./events";
+export { events, CANVAS_CHANNEL } from "./events";
 export type { CanvasEvent } from "./events";
 export { ContainerPoller } from "./container-poller";
 export { UpdatePoller } from "./update-poller";

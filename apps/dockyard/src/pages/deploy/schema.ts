@@ -1,12 +1,15 @@
 import { sqliteTable, text, integer, unique } from "drizzle-orm/sqlite-core";
 import type { AnySQLiteColumn } from "drizzle-orm/sqlite-core";
-// 插头：外键经插座引用（di 已声明依赖 canvas）
+// 插头：外键经插座引用（di 已声明依赖 canvas/projects）
 import { canvasNodes, serviceGroups } from "../canvas/canvas.socket";
+import { projects } from "../projects/projects.socket";
 
 // ── 部署目标：一张卡片上部署的 app 或数据库 ──
 export const deployTargets = sqliteTable("deploy_targets", {
   id: integer().primaryKey({ autoIncrement: true }),
   nodeId: integer().notNull().references(() => canvasNodes.id, { onDelete: "cascade" }),
+  // 项目归属（世界地图：画布不再有项目边界，归属下沉到 target；null = 未关联）
+  projectId: integer().references(() => projects.id),
   // 所属服务分组（null = 不分组，直接挂在服务器卡上）
   groupId: integer().references((): AnySQLiteColumn => serviceGroups.id),
   kind: text({ enum: ["app", "db"] }).notNull(),

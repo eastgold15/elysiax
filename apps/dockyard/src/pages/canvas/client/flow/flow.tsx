@@ -154,6 +154,8 @@ export interface FlowViewProps<N extends FlowNodeBase> {
   minZoom?: number;
   /** 首帧数据到达时自动适配视野 */
   fitView?: boolean;
+  /** 视口背景层：渲染在 transform 层内、边与节点之下（随 pan/zoom，须自带 pointer-events-none） */
+  background?: JSX.Element;
   /** 暴露 screenToFlowPosition 给父组件（右键菜单建卡用） */
   ref?(api: { screenToFlowPosition(p: { x: number; y: number }): { x: number; y: number } }): void;
 }
@@ -453,6 +455,7 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
             "transform-origin": "0 0",
           }}
         >
+          {props.background}
           <svg class="absolute overflow-visible" style={{ width: "1px", height: "1px" }}>
             <defs>
               <For each={arrowColors()}>

@@ -1,9 +1,10 @@
 /**
  * 画布视图模型：controller 的 canvasData 组装（跨 deploy/edge/server 上下文）。
  * 只含结构 + 布局——实时状态（部署 status / 容器 state / running）不走这里，
- * 由 SSE /ui/:projectId/events 推送（岛端 LiveState 消费）。
- * 单独成文件是因为消费方有两端——服务端 shell（canvas.ui.tsx）与 React 岛（island/），
- * 岛通过 /api/canvas/ui/:id/board 拿到同构 JSON。
+ * 由全局 SSE /events 推送（client LiveState 消费）。
+ * 世界地图：服务器卡全局唯一，卡上的 target 各自携带项目归属（projectId/projectName）。
+ * 单独成文件是因为消费方有两端——服务端壳与 client（Solid），
+ * client 通过 /api/canvas/board 拿到同构 JSON。
  */
 export interface DomainBadge {
   hostname: string;
@@ -34,6 +35,8 @@ export interface TargetModel {
   id: number;
   kind: "app" | "db";
   name: string;
+  projectId: number;   // 项目归属（deploy_targets.projectId；0 = 未关联）
+  projectName: string; // 关联 projects 表的名字（未关联为空串）
   logical: boolean;
   url?: string; // 逻辑库连接串（复制按钮）
   domains: DomainBadge[]; // 无 serviceName 归属的域名（有归属的下沉到 services 行）
@@ -57,6 +60,7 @@ export interface CardModel {
   server: {
     id: number; name: string; user: string; host: string; port: number;
     dockerStatus: "unknown" | "ok" | "missing"; dockerVersion: string | null;
+    local: boolean; // 本机服务器（host ∈ {127.0.0.1, localhost, ::1} 派生，不落库）
   };
   targets: TargetModel[];
   groups: GroupModel[]; // 服务器卡内的服务分组容器

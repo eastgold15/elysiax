@@ -4,16 +4,17 @@ import type { CanvasRepository } from "./canvas.repository";
 export class CanvasService {
   constructor(private readonly repo: CanvasRepository) {}
 
-  nodesOf(projectId: number) {
-    return this.repo.nodesOf(projectId);
+  nodesAll() {
+    return this.repo.nodesAll();
   }
 
   byId(id: number) {
     return this.repo.byId(id);
   }
 
-  addNode(projectId: number, serverId: number, x = 40, y = 40) {
-    return this.repo.add(projectId, serverId, x, y);
+  /** 幂等：同 serverId 已上画则返回已有卡，不新建 */
+  addNode(serverId: number, x = 40, y = 40) {
+    return this.repo.add(serverId, x, y);
   }
 
   moveNode(id: number, patch: { x?: number; y?: number; w?: number; h?: number }) {

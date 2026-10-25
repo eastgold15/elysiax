@@ -1,6 +1,6 @@
 import { status, t } from "elysia";
 import { defineRoutes } from "../../../.elysiax";
-import { events, type ContainerPoller, type DeployService, type DeployTarget } from "../deploy/deploy.socket";
+import { CANVAS_CHANNEL, events, type DeployService, type DeployTarget } from "../deploy/deploy.socket";
 import type { ProjectService } from "../projects/projects.socket";
 import type { ServerService } from "../servers/servers.socket";
 import type { EdgeService } from "../edge/edge.socket";
@@ -15,11 +15,20 @@ interface Ctx {
   edge: EdgeService;
 }
 
+/** 本机服务器判定（local 徽章）：回环地址派生，不落库 */
+const isLocalHost = (host: string) => host === "127.0.0.1" || host === "localhost" || host === "::1";
+
 /** 跨上下文组合：canvas 只存节点，服务器/部署信息在此拼装；
- *  部署侧的视图整形（连接串解密、compose 清单、依赖边）在 DeployService */
-async function canvasData(ctx: Ctx, projectId: number) {
-  const [nodes, servers] = await Promise.all([ctx.canvas.nodesOf(projectId), ctx.server.list()]);
+ *  部署侧的视图整形（连接串解密、compose 清单、依赖边）在 DeployService。
+ *  世界地图：无项目边界，返回全部服务器卡；target 的项目归属（projectId/projectName）逐个补齐 */
+async function canvasData(ctx: Ctx) {
+  const [nodes, servers, projects] = await Promise.all([
+    ctx.canvas.nodesAll(),
+    ctx.server.list(),
+    ctx.project.list(), // 一次 list 建 Map，避免按 target 逐个查（N+1）
+  ]);
   const byId = new Map(servers.map((s) => [s.id, s]));
+  const projectNameOf = new Map(projects.map((p) => [p.id, p.name]));
   const cards: CardModel[] = [];
   const rawTargets = new Map<number, DeployTarget>(); // 依赖边派生用（edgesOfTarget 要原始行）
   for (const node of nodes) {
@@ -46,6 +55,8 @@ async function canvasData(ctx: Ctx, projectId: number) {
         id: target.id,
         kind: target.kind,
         name: target.name,
+        projectId: target.projectId ?? 0, // 0 = 未关联项目
+        projectName: (target.projectId && projectNameOf.get(target.projectId)) || "",
         logical: Boolean(target.instanceOf),
         url: ctx.deploy.logicalUrlOf(target), // 逻辑库连接串（复制按钮）
         // 归属到具体服务的域名下沉到服务行；无归属的留 target 顶部
@@ -70,7 +81,7 @@ async function canvasData(ctx: Ctx, projectId: number) {
     }));
     cards.push({
       node: { id: node.id, x: node.x, y: node.y, w: node.w, h: node.h },
-      server: { id, name, user, host, port, dockerStatus, dockerVersion },
+      server: { id, name, user, host, port, dockerStatus, dockerVersion, local: isLocalHost(host) },
       targets,
       groups,
     });
@@ -126,24 +137,20 @@ export default defineRoutes()
     projectId: (await di.get("projectService").ensureLocal(query.path)).id,
   }))
   // 画布数据：结构 + 布局（无实时；视图模型见 canvas.model.ts）。
-  // client 只在挂载和 refresh（结构变更）时拉取，不轮询
-  .get("/projects/:projectId/board", { params: t.Object({ projectId: t.Number() }) }, async ({ di, params }): Promise<BoardModel> => {
-    return canvasData(ctxOf(di), params.projectId);
+  // 世界地图：返回全部服务器卡。client 只在挂载和 refresh（结构变更）时拉取，不轮询
+  .get("/board", async ({ di }): Promise<BoardModel> => {
+    return canvasData(ctxOf(di));
   })
-  // 实时状态 SSE：部署 status/running（deploy.service 推）+ 容器 state（container-poller 推）。
-  // 首帧发该 project 的容器状态快照（订阅即齐，不等下轮 diff）
-  .get("/projects/:projectId/events", { params: t.Object({ projectId: t.Number() }) }, ({ di, params }) =>
-    events.stream(`project:${params.projectId}`, () =>
-      di.get("containerPoller").containerStatesOf(params.projectId)))
+  // 实时状态 SSE（全局频道）：部署 status/running（deploy.service 推）+ 容器 state（container-poller 推）。
+  // 首帧发容器状态全量快照（订阅即齐，不等下轮 diff）
+  .get("/events", ({ di }) =>
+    events.stream(CANVAS_CHANNEL, () => di.get("containerPoller").statesAll()))
+  // 服务器卡上画：幂等——同 serverId 已存在则返回已有卡，不新建
   .post(
-    "/projects/:projectId/nodes",
-    {
-      params: t.Object({ projectId: t.Number() }),
-      body: t.Object({ serverId: t.Number(), x: t.Number(), y: t.Number() }),
-    },
-    async ({ di, params, body, set }) => {
-      await ctxOf(di).canvas.addNode(params.projectId, body.serverId, body.x, body.y);
-      set.status = 204;
+    "/nodes",
+    { body: t.Object({ serverId: t.Number(), x: t.Number(), y: t.Number() }) },
+    async ({ di, body }) => {
+      return ctxOf(di).canvas.addNode(body.serverId, body.x, body.y);
     },
   )
   // 拖拽/resize 持久化

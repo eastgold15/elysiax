@@ -6,7 +6,7 @@ import { Readable, Writable } from "node:stream";
 import { openSftp } from "@meitaim/ssh/sftp";
 import type { AppPaths } from "../../shared/paths";
 import { decryptSecret, encryptSecret } from "../../shared/crypto";
-import { events } from "./events";
+import { CANVAS_CHANNEL, events } from "./events";
 import type { DeployTarget, Deployment, DepEdge, TargetService } from "./schema";
 import type { Project, ProjectService } from "../projects/projects.socket";
 import type { ResourceService, SharedEnv } from "../resources/resources.socket";
@@ -70,10 +70,12 @@ export class DeployService {
   ) { }
 
   /** 项目导入来源：github = 远端拉代码+服务器构建；local = 本地构建+镜像推送。
-   *  旧数据 sourceType 为 null，按 localPath/repoUrl 推断。 */
+   *  旧数据 sourceType 为 null，按 localPath/repoUrl 推断。
+   *  世界地图：归属在 target.projectId 上；未关联时按 repoUrl 反查项目兜底。 */
   private async sourceOf(target: DeployTarget): Promise<{ type: "local" | "github"; project?: Project }> {
-    const node = await this.canvas.byId(target.nodeId);
-    const project = node ? await this.project.byId(node.projectId) : undefined;
+    const project = target.projectId
+      ? await this.project.byId(target.projectId)
+      : (await this.project.list()).find((p) => p.repoUrl && p.repoUrl === target.repoUrl);
     const type: "local" | "github" =
       project?.sourceType ?? (project?.localPath && !target.repoUrl ? "local" : "github");
     return { type, project };
@@ -108,13 +110,19 @@ export class DeployService {
     domains?: { hostname: string; serviceName?: string; targetPort: number }[];
     services?: DetectedService[]; // compose 服务清单（画布小卡片；剥离秘密值后明文落库）
     upServices?: string[]; // 实际 up 的服务子集（共享资源复用过滤中间件；undefined = 全量）
+    projectId?: number; // 项目归属（缺省按 repoUrl 反查项目；都没有 → null 未关联）
   }) {
     if (input.repoUrl?.trim()) parseOwnerRepo(input.repoUrl); // 提前校验（本地导入可无仓库）
     await this.assertNameFree(input.nodeId, "app", input.name);
-    const { envText, overrideCompose, domains, dependsOn, services, upServices, ...base } = input;
+    const { envText, overrideCompose, domains, dependsOn, services, upServices, projectId, ...base } = input;
+    // 世界地图：项目归属落在 target 上——显式传入优先，否则按仓库地址反查
+    const project = projectId
+      ? await this.project.byId(projectId)
+      : (await this.project.list()).find((p) => p.repoUrl && p.repoUrl === input.repoUrl?.trim());
     const target = await this.repo.createTarget({
       kind: "app",
       ...base,
+      projectId: project?.id ?? null,
       ...(dependsOn?.length ? { dependsOn } : {}),
       ...(upServices?.length ? { upServices } : {}),
       // 只存 name/port：env 是秘密（envJson/overrideCompose 加密通道），cpu/mem 已在 override
@@ -199,11 +207,12 @@ export class DeployService {
 
   // ── 依赖与连接串引用 ──
 
-  /** 项目空间内可引用的数据库连接（app 向导/变量抽屉的选择器数据） */
+  /** 项目空间内可引用的数据库连接（app 向导/变量抽屉的选择器数据）。
+   *  世界地图：节点不再携带项目——取卡上已有 target 的项目归属；全新服务器卡无归属时返回空 */
   async dbRefsOfNode(nodeId: number): Promise<DbRef[]> {
-    const node = await this.canvas.byId(nodeId);
-    if (!node) return [];
-    const dbs = await this.repo.dbTargetsOfProject(node.projectId);
+    const projectId = (await this.repo.targetsOfNode(nodeId)).find((t) => t.projectId)?.projectId;
+    if (!projectId) return [];
+    const dbs = await this.repo.dbTargetsOfProject(projectId);
     const refs: DbRef[] = [];
     for (const db of dbs) {
       if (!db.dbType || !db.envJson) continue;
@@ -335,14 +344,14 @@ export class DeployService {
 
   /** 数据库目标（实例）：模板 compose + 凭据在创建时生成一次，enc1: 加密存 envJson。
    *  容器名/所有权标签依赖 target id，先建行再回填。 */
-  async createDbTarget(input: { nodeId: number; name: string; dbType: DbType; remoteDir: string }) {
+  async createDbTarget(input: { nodeId: number; name: string; dbType: DbType; remoteDir: string; projectId?: number }) {
     await this.assertNameFree(input.nodeId, "db", input.name);
     if (!input.remoteDir.trim()) throw new ServiceError("新建实例需要填写远端目录");
     const target = await this.repo.createTarget({ kind: "db", ...input });
-    const node = await this.canvas.byId(input.nodeId);
     const rendered = dbCompose(input.dbType, input.name, {
       targetId: target.id,
-      project: `project-${node?.projectId ?? "?"}`,
+      // compose 项目名：有归属按项目，未关联兜底 target id（保持全局唯一）
+      project: `project-${input.projectId ?? target.id}`,
     });
     const containerName = containerNameOf(target.id, input.name);
     await this.repo.updateTarget(target.id, {
@@ -370,6 +379,7 @@ export class DeployService {
       name: input.name,
       dbType: instance.dbType,
       instanceOf: instance.id,
+      projectId: instance.projectId, // 逻辑库跟随宿主实例的项目归属
       envJson: encryptSecret(JSON.stringify({ url, password })),
     });
   }
@@ -406,22 +416,19 @@ export class DeployService {
   private async pipeline(targetId: number) {
     const target = await this.repo.targetById(targetId);
     if (!target) throw new ServiceError(`部署目标不存在: ${targetId}`);
-    // 画布 SSE 频道：状态迁移实时推给订阅了该 project 的浏览器（structure 不变，不走 refresh）
-    const node = await this.canvas.byId(target.nodeId);
-    const ch = node ? `project:${node.projectId}` : null;
+    // 画布 SSE 全局频道：状态迁移实时推给订阅画布的浏览器（structure 不变，不走 refresh）
+    const ch = CANVAS_CHANNEL;
     const dep = await this.repo.createDeployment(targetId);
     const log: Log = async (line) => {
       if (line.trim()) await this.repo.appendLog(dep.id, line);
     };
     const setStatus = async (status: Deployment["status"], patch: Partial<Deployment> = {}) => {
       await this.repo.updateDeployment(dep.id, { status, ...patch });
-      if (ch) events.publish(ch, { type: "status", targetId, status });
+      events.publish(ch, { type: "status", targetId, status });
     };
 
-    if (ch) {
-      events.publish(ch, { type: "running", targetId, running: true });
-      events.publish(ch, { type: "status", targetId, status: "queued" });
-    }
+    events.publish(ch, { type: "running", targetId, running: true });
+    events.publish(ch, { type: "status", targetId, status: "queued" });
     try {
       if (target.kind === "app") await this.deployApp(target, log, setStatus);
       else if (target.instanceOf) await this.deployLogicalDb(target, log);
@@ -432,7 +439,7 @@ export class DeployService {
       await log(`❌ ${(error as Error).message}`);
       await setStatus("failed", { finishedAt: new Date() });
     } finally {
-      if (ch) events.publish(ch, { type: "running", targetId, running: false });
+      events.publish(ch, { type: "running", targetId, running: false });
     }
   }
 

@@ -1,15 +1,18 @@
 /** @jsxImportSource solid-js */
-import { createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { createStore } from "solid-js/store";
 import type { BoardModel, CardModel, TargetModel } from "../canvas.model";
 import {
   AppNodeView, DbNodeView, GroupNodeView, ServerNodeView, ServiceNodeView,
   type CanvasFlowNode,
 } from "./nodes";
-import { api, canvasApi, canvasPaths, unwrap } from "./api";
+import { api, canvasApi, unwrap } from "./api";
 import { emptyLive, LiveContext, type LiveState } from "./live";
 import { useUi } from "./ui";
 import { FlowView, type ConnectResult, type FlowEdge, type NodeViewProps } from "./flow/flow";
+
+/** 全局 SSE 端点（世界地图：无 projectId 路径段；routes.gen 由 dev server 再生成，这里用字面量） */
+const EVENTS_URL = "/api/canvas/events";
 
 const nodeViews = {
   server: ServerNodeView, app: AppNodeView, service: ServiceNodeView,
@@ -211,10 +214,13 @@ function deriveNodes(cards: CardModel[], local: Map<string, CanvasFlowNode>): Ca
 
 /** 服务级依赖边：db 卡 → 服务卡（service 有值）或 app 卡（整体依赖）。边 id 编码三者供删边解析 */
 function deriveEdges(cards: CardModel[], keepSelected: Set<string>): FlowEdge[] {
+  // 透镜过滤后 db 端可能不可见：只画两端都在当前卡集里的边
+  const visibleTargets = new Set(cards.flatMap((c) => c.targets.map((t) => t.id)));
   const edges: FlowEdge[] = [];
   for (const c of cards)
     for (const t of c.targets)
       for (const e of t.edges) {
+        if (!visibleTargets.has(e.db)) continue;
         const id = `dep-${e.db}-${t.id}-${e.service ?? "_"}`;
         edges.push({
           id,
@@ -235,7 +241,22 @@ interface Menu {
   flowX: number; flowY: number;
 }
 
-export function Board(props: { projectId: number }) {
+/**
+ * 透镜过滤（纯视图，不改服务端数据）：lens 非空时只留该项目的 target，
+ * 分组只留仍有可见 target 的（空分组一并隐藏）；服务器空卡保留。
+ */
+function applyLens(cards: CardModel[], lens: number | null): CardModel[] {
+  if (lens == null) return cards;
+  return cards.map((card) => {
+    const targets = card.targets.filter((t) => t.projectId === lens);
+    const visibleGroups = new Set(
+      targets.map((t) => t.groupId).filter((g): g is number => g != null),
+    );
+    return { ...card, targets, groups: (card.groups ?? []).filter((g) => visibleGroups.has(g.id)) };
+  });
+}
+
+export function Board(props: { lens: () => number | null }) {
   // 三源：structure（/board，refresh 驱动，存普通变量）、nodes（布局，本地权威信号）、live（SSE store）
   const ui = useUi();
   const [servers, setServers] = createSignal<BoardModel["servers"]>([]);
@@ -246,15 +267,22 @@ export function Board(props: { projectId: number }) {
   let structure: CardModel[] = [];
   let flowApi!: { screenToFlowPosition(p: { x: number; y: number }): { x: number; y: number } };
 
-  /** 结构拉取：只在挂载和 refresh 事件（结构变更）时调用，不轮询 */
+  /** 结构拉取：只在挂载和 refresh 事件（结构变更）时调用，不轮询。世界地图：全局 /board */
   const fetchBoard = async () => {
-    const board = await unwrap(canvasApi.projects({ projectId: props.projectId }).board.get()).catch(() => null);
+    const board = await unwrap(canvasApi.board.get()).catch(() => null);
     if (!board) return;
     structure = board.cards;
     setServers(board.servers);
-    setNodes((cur) => deriveNodes(board.cards, new Map(cur.map((n) => [n.id, n]))));
-    setEdges((cur) => deriveEdges(board.cards, new Set(cur.filter((e) => e.selected).map((e) => e.id))));
+    setNodes((cur) => deriveNodes(applyLens(board.cards, props.lens()), new Map(cur.map((n) => [n.id, n]))));
+    setEdges((cur) => deriveEdges(applyLens(board.cards, props.lens()), new Set(cur.filter((e) => e.selected).map((e) => e.id))));
   };
+
+  // 透镜切换是纯客户端过滤：不走网络，用已拉的 structure 重推导节点/边
+  createEffect(() => {
+    const cards = applyLens(structure, props.lens());
+    setNodes((cur) => deriveNodes(cards, new Map(cur.map((n) => [n.id, n]))));
+    setEdges((cur) => deriveEdges(cards, new Set(cur.filter((e) => e.selected).map((e) => e.id))));
+  });
 
   // 交互门闩：拖拽/连线进行中 refresh 排队，结束后补拉——用户交互期间不被自动刷新打断
   let interacting = false;
@@ -282,9 +310,9 @@ export function Board(props: { projectId: number }) {
     onCleanup(() => document.body.removeEventListener("refresh", onRefresh));
   });
 
-  // 实时：SSE——部署 status/running、容器 state，只进 live store（不进 nodes）
+  // 实时：全局 SSE——部署 status/running、容器 state，只进 live store（不进 nodes）
   onMount(() => {
-    const es = new EventSource(canvasPaths.projectsByProjectIdEvents(props.projectId));
+    const es = new EventSource(EVENTS_URL);
     es.onmessage = (e) => {
       try {
         const msg = JSON.parse(e.data) as Record<string, unknown>;
@@ -451,12 +479,36 @@ export function Board(props: { projectId: number }) {
     }
   };
 
+  // 本机/远程分区：分界线固定在 flow 坐标 x=0，本机区 x<0、远程区 x>=0。
+  // 渲染在 FlowView transform 层内（background 插槽），随 pan/zoom；超大半径覆盖任意视野。
+  const ZONE = 100000;
+  const zoneBackground = (
+    <div
+      class="pointer-events-none absolute"
+      style={{ left: `${-ZONE}px`, top: `${-ZONE}px`, width: `${ZONE * 2}px`, height: `${ZONE * 2}px` }}
+    >
+      <div class="absolute top-0 bottom-0 left-0 w-1/2 bg-tide-400/[0.04]" />
+      <div class="absolute top-0 right-0 bottom-0 w-1/2 bg-brass-500/[0.03]" />
+      {/* 分界线 x=0 */}
+      <div class="absolute top-0 bottom-0 left-1/2 w-px bg-harbor-500/50" />
+      <span
+        class="absolute text-xs font-medium tracking-widest text-tide-400/50 select-none"
+        style={{ top: `${ZONE + 16}px`, right: `calc(50% + 12px)` }}
+      >本机</span>
+      <span
+        class="absolute text-xs font-medium tracking-widest text-brass-500/50 select-none"
+        style={{ top: `${ZONE + 16}px`, left: `calc(50% + 12px)` }}
+      >远程</span>
+    </div>
+  );
+
   return (
     <LiveContext.Provider value={live}>
       <FlowView
         nodes={nodes()}
         edges={edges()}
         nodeViews={nodeViews}
+        background={zoneBackground}
         onNodeMove={onNodeMove}
         onNodeDragStart={onNodeDragStart}
         onNodeDragStop={onNodeDragStop}
@@ -517,8 +569,17 @@ export function Board(props: { projectId: number }) {
               </>
             ) : m().kind === "server" && m().nodeId != null ? (
               <>
-                <MenuItem label="部署本仓库" onClick={() => ui.open({ kind: "new-app", nodeId: m().nodeId! })} />
-                <MenuItem label="添加数据库" onClick={() => ui.open({ kind: "new-db", nodeId: m().nodeId! })} />
+                {/* 建内容（部署目标）需要项目归属：世界视图（无透镜）下禁用 */}
+                <MenuItem
+                  label="部署本仓库"
+                  disabled={props.lens() == null}
+                  onClick={() => ui.open({ kind: "new-app", nodeId: m().nodeId! })}
+                />
+                <MenuItem
+                  label="添加数据库"
+                  disabled={props.lens() == null}
+                  onClick={() => ui.open({ kind: "new-db", nodeId: m().nodeId! })}
+                />
                 <MenuItem
                   label="新建分组"
                   onClick={async () => {
@@ -544,7 +605,8 @@ export function Board(props: { projectId: number }) {
                   <MenuItem
                     label={`＋ ${s.name}`}
                     onClick={async () => {
-                      await unwrap(canvasApi.projects({ projectId: props.projectId }).nodes.post({ serverId: s.id, x: m().flowX, y: m().flowY }));
+                      // 世界地图：建卡无 projectId（服务端幂等——同服务器已上画则返回已有卡）
+                      await unwrap(canvasApi.nodes.post({ serverId: s.id, x: m().flowX, y: m().flowY }));
                       await refetch();
                     }}
                   />
@@ -558,10 +620,16 @@ export function Board(props: { projectId: number }) {
   );
 }
 
-function MenuItem(props: { label: string; danger?: boolean; onClick: () => void }) {
+function MenuItem(props: { label: string; danger?: boolean; disabled?: boolean; onClick: () => void }) {
   return (
     <button
-      class={`block w-full px-3 py-1.5 text-left text-sm hover:bg-harbor-800 ${props.danger ? "text-signal-500" : "text-neutral-200"}`}
+      class={`block w-full px-3 py-1.5 text-left text-sm ${
+        props.disabled
+          ? "cursor-not-allowed text-neutral-600"
+          : `hover:bg-harbor-800 ${props.danger ? "text-signal-500" : "text-neutral-200"}`
+      }`}
+      disabled={props.disabled}
+      title={props.disabled ? "先在右上角选择一个项目" : undefined}
       onClick={props.onClick}
     >
       {props.label}

@@ -1,13 +1,11 @@
 import { sqliteTable, text, integer, unique } from "drizzle-orm/sqlite-core";
-// 插头：外键经插座引用（di 已声明依赖 servers/projects）
+// 插头：外键经插座引用（di 已声明依赖 servers）
 import { servers } from "../servers/servers.socket";
-import { projects } from "../projects/projects.socket";
 
-// ── 画布节点：项目画布上的一张服务器卡片 ──
+// ── 画布节点：世界地图上的一张服务器卡片（物理服务器全局唯一，不再以项目为边界）──
 export const canvasNodes = sqliteTable("canvas_nodes", {
   id: integer().primaryKey({ autoIncrement: true }),
-  projectId: integer().notNull().references(() => projects.id, { onDelete: "cascade" }),
-  serverId: integer().notNull().references(() => servers.id, { onDelete: "cascade" }),
+  serverId: integer().notNull().unique().references(() => servers.id, { onDelete: "cascade" }),
   x: integer().notNull().default(40),
   y: integer().notNull().default(40),
   w: integer().notNull().default(320),

@@ -5,16 +5,24 @@ import { canvasNodes, serviceGroups, type CanvasNode, type ServiceGroup } from "
 export class CanvasRepository {
   constructor(private readonly db: Db) {}
 
-  nodesOf(projectId: number): Promise<CanvasNode[]> {
-    return this.db.select().from(canvasNodes).where(eq(canvasNodes.projectId, projectId));
+  /** 世界地图：全部服务器卡（无项目边界） */
+  nodesAll(): Promise<CanvasNode[]> {
+    return this.db.select().from(canvasNodes);
   }
 
   byId(id: number): Promise<CanvasNode | undefined> {
     return this.db.select().from(canvasNodes).where(eq(canvasNodes.id, id)).limit(1).then((r) => r[0]);
   }
 
-  async add(projectId: number, serverId: number, x: number, y: number): Promise<CanvasNode> {
-    const [row] = await this.db.insert(canvasNodes).values({ projectId, serverId, x, y }).returning();
+  byServerId(serverId: number): Promise<CanvasNode | undefined> {
+    return this.db.select().from(canvasNodes).where(eq(canvasNodes.serverId, serverId)).limit(1).then((r) => r[0]);
+  }
+
+  /** 幂等：serverId 全局唯一，已存在则返回已有行（忽略新坐标） */
+  async add(serverId: number, x: number, y: number): Promise<CanvasNode> {
+    const existing = await this.byServerId(serverId);
+    if (existing) return existing;
+    const [row] = await this.db.insert(canvasNodes).values({ serverId, x, y }).returning();
     return row!;
   }
 

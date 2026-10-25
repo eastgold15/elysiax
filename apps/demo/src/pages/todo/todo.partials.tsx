@@ -64,3 +64,7 @@ export const TodoList: Component<{ todos: Todo[] }> = ({ todos }) => (
     </form>
   </div>
 );
+
+// 片段子路由（codegen 约定：partials 必须 default export defineRoutes；本模块写操作集中在 todo.actions，此处暂无 GET 片段）
+import { defineRoutes } from "../../../.elysiax";
+export default defineRoutes();

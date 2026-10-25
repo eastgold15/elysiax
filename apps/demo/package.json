@@ -19,11 +19,15 @@
     "@workspace/htmx": "workspace:*",
     "bun-plugin-tailwind": "^0.1.2",
     "elysia": "catalog:",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
     "tailwindcss": "^4.1.11",
     "webview-bun": "^2.4.0"
   },
   "devDependencies": {
+    "@elysiax/cli": "workspace:*",
     "@types/bun": "latest",
-    "@elysiax/cli": "workspace:*"
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0"
   }
 }

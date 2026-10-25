@@ -1,7 +1,7 @@
 import { ServiceError } from "@elysiax/core";
 import type { Lazy } from "@inferdi/inferdi";
 import type { UserRepository } from "./user.repository";
-import type { OrderService } from "../order/order.service";
+import type { OrderService } from "../order/order.socket";
 import type { CreateUserInput } from "./user.model";
 
 export class UserService {

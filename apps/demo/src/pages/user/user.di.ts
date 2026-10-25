@@ -1,5 +1,5 @@
 import { defineModule, lazy, provide } from "@elysiax/core";
-import { OrderService } from "../order/order.service";
+import { OrderService } from "../order/order.socket";
 import { UserRepository } from "./user.repository";
 import { UserService } from "./user.service";
 

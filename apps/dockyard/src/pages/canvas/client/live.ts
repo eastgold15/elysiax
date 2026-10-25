@@ -12,9 +12,15 @@ export type DeployStatus = "queued" | "building" | "transferring" | "deploying" 
 export interface LiveState {
   targets: Record<number, { status: DeployStatus | null; running: boolean }>;
   services: Record<string, ServiceState>; // key = `${targetId}:${svcName}`
+  // 部署日志增量聚合（SSE log 事件）：按 target 归并当前 run 的行，日志抽屉直接渲染。
+  // runId 切换即重置；上限 5000 行防长构建撑爆内存（完整日志永远在服务端 chunks 里）。
+  logs: Record<number, { runId: number; lines: string[] }>;
 }
 
-export const emptyLive: LiveState = { targets: {}, services: {} };
+export const emptyLive: LiveState = { targets: {}, services: {}, logs: {} };
+
+/** live.logs 单 target 行数上限（超出丢弃最旧行） */
+export const LOG_TAIL_LIMIT = 5000;
 
 /** 值约定：provider 传 Solid store 代理（属性读取即订阅） */
 export const LiveContext = createContext<LiveState>(emptyLive);
@@ -28,6 +34,12 @@ export const useTargetLive = (targetId: number) => {
 export const useServiceState = (targetId: number, svcName: string) => {
   const ctx = useContext(LiveContext);
   return (): ServiceState => ctx.services[`${targetId}:${svcName}`] ?? "unknown";
+};
+
+/** 返回 accessor：该目标当前 run 的 SSE 日志行（无则 null——未开播或非当前 run） */
+export const useDeployLog = (targetId: number) => {
+  const ctx = useContext(LiveContext);
+  return () => ctx.logs[targetId] ?? null;
 };
 
 /** SSE 消息 → LiveState 增量（纯函数；store 侧可配 produce 用，也可整体替换） */
@@ -50,6 +62,17 @@ export function applyLiveEvent(prev: LiveState, msg: Record<string, unknown>): L
     return {
       ...prev,
       services: { ...prev.services, [`${msg.targetId}:${msg.service}`]: msg.state as ServiceState },
+    };
+  }
+  if (msg.type === "log") {
+    const targetId = msg.targetId as number;
+    const runId = msg.runId as number;
+    const incoming = (msg.lines as string[]) ?? [];
+    const cur = prev.logs[targetId];
+    const base = cur && cur.runId === runId ? cur.lines : [];
+    return {
+      ...prev,
+      logs: { ...prev.logs, [targetId]: { runId, lines: [...base, ...incoming].slice(-LOG_TAIL_LIMIT) } },
     };
   }
   return prev;

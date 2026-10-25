@@ -46,6 +46,7 @@ export interface TargetModel {
   x: number | null; y: number | null; // 卡在父容器（服务器卡/分组）内的位置（null → 岛端自动摆）
   w: number | null; h: number | null; // 手动拉伸的卡尺寸（null → 按子卡 bounds 收敛；有值作下限）
   updateAvailable: boolean;
+  artifactShipped: boolean; // 构建产物已传输到云端（跨区移动的门票；本地构建部署成功即置位）
 }
 
 /** 服务分组：服务器卡内的命名容器（Railway Service Group） */

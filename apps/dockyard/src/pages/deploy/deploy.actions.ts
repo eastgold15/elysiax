@@ -242,6 +242,38 @@ export default defineRoutes()
     void ctxOf(di).deploy.deploy(params.id); // 后台跑，状态迁移走 SSE 推到画布
     set.status = 204;
   })
+  // 区域硬隔离的显式通道：本地构建产物推到远端（不起容器），成功置 artifactShipped
+  .post("/targets/:id/ship", { params: t.Object({ id: t.Number() }) }, async ({ di, params, set }) => {
+    await ctxOf(di).deploy.shipArtifact(params.id); // 校验同步抛；构建走后台+SSE
+    set.status = 204;
+  })
+  // 卡迁移到另一台服务器：跨界（local↔remote）要 artifactShipped 门票（service 内校验）
+  .patch(
+    "/targets/:id/move",
+    { params: t.Object({ id: t.Number() }), body: t.Object({ nodeId: t.Number() }) },
+    async ({ di, params, body, set }) => {
+      await ctxOf(di).deploy.moveTargetToNode(params.id, body.nodeId);
+      set.status = 204;
+    },
+  )
+  // 部署策略三态（manual/notify/auto）：轮询器按此列决定动作
+  .post(
+    "/targets/:id/policy",
+    { params: t.Object({ id: t.Number() }), body: t.Object({ policy: t.Union([t.Literal("manual"), t.Literal("notify"), t.Literal("auto")]) }) },
+    async ({ di, params, body, set }) => {
+      await ctxOf(di).deploy.setDeployPolicy(params.id, body.policy);
+      set.status = 204;
+    },
+  )
+  // 回滚到某次成功部署：快照校验同步抛（无快照→ServiceError 映射），执行走后台+SSE
+  .post(
+    "/targets/:id/rollback",
+    { params: t.Object({ id: t.Number() }), body: t.Object({ runId: t.Number() }) },
+    async ({ di, params, body, set }) => {
+      await ctxOf(di).deploy.rollback(params.id, body.runId);
+      set.status = 204;
+    },
+  )
   .get(
     "/targets/:id/log",
     { params: t.Object({ id: t.Number() }), query: t.Object({ dep: t.Optional(t.Numeric()) }) },
@@ -261,7 +293,7 @@ export default defineRoutes()
     async ({ di, params, query }) => {
       const svc = ctxOf(di).deploy;
       const dep = query.dep ? await svc.deploymentById(query.dep) : await svc.latestDeployment(params.id);
-      return dep?.logText ?? "";
+      return dep ? await svc.logTextOf(dep.id) : "";
     },
   )
   // ── 服务抽屉（Railway Service View）数据：各 Tab 按需取数 ──

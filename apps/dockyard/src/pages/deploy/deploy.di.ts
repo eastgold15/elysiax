@@ -25,6 +25,6 @@ export default defineModule({
     ]),
     // 后台轮询器入 DI：依赖全部容器装配，index.ts 从根容器取出后 start()
     containerPoller: provide(ContainerPoller, [ServerService, "db"]),
-    updatePoller: provide(UpdatePoller, [GithubService, "db"]),
+    updatePoller: provide(UpdatePoller, [GithubService, "db", DeployService]),
   },
 });

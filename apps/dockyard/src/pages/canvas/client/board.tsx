@@ -7,7 +7,7 @@ import {
   type CanvasFlowNode,
 } from "./nodes";
 import { api, canvasApi, unwrap } from "./api";
-import { emptyLive, LiveContext, type LiveState } from "./live";
+import { emptyLive, LiveContext, LOG_TAIL_LIMIT, type LiveState } from "./live";
 import { useUi } from "./ui";
 import { FlowView, type ConnectResult, type FlowEdge, type NodeViewProps } from "@elysiax/flow";
 
@@ -260,7 +260,7 @@ export function Board(props: { lens: () => number | null }) {
   // 三源：structure（/board，refresh 驱动，存普通变量）、nodes（布局，本地权威信号）、live（SSE store）
   const ui = useUi();
   const [servers, setServers] = createSignal<BoardModel["servers"]>([]);
-  const [live, setLive] = createStore<LiveState>({ targets: {}, services: {} });
+  const [live, setLive] = createStore<LiveState>({ targets: {}, services: {}, logs: {} });
   const [nodes, setNodes] = createSignal<CanvasFlowNode[]>([]);
   const [edges, setEdges] = createSignal<FlowEdge[]>([]);
   const [menu, setMenu] = createSignal<Menu | null>(null);
@@ -324,6 +324,13 @@ export function Board(props: { lens: () => number | null }) {
             : { ...t, running: Boolean(msg.running) });
         } else if (msg.type === "state") {
           setLive("services", `${msg.targetId}:${msg.service}`, msg.state as never);
+        } else if (msg.type === "log") {
+          const id = msg.targetId as number;
+          const runId = msg.runId as number;
+          const incoming = (msg.lines as string[]) ?? [];
+          const cur = live.logs[id];
+          const base = cur && cur.runId === runId ? cur.lines : [];
+          setLive("logs", id, { runId, lines: [...base, ...incoming].slice(-LOG_TAIL_LIMIT) });
         }
       } catch { /* 忽略坏帧 */ }
     };
@@ -433,6 +440,36 @@ export function Board(props: { lens: () => number | null }) {
       // 分组命中测试：卡片中心落在哪个分组矩形内（无 → 直属服务器卡）
       const abs = absInServer(node);
       const cx = abs.x + (node.width ?? 0) / 2, cy = abs.y + (node.height ?? 0) / 2;
+
+      // 跨服务器迁移：卡片中心落在另一台服务器卡矩形内 → 走 move 通道（区域硬隔离由服务端裁决）
+      const srvHit = nodes().find((n) =>
+        n.type === "server" && n.id !== abs.serverId &&
+        cx >= n.position.x && cx <= n.position.x + (n.width ?? 0) &&
+        cy >= n.position.y && cy <= n.position.y + (n.height ?? 0));
+      if (srvHit) {
+        const t = findTarget(targetId);
+        const from = structure.find((c) => `srv-${c.node.id}` === abs.serverId);
+        const to = structure.find((c) => `srv-${c.node.id}` === srvHit.id);
+        const revert = () => void refetch(); // 本地已拖走，重拉结构恢复原位
+        const crossing = from && to && from.server.local !== to.server.local;
+        if (crossing && t) {
+          // 体验层预判（服务端仍兜底）：跨界要么 app 且产物已传输，要么拒绝
+          if (t.kind !== "app") { alert("数据库不能跨区移动——数据不随卡走，请在目标服务器新建实例。"); return revert(); }
+          if (!t.artifactShipped) { alert("构建产物尚未传输到云端——先在服务抽屉执行「传输产物」。"); return revert(); }
+          if (!confirm(`将「${t.name}」迁移到远程服务器「${to.server.name}」？（旧容器不会自动清理）`)) return revert();
+        }
+        void (async () => {
+          try {
+            await unwrap(api.targets({ id: targetId }).move.patch({ nodeId: to!.node.id }));
+          } catch (e) {
+            alert(`迁移被拒绝：${(e as Error).message}`);
+          }
+          await refetch(); // 无论成败都重拉：成功=结构变了，失败=恢复原位
+        })();
+        flushPendingRefetch();
+        return;
+      }
+
       const groups = nodes().filter((g) => g.type === "group" && g.parentId === abs.serverId);
       const hit = groups.find((g) => {
         const ga = absInServer(g);

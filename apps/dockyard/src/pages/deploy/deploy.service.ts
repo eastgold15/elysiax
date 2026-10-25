@@ -13,6 +13,7 @@ import type { ResourceService, SharedEnv } from "../resources/resources.socket";
 import type { ServerService } from "../servers/servers.socket";
 import { parseOwnerRepo, type GithubService } from "../github/github.socket";
 import type { CanvasService } from "../canvas/canvas.socket";
+import { isLocalHost } from "../canvas/canvas.socket";
 import type { DeployRepository } from "./deploy.repository";
 import type { EdgeService } from "../edge/edge.socket";
 import { envFilePaths, type DetectedService } from "./detect";
@@ -30,6 +31,9 @@ import {
 
 type Log = (line: string) => Promise<void>;
 
+/** 每个 target 保留的部署历史条数（超出由 pruneRuns 清理，chunks 级联删除） */
+const RUNS_KEEP = 20;
+
 /** 可引用的数据库连接（app 依赖选择器的一行） */
 export interface DbRef {
   id: number;
@@ -42,10 +46,10 @@ export interface DbRef {
   envKey: string; // 建议注入的变量名（DATABASE_URL / REDIS_URL）
 }
 
-/** 流式执行本地命令，输出写入部署日志 */
-async function run(cmd: string[], cwd: string, log: Log): Promise<void> {
+/** 流式执行本地命令，输出写入部署日志；env 用于注入 DOCKER_DEFAULT_PLATFORM 等覆盖 */
+async function run(cmd: string[], cwd: string, log: Log, env?: Record<string, string>): Promise<void> {
   log(`$ ${cmd.join(" ")}`);
-  const proc = Bun.spawn(cmd, { cwd, stdout: "pipe", stderr: "pipe" });
+  const proc = Bun.spawn(cmd, { cwd, stdout: "pipe", stderr: "pipe", env: env ? { ...process.env, ...env } : undefined });
   const pump = async (stream: ReadableStream<Uint8Array>) => {
     for await (const chunk of stream) await log(new TextDecoder().decode(chunk).trimEnd());
   };
@@ -54,9 +58,20 @@ async function run(cmd: string[], cwd: string, log: Log): Promise<void> {
   if (code !== 0) throw new ServiceError(`命令失败（exit ${code}）: ${cmd.join(" ")}`);
 }
 
+/** uname -m / process.arch → docker 架构名 */
+function dockerArch(raw: string): string {
+  const r = raw.trim().toLowerCase();
+  if (r === "x86_64" || r === "amd64" || r === "x64") return "amd64";
+  if (r === "aarch64" || r === "arm64") return "arm64";
+  if (r.startsWith("armv7")) return "arm/v7";
+  return r;
+}
+
 export class DeployService {
   /** 防同 target 重入 */
   private running = new Map<number, Promise<void>>();
+  /** serverId → docker 架构名（remoteArch 缓存） */
+  private readonly archCache = new Map<number, string>();
 
   constructor(
     private readonly repo: DeployRepository,
@@ -91,6 +106,11 @@ export class DeployService {
 
   latestDeployment(targetId: number) {
     return this.repo.latestDeployment(targetId);
+  }
+
+  /** 整段日志（分块拼接；兼容存量 logText 行） */
+  logTextOf(runId: number) {
+    return this.repo.logTextOf(runId);
   }
 
   /** 同卡片同类型名称唯一（db 层还有唯一索引兜底，这里给用户友好报错） */
@@ -335,6 +355,13 @@ export class DeployService {
     await this.repo.updateTarget(targetId, { overrideCompose });
   }
 
+  /** 部署策略三态：manual 不轮询 / notify 只亮徽章 / auto 检出更新即部署（轮询器读此列） */
+  async setDeployPolicy(targetId: number, deployPolicy: DeployTarget["deployPolicy"]) {
+    const target = await this.repo.targetById(targetId);
+    if (!target) throw new ServiceError("部署目标不存在");
+    await this.repo.updateTarget(targetId, { deployPolicy });
+  }
+
   /** 该节点上可托管逻辑库的实例（kind=db、同类型、非逻辑库） */
   async instancesOfNode(nodeId: number, dbType: DbType): Promise<DeployTarget[]> {
     return (await this.repo.targetsOfNode(nodeId)).filter(
@@ -402,26 +429,24 @@ export class DeployService {
     return this.running.has(targetId);
   }
 
-  /** 触发部署（幂等防重入；调用方通常不 await） */
-  deploy(targetId: number): Promise<void> {
+  /** 触发部署（幂等防重入；调用方通常不 await）。trigger 标记来源（ui/auto），进 run 血缘 */
+  deploy(targetId: number, opts?: { trigger?: Deployment["trigger"] }): Promise<void> {
     const hit = this.running.get(targetId);
     if (hit) return hit;
-    const task = this.pipeline(targetId)
+    const task = this.pipeline(targetId, opts?.trigger ?? "ui")
       .catch(() => { })
       .finally(() => this.running.delete(targetId));
     this.running.set(targetId, task);
     return task;
   }
 
-  private async pipeline(targetId: number) {
+  private async pipeline(targetId: number, trigger: Deployment["trigger"]) {
     const target = await this.repo.targetById(targetId);
     if (!target) throw new ServiceError(`部署目标不存在: ${targetId}`);
     // 画布 SSE 全局频道：状态迁移实时推给订阅画布的浏览器（structure 不变，不走 refresh）
     const ch = CANVAS_CHANNEL;
-    const dep = await this.repo.createDeployment(targetId);
-    const log: Log = async (line) => {
-      if (line.trim()) await this.repo.appendLog(dep.id, line);
-    };
+    const dep = await this.repo.createDeployment(targetId, { trigger });
+    const log = this.makeLog(dep.id, targetId);
     const setStatus = async (status: Deployment["status"], patch: Partial<Deployment> = {}) => {
       await this.repo.updateDeployment(dep.id, { status, ...patch });
       events.publish(ch, { type: "status", targetId, status });
@@ -430,17 +455,48 @@ export class DeployService {
     events.publish(ch, { type: "running", targetId, running: true });
     events.publish(ch, { type: "status", targetId, status: "queued" });
     try {
-      if (target.kind === "app") await this.deployApp(target, log, setStatus);
+      if (target.kind === "app") await this.deployApp(target, log, setStatus, dep.id);
       else if (target.instanceOf) await this.deployLogicalDb(target, log);
-      else await this.deployDb(target, log);
+      else await this.deployDb(target, log, dep.id);
       await setStatus("success", { finishedAt: new Date() });
       await log("✅ 部署完成");
+      await this.repo.pruneRuns(targetId, RUNS_KEEP);
     } catch (error) {
       await log(`❌ ${(error as Error).message}`);
       await setStatus("failed", { finishedAt: new Date() });
     } finally {
+      await log.flush(); // 终态前推空缓冲，抽屉侧才能即时收尾
       events.publish(ch, { type: "running", targetId, running: false });
     }
+  }
+
+  /**
+   * 部署日志 writer：chunk 落库 + SSE 增量推送。
+   * 落库逐行（appendLogChunk 单行 insert 足够快）；SSE 必须合并——
+   * execLongRemote 一个 256KB 轮询窗口可能含上千行，逐行 publish 会打爆频道。
+   * 窗口规则：满 50 行立即 flush，否则 100ms 后 flush；终态由 pipeline 强制 flush。
+   */
+  private makeLog(runId: number, targetId: number): Log & { flush(): Promise<void> } {
+    let buf: string[] = [];
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const flush = async () => {
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (!buf.length) return;
+      const lines = buf;
+      buf = [];
+      events.publish(CANVAS_CHANNEL, { type: "log", targetId, runId, lines });
+    };
+    const log: Log = async (line) => {
+      if (!line.trim()) return;
+      await this.repo.appendLogChunk(runId, line);
+      buf.push(line);
+      if (buf.length >= 50) await flush();
+      else timer ??= setTimeout(() => void flush(), 100);
+    };
+    return Object.assign(log, { flush });
   }
 
   /** SFTP 不做 shell 展开，`~` 是字面路径（No such file）——先解析成绝对路径 */
@@ -549,33 +605,71 @@ export class DeployService {
     target: DeployTarget,
     log: Log,
     setStatus: (s: Deployment["status"], p?: Partial<Deployment>) => Promise<unknown>,
+    runId: number,
   ) {
     const { type, project } = await this.sourceOf(target);
     if (type === "local") {
       if (!project?.localPath) throw new ServiceError("本地导入的项目缺少 localPath");
-      return this.deployAppLocalBuild(target, project, log, setStatus);
+      return this.deployAppLocalBuild(target, project, log, setStatus, runId);
     }
-    return this.deployAppRemoteBuild(target, log, setStatus);
+    return this.deployAppRemoteBuild(target, log, setStatus, runId);
   }
 
-  // ── app · 本地文件夹导入：本地构建 → docker save → 远端 load → compose up ──
-  private async deployAppLocalBuild(
+  /**
+   * 远端服务器架构（uname -m 映射 docker 名，内存缓存——硬件不会中途变）。
+   * 本地构建跨架构时用它决定 DOCKER_DEFAULT_PLATFORM。
+   */
+  private async remoteArch(serverId: number): Promise<string> {
+    const hit = this.archCache.get(serverId);
+    if (hit) return hit;
+    const r = await this.sshExec(serverId, "uname -m");
+    const arch = dockerArch(r.stdout);
+    this.archCache.set(serverId, arch);
+    return arch;
+  }
+
+  /** 本地构建的目标平台：target.buildPlatform 显式指定优先，否则远端架构与本机不同才跨架构构建 */
+  private async localBuildPlatform(target: DeployTarget, serverId: number): Promise<string | undefined> {
+    if (target.buildPlatform) return target.buildPlatform;
+    const remote = await this.remoteArch(serverId);
+    return remote === dockerArch(process.arch) ? undefined : `linux/${remote}`;
+  }
+
+  /**
+   * 本地构建 + 产物传输（deployAppLocalBuild 前半段，也是「传输产物」动作的本体）：
+   * 本地 build → docker save → dockerode 经 SSH relay load 到远端。
+   * 成功即置 artifactShipped——这是本地卡跨区移动的唯一门票（区域硬隔离的显式通道）。
+   */
+  private async shipLocalArtifact(
     target: DeployTarget,
     proj: Project,
+    serverId: number,
     log: Log,
-    setStatus: (s: Deployment["status"], p?: Partial<Deployment>) => Promise<unknown>,
-  ) {
+    setStatus?: (s: Deployment["status"], p?: Partial<Deployment>) => Promise<unknown>,
+  ): Promise<{ repoDir: string; sha: string }> {
     const repoDir = join(proj.localPath!, proj.rootDir ?? "");
-    await setStatus("building");
+    await setStatus?.("building");
     const shaProc = Bun.spawn(["git", "rev-parse", "--short=8", "HEAD"], { cwd: repoDir, stdout: "pipe", stderr: "ignore" });
     const sha = ((await new Response(shaProc.stdout).text()).trim()) || `local-${Date.now()}`;
-    await log(`本地构建 ${repoDir} @${sha} …`);
 
     const composePath = target.composePath ?? "docker-compose.yml";
     const composeBase = ["docker", "compose", "-f", composePath];
+
+    // 跨架构：远端是 arm64 而本机 amd64 时，必须经 buildx 出对应平台镜像——
+    // 经典 builder 会静默忽略 DOCKER_DEFAULT_PLATFORM，产出本机架构镜像，远端起不来还难查
+    const platform = await this.localBuildPlatform(target, serverId);
+    let env: Record<string, string> | undefined;
+    if (platform) {
+      const buildx = Bun.spawn(["docker", "buildx", "version"], { stdout: "ignore", stderr: "ignore" });
+      if ((await buildx.exited) !== 0)
+        throw new ServiceError(`远端架构需要 ${platform} 镜像，但本机没有 docker buildx——请安装 Docker Buildx 插件`);
+      await log(`跨架构构建 ${platform}（本机 ${process.arch} → 远端）…`);
+      env = { DOCKER_DEFAULT_PLATFORM: platform };
+    }
+    await log(`本地构建 ${repoDir} @${sha} …`);
     await run(
       [...composeBase, "build", ...(target.serviceName ? [target.serviceName] : [])],
-      repoDir, log,
+      repoDir, log, env,
     );
 
     // 用户决定怎么打包：镜像名从 compose 配置里读
@@ -586,8 +680,8 @@ export class DeployService {
     const images = (await new Response(imgProc.stdout).text()).trim().split("\n").filter(Boolean);
     if (images.length === 0) throw new ServiceError("compose 没有产生任何镜像");
 
-    await setStatus("transferring", { commitSha: sha });
-    const remote = await this.serverService.docker(await this.nodeServerId(target));
+    await setStatus?.("transferring", { commitSha: sha });
+    const remote = await this.serverService.docker(serverId);
     for (const image of images) {
       await log(`传输镜像 ${image} …`);
       const save = Bun.spawn(["docker", "save", image], { stdout: "pipe" });
@@ -598,9 +692,24 @@ export class DeployService {
       if ((await save.exited) !== 0) throw new ServiceError(`docker save 失败: ${image}`);
       await log(`已传输 ${image}`);
     }
+    await this.repo.updateTarget(target.id, { artifactShipped: true });
+    return { repoDir, sha };
+  }
+
+  // ── app · 本地文件夹导入：本地构建 → docker save → 远端 load → compose up ──
+  private async deployAppLocalBuild(
+    target: DeployTarget,
+    proj: Project,
+    log: Log,
+    setStatus: (s: Deployment["status"], p?: Partial<Deployment>) => Promise<unknown>,
+    runId: number,
+  ) {
+    const serverId = await this.nodeServerId(target);
+    const { repoDir, sha } = await this.shipLocalArtifact(target, proj, serverId, log, setStatus);
+    const composePath = target.composePath ?? "docker-compose.yml";
+    const composeBase = ["docker", "compose", "-f", composePath];
 
     await setStatus("deploying");
-    const serverId = await this.nodeServerId(target);
 
     // 对账用容器名：compose 项目名定死（远端 -p 一致），显式 container_name 优先
     const cfgProc = Bun.spawn([...composeBase, "config", "--format", "json"], {
@@ -609,7 +718,7 @@ export class DeployService {
     });
     const cfg = JSON.parse(await new Response(cfgProc.stdout).text()) as {
       name?: string;
-      services?: Record<string, { container_name?: string }>;
+      services?: Record<string, { container_name?: string; image?: string }>;
     };
     const project = cfg.name ?? `dockyard-${target.id}`;
     const containerNames = Object.entries(cfg.services ?? {}).map(
@@ -654,6 +763,15 @@ export class DeployService {
     }
 
     await this.repo.updateTarget(target.id, { lastKnownSha: sha, updateAvailable: false });
+
+    // 回滚原料：compose/env 快照 + 镜像打 run tag（up 已成功，此处失败只警告不翻盘）
+    await this.snapshotRun({
+      target, runId, serverId, project, log,
+      compose: composeText,
+      override: target.overrideCompose ? decryptSecret(target.overrideCompose) : "",
+      env: target.envJson ? decryptSecret(target.envJson) : "",
+      services: cfg.services,
+    });
   }
 
   /** 带断线重连的短命令：连接失效则丢弃缓存重建后重试 */
@@ -730,6 +848,7 @@ export class DeployService {
     target: DeployTarget,
     log: Log,
     setStatus: (s: Deployment["status"], p?: Partial<Deployment>) => Promise<unknown>,
+    runId: number,
   ) {
     if (!target.repoUrl) throw new ServiceError("GitHub 导入的部署目标缺少 repoUrl");
     const ownerRepo = parseOwnerRepo(target.repoUrl);
@@ -789,7 +908,7 @@ export class DeployService {
     if (cfgOut.code !== 0) throw new ServiceError(redact(`远端 compose config 失败：${cfgOut.stderr}`));
     const cfg = JSON.parse(cfgOut.stdout) as {
       name?: string;
-      services?: Record<string, { container_name?: string }>;
+      services?: Record<string, { container_name?: string; image?: string }>;
     };
     const projectName = cfg.name ?? `dockyard-${target.id}`;
     const containerNames = Object.entries(cfg.services ?? {}).map(
@@ -822,10 +941,19 @@ export class DeployService {
     }
 
     await this.repo.updateTarget(target.id, { lastKnownSha: sha, updateAvailable: false });
+
+    // 回滚原料（远端构建不产产物传输，artifactShipped 不置位——通道语义只属于本地构建路径）
+    await this.snapshotRun({
+      target, runId, serverId, project: projectName, log,
+      compose: composeText,
+      override: target.overrideCompose ? decryptSecret(target.overrideCompose) : "",
+      env: target.envJson ? decryptSecret(target.envJson) : "",
+      services: cfg.services,
+    });
   }
 
   // ── db：模板 compose + .env 推远端 → up ──
-  private async deployDb(target: DeployTarget, log: Log) {
+  private async deployDb(target: DeployTarget, log: Log, runId: number) {
     if (!target.envJson) throw new ServiceError("数据库目标缺少模板内容");
     if (!target.containerName) throw new ServiceError("数据库目标缺少容器名（旧数据？重建该目标）");
     const rendered = JSON.parse(decryptSecret(target.envJson)) as { compose: string; env: string };
@@ -842,6 +970,178 @@ export class DeployService {
     const up = await client.exec(`cd ${remoteDir} && docker compose up -d`);
     await log(up.stdout + up.stderr);
     if (up.code !== 0) throw new ServiceError(`远端 compose up 失败（exit ${up.code}）`);
+
+    // 回滚原料：模板 compose/env 快照（官方镜像不变，无需打 tag）
+    await this.snapshotRun({
+      target, runId, serverId, log,
+      compose: rendered.compose,
+      override: "",
+      env: rendered.env,
+    });
+  }
+
+  /**
+   * 部署成功收尾：compose/env/override 快照（enc1 加密落库）+ 镜像打 run tag。
+   * 这是回滚的唯一原料；此处失败只记警告，绝不让成功的部署翻盘成失败。
+   */
+  private async snapshotRun(opts: {
+    target: DeployTarget;
+    runId: number;
+    serverId: number;
+    project?: string;
+    compose: string;
+    override: string;
+    env: string;
+    services?: Record<string, { image?: string }>;
+    log: Log;
+  }) {
+    const { target, runId, serverId, log } = opts;
+    try {
+      const snapshotJson = encryptSecret(
+        JSON.stringify({ compose: opts.compose, override: opts.override, env: opts.env }),
+      );
+      // 逐服务打 tag：dockyard-<targetId>-<svc>:run-<runId>（不动用户 compose 的镜像名）
+      let imageSnapshot: Record<string, string> | undefined;
+      if (opts.services) {
+        imageSnapshot = {};
+        for (const [svc, def] of Object.entries(opts.services)) {
+          if (!def.image) continue;
+          // upServices 子集外的服务本次没起来，跳过 pin（回滚时 pin 不存在的 tag 会让 up 拉取失败）
+          if (target.upServices?.length && !target.upServices.includes(svc)) continue;
+          const tag = `dockyard-${target.id}-${svc.toLowerCase()}:run-${runId}`;
+          const r = await this.sshExec(serverId, `docker tag "${def.image}" "${tag}"`);
+          if (r.code !== 0) {
+            await log(`⚠️ 镜像快照 tag 失败（${svc}）：${r.stderr}`);
+            continue;
+          }
+          imageSnapshot[svc] = tag;
+        }
+        if (!Object.keys(imageSnapshot).length) imageSnapshot = undefined;
+      }
+      await this.repo.updateDeployment(runId, {
+        snapshotJson,
+        imageSnapshot,
+        ...(opts.project ? { project: opts.project } : {}),
+      });
+      await log("📸 已记录部署快照（可回滚）");
+    } catch (error) {
+      await log(`⚠️ 快照记录失败（不影响部署结果）：${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * 回滚到某次成功部署：校验放 await 段（快照缺失/记录错位直接抛回 actions），
+   * 之后才进 running Map（与 deploy 同锁，部署/回滚互斥）。
+   */
+  async rollback(targetId: number, runId: number): Promise<void> {
+    const target = await this.repo.targetById(targetId);
+    if (!target) throw new ServiceError(`部署目标不存在: ${targetId}`);
+    const src = await this.repo.deploymentById(runId);
+    if (!src || src.targetId !== targetId) throw new ServiceError(`部署记录不存在: ${runId}`);
+    if (src.status !== "success" || !src.snapshotJson)
+      throw new ServiceError("该记录缺少快照，无法回滚（仅本轮之后的部署会产生快照）");
+
+    const hit = this.running.get(targetId);
+    if (hit) return;
+    const task = this.rollbackPipeline(target, src)
+      .catch(() => { })
+      .finally(() => this.running.delete(targetId));
+    this.running.set(targetId, task);
+    // 不返回 task：调用方 await 到的是「校验通过、已开播」，不是整个回滚过程
+  }
+
+  private async rollbackPipeline(target: DeployTarget, src: Deployment) {
+    const targetId = target.id;
+    const ch = CANVAS_CHANNEL;
+    const dep = await this.repo.createDeployment(targetId, { trigger: "rollback", rollbackOf: src.id });
+    const log = this.makeLog(dep.id, targetId);
+    const setStatus = async (status: Deployment["status"], patch: Partial<Deployment> = {}) => {
+      await this.repo.updateDeployment(dep.id, { status, ...patch });
+      events.publish(ch, { type: "status", targetId, status });
+    };
+
+    events.publish(ch, { type: "running", targetId, running: true });
+    events.publish(ch, { type: "status", targetId, status: "queued" });
+    try {
+      await setStatus("deploying", { commitSha: src.commitSha });
+      await this.deployRollback(target, src, log);
+      await setStatus("success", { finishedAt: new Date() });
+      await log("✅ 回滚完成");
+      await this.repo.pruneRuns(targetId, RUNS_KEEP);
+    } catch (error) {
+      await log(`❌ ${(error as Error).message}`);
+      await setStatus("failed", { finishedAt: new Date() });
+    } finally {
+      await log.flush();
+      events.publish(ch, { type: "running", targetId, running: false });
+    }
+  }
+
+  // ── 回滚执行：快照文件写独立回滚目录（不污染在跑的 remoteDir，更不弄脏远端 git 检出目录），
+  //    有 imageSnapshot 时生成 pin 覆盖文件锁死旧镜像，up 时 -p 沿用当初项目名 ──
+  private async deployRollback(target: DeployTarget, src: Deployment, log: Log) {
+    const snapshot = JSON.parse(decryptSecret(src.snapshotJson!)) as {
+      compose: string;
+      override: string;
+      env: string;
+    };
+    const serverId = await this.nodeServerId(target);
+    const client = await this.serverService.ssh(serverId);
+    const rollbackDir = await this.resolveRemoteDir(client, `~/dockyard/rollback/${target.id}`);
+    await client.exec(`mkdir -p ${rollbackDir}`);
+    const sftp = await openSftp(client);
+    await sftp.write(`${rollbackDir}/docker-compose.yml`, snapshot.compose);
+    if (snapshot.env) await sftp.write(`${rollbackDir}/.env`, snapshot.env);
+    if (snapshot.override) await sftp.write(`${rollbackDir}/docker-compose.dockyard.yml`, snapshot.override);
+
+    const files = ["-f docker-compose.yml"];
+    if (snapshot.override) files.push("-f docker-compose.dockyard.yml");
+    // 镜像 pin：up 用旧 tag，不触发 build / 拉新
+    const pinned = Object.entries(src.imageSnapshot ?? {}).filter(
+      ([svc]) => !target.upServices?.length || target.upServices.includes(svc),
+    );
+    if (pinned.length) {
+      const yaml = ["services:", ...pinned.map(([svc, img]) => `  ${svc}:\n    image: ${img}`), ""].join("\n");
+      await sftp.write(`${rollbackDir}/docker-compose.rollback.yml`, yaml);
+      files.push("-f docker-compose.rollback.yml");
+    }
+    await sftp.close();
+
+    // env_file 占位（同两条部署路径：文件必须存在，值由 .env/override 注入）
+    for (const p of envFilePaths(snapshot.compose)) {
+      if (p.startsWith("..") || p.startsWith("/")) continue;
+      await client.exec(
+        `cd ${rollbackDir} && mkdir -p "$(dirname "${p}")" && [ -f "${p}" ] || printf '# dockyard 占位\\n' > "${p}"`,
+      );
+    }
+
+    // -p 与当初一致才不会起第二套容器；容器名从远端 config 推导做对账
+    const project = src.project ?? `dockyard-${target.id}`;
+    const cfgOut = await this.sshExec(serverId, `cd ${rollbackDir} && docker compose ${files.join(" ")} config --format json`);
+    if (cfgOut.code === 0) {
+      const cfg = JSON.parse(cfgOut.stdout) as {
+        services?: Record<string, { container_name?: string }>;
+      };
+      const names = Object.entries(cfg.services ?? {}).map(([svc, def]) => def.container_name ?? `${project}-${svc}-1`);
+      if (names.length) await this.preflightCheck(target, serverId, names, log);
+    }
+
+    const upArg = target.upServices?.length ? ` ${target.upServices.join(" ")}` : "";
+    await log(`回滚到 run #${src.id}（${src.commitSha ?? "无 sha"}）…`);
+    const up = await this.sshExec(
+      serverId,
+      `cd ${rollbackDir} && docker compose -p ${project} ${files.join(" ")} up -d${upArg}`,
+    );
+    await log(up.stdout + up.stderr);
+    if (up.code !== 0) throw new ServiceError(`回滚 compose up 失败（exit ${up.code}）`);
+
+    const domains = await this.edge.domainsOfTarget(target.id);
+    if (domains.length) {
+      await log("同步 edge 路由与证书 …");
+      await this.edge.syncServer(serverId, log);
+    }
+    // sha 回退到旧值：徽章与"有更新"语义跟着回滚走
+    if (src.commitSha) await this.repo.updateTarget(target.id, { lastKnownSha: src.commitSha });
   }
 
   /** target → node → serverId（deploy 位于 canvas 之上，可直接查） */
@@ -849,5 +1149,82 @@ export class DeployService {
     const node = await this.canvas.byId(target.nodeId);
     if (!node) throw new ServiceError("画布节点已删除");
     return node.serverId;
+  }
+
+  /**
+   * 「传输产物」独立动作：本地构建 + 推到远端，不起容器。
+   * 用途 = 跨区移动前的显式通道（artifactShipped 置位）。建 run 行复用日志面板看进度。
+   */
+  async shipArtifact(targetId: number): Promise<void> {
+    const target = await this.repo.targetById(targetId);
+    if (!target) throw new ServiceError(`部署目标不存在: ${targetId}`);
+    if (target.kind !== "app") throw new ServiceError("只有应用需要传输产物");
+    const { type, project } = await this.sourceOf(target);
+    if (type !== "local" || !project?.localPath)
+      throw new ServiceError("只有本地导入的应用有「传输产物」——GitHub 导入在远端直接构建");
+    if (this.running.has(targetId)) return;
+
+    const task = (async () => {
+      const ch = CANVAS_CHANNEL;
+      const dep = await this.repo.createDeployment(targetId, { trigger: "ui" });
+      const log = this.makeLog(dep.id, targetId);
+      const setStatus = async (status: Deployment["status"], patch: Partial<Deployment> = {}) => {
+        await this.repo.updateDeployment(dep.id, { status, ...patch });
+        events.publish(ch, { type: "status", targetId, status });
+      };
+      events.publish(ch, { type: "running", targetId, running: true });
+      try {
+        const serverId = await this.nodeServerId(target);
+        await this.shipLocalArtifact(target, project, serverId, log, setStatus);
+        await setStatus("success", { finishedAt: new Date() });
+        await log("✅ 产物已传输（容器未启动；可将卡移入远程区后部署）");
+      } catch (error) {
+        await log(`❌ ${(error as Error).message}`);
+        await setStatus("failed", { finishedAt: new Date() });
+      } finally {
+        await log.flush();
+        events.publish(ch, { type: "running", targetId, running: false });
+      }
+    })()
+      .catch(() => { })
+      .finally(() => this.running.delete(targetId));
+    this.running.set(targetId, task);
+  }
+
+  /**
+   * 卡迁移到另一台服务器（拖拽落位调这里）。
+   * 区域硬隔离：local↔remote 跨界，app 必须 artifactShipped（产物已到云端），db 直接拒绝（数据不随卡走）。
+   * 迁移后：groupId 清零（分组不跨服务器）；域名跟随 target → 新旧两台 edge 都对账；旧容器不自动清理（安全纪律）。
+   */
+  async moveTargetToNode(targetId: number, nodeId: number): Promise<void> {
+    const target = await this.repo.targetById(targetId);
+    if (!target) throw new ServiceError(`部署目标不存在: ${targetId}`);
+    if (target.nodeId === nodeId) return; // 原地落位，无操作
+    const node = await this.canvas.byId(nodeId);
+    if (!node) throw new ServiceError("目标画布节点不存在");
+    const oldNode = await this.canvas.byId(target.nodeId);
+    if (!oldNode) throw new ServiceError("画布节点已删除");
+    await this.assertNameFree(nodeId, target.kind, target.name);
+
+    const [oldServer, newServer] = await Promise.all([
+      this.serverService.byId(oldNode.serverId),
+      this.serverService.byId(node.serverId),
+    ]);
+    const crossing = isLocalHost(oldServer?.host ?? "") !== isLocalHost(newServer?.host ?? "");
+    if (crossing) {
+      if (target.kind !== "app")
+        throw new ServiceError("数据库不能跨区移动——数据不随卡走，请在目标服务器新建实例");
+      if (!target.artifactShipped)
+        throw new ServiceError("构建产物尚未传输到云端——先在服务抽屉执行「传输产物」");
+    }
+
+    await this.repo.updateTarget(targetId, { nodeId, groupId: null, x: null, y: null });
+    const domains = await this.edge.domainsOfTarget(targetId);
+    if (domains.length) {
+      const noop: Log = async () => {};
+      // 旧服务器撤路由、新服务器建路由，两边都对账
+      if (oldServer) await this.edge.syncServer(oldServer.id, noop);
+      if (newServer) await this.edge.syncServer(newServer.id, noop);
+    }
   }
 }

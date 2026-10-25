@@ -6,6 +6,7 @@ import type { ServerService } from "../servers/servers.socket";
 import type { EdgeService } from "../edge/edge.socket";
 import type { BoardModel, CardModel } from "./canvas.model";
 import type { CanvasService } from "./canvas.service";
+import { isLocalHost } from "./canvas.socket";
 
 interface Ctx {
   project: ProjectService;
@@ -14,9 +15,6 @@ interface Ctx {
   deploy: DeployService;
   edge: EdgeService;
 }
-
-/** 本机服务器判定（local 徽章）：回环地址派生，不落库 */
-const isLocalHost = (host: string) => host === "127.0.0.1" || host === "localhost" || host === "::1";
 
 /** 跨上下文组合：canvas 只存节点，服务器/部署信息在此拼装；
  *  部署侧的视图整形（连接串解密、compose 清单、依赖边）在 DeployService。
@@ -73,6 +71,7 @@ async function canvasData(ctx: Ctx) {
         w: target.w,
         h: target.h,
         updateAvailable: target.updateAvailable,
+        artifactShipped: target.artifactShipped,
       });
     }
     const { id, name, user, host, port, dockerStatus, dockerVersion } = server;

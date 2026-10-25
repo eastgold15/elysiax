@@ -22,6 +22,7 @@ import { serviceEnvToText, textToEnvMap } from "../../../shared/env-text";
 import { api, deployPaths, unwrap } from "./api";
 import { ConsoleView } from "./console";
 import { emitRefresh, useUi } from "./ui";
+import { useDeployLog, useTargetLive } from "./live";
 
 // ── 壳与通用件 ──
 
@@ -712,7 +713,7 @@ export function EnvDrawer(props: { targetId: number }) {
   );
 }
 
-// ── 部署日志（1s 轮询直到终态）──
+// ── 部署日志（HTTP 回填 + SSE 增量，终态最后一次 HTTP 对齐防丢行）──
 
 // 与服务端返回对齐：dep 缺部署记录时是 undefined（Eden 推断的真实形状）
 interface LogData { target: DeployTarget; dep?: Deployment | null }
@@ -720,39 +721,54 @@ interface LogData { target: DeployTarget; dep?: Deployment | null }
 export function DeployLogModal(props: { targetId: number; dep?: number }) {
   const ui = useUi();
   const [data, setData] = createSignal<LogData | null>(null);
-  const [logText, setLogText] = createSignal("尚未部署");
+  const [backfill, setBackfill] = createSignal("尚未部署");
+  /** 终态对齐后的权威全文（SSE 增量可能因重连/行数上限丢行，终态以 HTTP 为准） */
+  const [finalText, setFinalText] = createSignal<string | null>(null);
+  const live = useTargetLive(props.targetId);
+  const liveLog = useDeployLog(props.targetId);
 
-  onMount(() => {
-    let timer: ReturnType<typeof setInterval> | undefined;
-    unwrap(api.targets({ id: props.targetId }).log.get({ query: { dep: props.dep } }))
-      .then((d) => {
-        setData(d);
-        setLogText(d.dep?.logText ?? "尚未部署");
-        const active = !d.dep || (d.dep.status !== "success" && d.dep.status !== "failed");
-        if (active) {
-          timer = setInterval(async () => {
-            try {
-              // 日志体是裸文本流（非 JSON），走原生 fetch + 路径助手
-              const res = await fetch(`${deployPaths.targetsByIdLogBody(props.targetId)}${props.dep ? `?dep=${props.dep}` : ""}`);
-              const text = await res.text();
-              setLogText(text || "尚未部署");
-              // 终态停轮询：再拉一次头信息确认
-              const head = await unwrap(api.targets({ id: props.targetId }).log.get({ query: { dep: props.dep } }));
-              if (head.dep && (head.dep.status === "success" || head.dep.status === "failed")) {
-                setData(head);
-                if (timer) clearInterval(timer);
-              }
-            } catch { /* 网络抖动下轮再说 */ }
-          }, 1000);
-        }
-      })
-      .catch(() => setLogText("加载失败"));
-    onCleanup(() => {
-      if (timer) clearInterval(timer);
-    });
+  const fetchBody = async () => {
+    // 日志体是裸文本流（非 JSON），走原生 fetch + 路径助手
+    const res = await fetch(`${deployPaths.targetsByIdLogBody(props.targetId)}${props.dep ? `?dep=${props.dep}` : ""}`);
+    return res.text();
+  };
+
+  onMount(async () => {
+    try {
+      const d = await unwrap(api.targets({ id: props.targetId }).log.get({ query: { dep: props.dep } }));
+      setData(d);
+      const text = await fetchBody();
+      setBackfill(text || "尚未部署");
+    } catch {
+      setBackfill("加载失败");
+    }
   });
 
-  const depStatus = () => data()?.dep?.status;
+  // 终态对齐：live 状态进入 success/failed 时做最后一次 HTTP 全量回填
+  createEffect(() => {
+    const s = live().status;
+    const depId = data()?.dep?.id;
+    if (!depId || finalText() !== null || (s !== "success" && s !== "failed")) return;
+    void (async () => {
+      try {
+        const head = await unwrap(api.targets({ id: props.targetId }).log.get({ query: { dep: props.dep } }));
+        setData(head);
+        setFinalText((await fetchBody()) || "尚未部署");
+      } catch { /* 对齐失败则维持 SSE/backfill 显示 */ }
+    })();
+  });
+
+  // 显示优先级：终态全文 > 当前 run 的 SSE 实时行 > 初始回填
+  const logText = () => {
+    const fin = finalText();
+    if (fin !== null) return fin;
+    const dep = data()?.dep;
+    const lg = liveLog();
+    if (dep && lg && lg.runId === dep.id && lg.lines.length) return lg.lines.join("\n");
+    return backfill();
+  };
+
+  const depStatus = () => live().status ?? data()?.dep?.status;
   return (
     <Modal title={`部署日志 — ${data()?.target.name ?? "…"}`} wide onClose={ui.close}>
       <Show when={depStatus()}>
@@ -993,7 +1009,7 @@ function DeploymentsTab(props: { data: ServiceDrawerData; svc?: string; mutate: 
   const t = () => props.data.target;
   return (
     <>
-      <div class="flex gap-2">
+      <div class="flex items-center gap-2">
         <button
           class="rounded bg-brass-500 px-3 py-1.5 text-xs font-semibold text-harbor-950 hover:bg-brass-600"
           onClick={async () => {
@@ -1009,6 +1025,33 @@ function DeploymentsTab(props: { data: ServiceDrawerData; svc?: string; mutate: 
         >
           重启{props.svc ? "服务" : "容器"}
         </button>
+        {/* 本地导入 app 的显式通道：构建产物推到远端（跨区移动的门票），不起容器 */}
+        <Show when={t().kind === "app" && !t().repoUrl}>
+          <button
+            class="rounded border border-harbor-700 px-3 py-1.5 text-xs text-neutral-300 hover:bg-harbor-800"
+            title={t().artifactShipped ? "产物已传输过（可再传更新）" : "跨区移动前必须先传输产物"}
+            onClick={async () => {
+              await unwrap(api.targets({ id: t().id }).ship.post());
+              ui.open({ kind: "log", targetId: t().id });
+            }}
+          >
+            传输产物{t().artifactShipped ? " ✓" : ""}
+          </button>
+        </Show>
+        {/* 部署策略三态：manual 不轮询 / notify 只亮徽章 / auto 检出更新即部署 */}
+        <select
+          class={`${inputCls} ml-auto px-2 py-1.5 text-xs`}
+          value={t().deployPolicy}
+          title="检出更新时：手动部署=不轮询；仅提醒=亮「有更新」徽章；自动部署=立即触发"
+          onChange={(e) => void props.mutate(
+            () => unwrap(api.targets({ id: t().id }).policy.post({ policy: e.currentTarget.value as "manual" | "notify" | "auto" })),
+            { reload: false },
+          )}
+        >
+          <option value="manual">手动部署</option>
+          <option value="notify">仅提醒</option>
+          <option value="auto">自动部署</option>
+        </select>
       </div>
       <div class="flex flex-col">
         <Show when={(props.data.deployments ?? []).length === 0}>
@@ -1019,14 +1062,37 @@ function DeploymentsTab(props: { data: ServiceDrawerData; svc?: string; mutate: 
             <div class="flex items-center gap-3 border-b border-harbor-800/60 py-2 text-xs">
               <Chip tone={d.status === "success" ? "ok" : d.status === "failed" ? "warn" : "muted"}>{d.status}</Chip>
               <span class="text-neutral-500">#{d.id}</span>
+              {/* 触发来源：手动/自动/回滚（回滚带血缘号） */}
+              <Show when={d.trigger && d.trigger !== "ui"}>
+                <span class="rounded border border-harbor-700 px-1 text-[10px] text-neutral-500">
+                  {d.trigger === "rollback" ? `回滚←#${d.rollbackOf}` : "自动"}
+                </span>
+              </Show>
               <span class="text-neutral-400">{fmtAgo(d.startedAt)}</span>
               {d.finishedAt ? <span class="mono text-neutral-600">{Math.round((new Date(d.finishedAt).getTime() - new Date(d.startedAt).getTime()) / 1000)}s</span> : null}
-              <button
-                class="ml-auto text-tide-400 hover:text-tide-300"
-                onClick={() => ui.open({ kind: "log", targetId: t().id, dep: d.id })}
-              >
-                日志
-              </button>
+              <div class="ml-auto flex items-center gap-2">
+                {/* 回滚仅对有快照的成功 run 开放；旧 run（迁移前）无快照，置灰 */}
+                <button
+                  class="text-neutral-500 hover:text-brass-400 disabled:cursor-not-allowed disabled:opacity-40"
+                  disabled={!(d.status === "success" && d.snapshotJson)}
+                  title={d.status === "success" && d.snapshotJson ? `回滚到 run #${d.id}` : "无快照，无法回滚"}
+                  onClick={() => {
+                    if (!confirm(`回滚到 run #${d.id}（${d.commitSha ?? "无 sha"}）？容器将切回当时的镜像与配置。`)) return;
+                    void (async () => {
+                      await unwrap(api.targets({ id: t().id }).rollback.post({ runId: d.id }));
+                      ui.open({ kind: "log", targetId: t().id });
+                    })();
+                  }}
+                >
+                  回滚
+                </button>
+                <button
+                  class="text-tide-400 hover:text-tide-300"
+                  onClick={() => ui.open({ kind: "log", targetId: t().id, dep: d.id })}
+                >
+                  日志
+                </button>
+              </div>
             </div>
           )}
         </For>

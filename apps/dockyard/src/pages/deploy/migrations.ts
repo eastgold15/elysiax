@@ -59,4 +59,11 @@ export const migrations: MigrationsJournal = [
     timestamp: 13,
     sql: "ALTER TABLE `deploy_targets` ADD `projectId` integer REFERENCES projects(id);\n--> statement-breakpoint\nUPDATE `deploy_targets` SET `projectId` = (SELECT `projectId` FROM `canvas_nodes` WHERE `canvas_nodes`.`id` = `deploy_targets`.`nodeId`);",
   },
+  // 部署硬化批：策略/通道三列 + 回滚快照五列 + 日志分块表（logText 存量整体转一条 seq=0 chunk，
+  // startedAt 是 drizzle timestamp 模式存的毫秒，直接作 ts）。
+  {
+    name: "0015_deploy_hardening",
+    timestamp: 15,
+    sql: "ALTER TABLE `deploy_targets` ADD `deployPolicy` text DEFAULT 'notify' NOT NULL;--> statement-breakpoint\nALTER TABLE `deploy_targets` ADD `buildPlatform` text;--> statement-breakpoint\nALTER TABLE `deploy_targets` ADD `artifactShipped` integer DEFAULT false NOT NULL;--> statement-breakpoint\nALTER TABLE `deploy_runs` ADD `trigger` text DEFAULT 'ui' NOT NULL;--> statement-breakpoint\nALTER TABLE `deploy_runs` ADD `rollbackOf` integer;--> statement-breakpoint\nALTER TABLE `deploy_runs` ADD `imageSnapshot` text;--> statement-breakpoint\nALTER TABLE `deploy_runs` ADD `snapshotJson` text;--> statement-breakpoint\nALTER TABLE `deploy_runs` ADD `project` text;--> statement-breakpoint\nCREATE TABLE `deploy_log_chunks` (\n\t`id` integer PRIMARY KEY AUTOINCREMENT,\n\t`runId` integer NOT NULL,\n\t`seq` integer NOT NULL,\n\t`text` text NOT NULL,\n\t`ts` integer NOT NULL,\n\tCONSTRAINT `fk_deploy_log_chunks_runId_deploy_runs_id_fk` FOREIGN KEY (`runId`) REFERENCES `deploy_runs`(`id`) ON DELETE CASCADE\n);--> statement-breakpoint\nCREATE INDEX `idx_deploy_log_chunks_run` ON `deploy_log_chunks` (`runId`,`seq`);--> statement-breakpoint\nINSERT INTO `deploy_log_chunks` (`runId`, `seq`, `text`, `ts`) SELECT `id`, 0, `logText`, `startedAt` FROM `deploy_runs` WHERE `logText` != '';",
+  },
 ];

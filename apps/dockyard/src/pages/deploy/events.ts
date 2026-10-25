@@ -8,7 +8,9 @@ import { defineRealtime } from "@elysiax/core";
 export type CanvasEvent =
   | { type: "status"; targetId: number; status: string }
   | { type: "running"; targetId: number; running: boolean }
-  | { type: "state"; targetId: number; service: string; state: "running" | "exited" | "unknown" };
+  | { type: "state"; targetId: number; service: string; state: "running" | "exited" | "unknown" }
+  // 部署日志增量（service 侧 100ms/50 行窗口合并后推送，不是逐行；日志抽屉订阅此事件免轮询）
+  | { type: "log"; targetId: number; runId: number; lines: string[] };
 
 /** 全局画布频道（世界地图唯一 SSE 频道） */
 export const CANVAS_CHANNEL = "canvas";

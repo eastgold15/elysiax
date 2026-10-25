@@ -36,9 +36,10 @@ flowchart LR
   - `export { canvasNodes, serviceGroups } from "./schema"`
   - `export type { CanvasNode, ServiceGroup } from "./schema"`
   - `export { CanvasService } from "./canvas.service"`
+  - `export const isLocalHost = (host: string) => host === "127.0.0.1" || host === "localhost" || host === "::1"`
   - `export type CanvasApi = typeof canvasApi`
 - 插头（依赖的他人 socket）: 无
-- 文件: canvas.di.ts, canvas.socket.ts, schema.ts, canvas.repository.ts, canvas.service.ts, canvas.model.ts, canvas.actions.ts, migrations.ts
+- 文件: canvas.di.ts, canvas.actions.ts, canvas.model.ts, canvas.repository.ts, canvas.service.ts, migrations.ts, schema.ts, canvas.socket.ts
 
 ## deploy  (无 URL)  `apps/dockyard/src/pages/deploy`
 - 插座出口: 
@@ -54,7 +55,7 @@ flowchart LR
   - `export type { DetectResult, DetectedService } from "./detect"`
   - `export type DeployApi = typeof deployApi`
 - 插头（依赖的他人 socket）: `../canvas/canvas.socket`, `../github/github.socket`, `../servers/servers.socket`, `../edge/edge.socket`, `../projects/projects.socket`, `../resources/resources.socket`
-- 文件: deploy.di.ts, detect.ts, update-poller.ts, events.ts, deploy.socket.ts, schema.ts, migrations.ts, deploy.repository.ts, deploy.service.ts, container-poller.ts, deploy.actions.ts
+- 文件: detect.ts, container-poller.ts, deploy.socket.ts, schema.ts, migrations.ts, deploy.repository.ts, events.ts, update-poller.ts, deploy.di.ts, deploy.service.ts, deploy.actions.ts
 
 ## backup  (无 URL)  `apps/dockyard/src/pages/deploy/backup`
 - 插座出口: 

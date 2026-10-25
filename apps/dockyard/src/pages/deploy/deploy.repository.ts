@@ -1,6 +1,6 @@
-import { and, desc, eq } from "drizzle-orm";
+import { and, asc, desc, eq, max, notInArray } from "drizzle-orm";
 import type { Db } from "../../shared/db";
-import { deployments, deployTargets, type Deployment, type DeployTarget } from "./schema";
+import { deployLogChunks, deployments, deployTargets, type Deployment, type DeployTarget } from "./schema";
 
 export type NewTarget = Omit<typeof deployTargets.$inferInsert, "id" | "createdAt">;
 
@@ -49,8 +49,11 @@ export class DeployRepository {
     return this.db.update(deployTargets).set({ groupId: null }).where(eq(deployTargets.groupId, groupId));
   }
 
-  async createDeployment(targetId: number): Promise<Deployment> {
-    const [row] = await this.db.insert(deployments).values({ targetId }).returning();
+  async createDeployment(
+    targetId: number,
+    extra?: { trigger?: Deployment["trigger"]; rollbackOf?: number },
+  ): Promise<Deployment> {
+    const [row] = await this.db.insert(deployments).values({ targetId, ...extra }).returning();
     return row!;
   }
 
@@ -86,9 +89,53 @@ export class DeployRepository {
     return this.db.update(deployments).set(patch).where(eq(deployments.id, id));
   }
 
-  async appendLog(id: number, line: string) {
-    const row = await this.db.select({ logText: deployments.logText }).from(deployments)
-      .where(eq(deployments.id, id)).limit(1).then((r) => r[0]);
-    await this.updateDeployment(id, { logText: `${row?.logText ?? ""}${line}\n` });
+  /**
+   * 日志分块追加（替代 logText 读改写——长构建日志数 MB，全列重写既慢又放大 WAL）。
+   * seq 取库内 MAX+1：pipeline 生命周期内可能多段写（execLongRemote 回调），
+   * 内存计数器在进程重启/多写者场景不可靠，一次廉价查询换正确性。
+   */
+  async appendLogChunk(runId: number, text: string) {
+    const row = await this.db
+      .select({ maxSeq: max(deployLogChunks.seq) })
+      .from(deployLogChunks)
+      .where(eq(deployLogChunks.runId, runId))
+      .then((r) => r[0]);
+    await this.db.insert(deployLogChunks).values({
+      runId,
+      seq: (row?.maxSeq ?? -1) + 1,
+      text,
+      ts: Date.now(),
+    });
+  }
+
+  /** 整段日志（chunks 按 seq 拼接；chunks 为空时兜底旧 logText——存量行迁移已回填，兜底是防御） */
+  async logTextOf(runId: number): Promise<string> {
+    const chunks = await this.db
+      .select({ text: deployLogChunks.text })
+      .from(deployLogChunks)
+      .where(eq(deployLogChunks.runId, runId))
+      .orderBy(asc(deployLogChunks.seq));
+    if (chunks.length) return chunks.map((c) => c.text).join("\n");
+    const row = await this.db
+      .select({ logText: deployments.logText })
+      .from(deployments)
+      .where(eq(deployments.id, runId))
+      .limit(1)
+      .then((r) => r[0]);
+    return row?.logText ?? "";
+  }
+
+  /** 历史清理：每个 target 只留最近 keep 条 run（chunks 靠 ON DELETE CASCADE 连带清） */
+  async pruneRuns(targetId: number, keep: number) {
+    const kept = await this.db
+      .select({ id: deployments.id })
+      .from(deployments)
+      .where(eq(deployments.targetId, targetId))
+      .orderBy(desc(deployments.id))
+      .limit(keep);
+    if (kept.length === 0) return;
+    await this.db
+      .delete(deployments)
+      .where(and(eq(deployments.targetId, targetId), notInArray(deployments.id, kept.map((k) => k.id))));
   }
 }

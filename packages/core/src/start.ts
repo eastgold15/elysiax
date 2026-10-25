@@ -8,7 +8,7 @@ import { serve } from "bun";
 import type { Container } from "@inferdi/inferdi";
 import type { LayoutComponent } from "@workspace/htmx";
 import { elysiaxAPI, type ElysiaxAPIOptions } from "./di";
-import type { GuardOptions } from "./guard";
+import type { GuardOptions } from "./auth";
 import { getLayout } from "./layout";
 import type { ModuleEntry } from "./index";
 import type { PageEntry } from "./pages";

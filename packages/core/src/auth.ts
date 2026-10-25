@@ -1,5 +1,14 @@
 import { Elysia } from "elysia";
-import type { GuardOptions } from "./guard";
+
+export interface GuardOptions {
+  /** 未登录时普通请求的跳转目标 */
+  loginUrl: string;
+  /** 校验当前请求是否已登录（返回 falsy 即拒绝）；框架不含任何认证实现 */
+  verify: (request: Request) => boolean | Promise<boolean>;
+  /** 缺省策略：页面未声明 auth 时按什么处理，默认 "protected" */
+  defaultAuth?: "public" | "protected";
+}
+
 
 /**
  * auth 宏：page-architecture.md 7.5 的宏形态（Elysia 2.0 rc）。

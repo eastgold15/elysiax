@@ -8,7 +8,7 @@ import type { Container, Lifetime, Spec } from "@inferdi/inferdi";
 import type { ModuleEntry } from "./index";
 import type { PageEntry } from "./pages";
 import { elysiaxAuth } from "./auth";
-import type { GuardOptions } from "./guard";
+import type { GuardOptions } from "./auth";
 import {
   ServiceError,
   serviceErrorHandler,

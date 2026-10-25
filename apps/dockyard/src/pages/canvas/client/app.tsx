@@ -70,6 +70,8 @@ export function App() {
 
   return (
     <UiContext.Provider value={bus}>
+      {/* 整页 client 壳没有 AppLayout：视口高度从这里开始，h-full 链条才有根 */}
+      <div class="h-screen">
       <Show when={missing()}>
         <div class="flex h-full items-center justify-center text-sm text-neutral-500">
           先创建一个项目空间（左侧「项目」）
@@ -117,6 +119,7 @@ export function App() {
           </>
         )}
       </Show>
+      </div>
     </UiContext.Provider>
   );
 }

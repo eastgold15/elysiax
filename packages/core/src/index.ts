@@ -8,6 +8,7 @@ export type { PageCtx, PageEntry, PageHandler, PageMeta, ServiceSpecs } from "./
 export { defineLayout, getLayout } from "./layout";
 
 export { elysiaxAuth } from "./auth";
+export type { GuardOptions } from "./auth";
 export { ServiceError, errorBanner } from "./errors";
 export { codegen, defineModule, provide, lazy, extractRoutes } from "./codegen";
 export type { DiEntry, DiEntryInput, LazyRef, ModuleDi, ModuleDiInput, ProvideOptions } from "./codegen";

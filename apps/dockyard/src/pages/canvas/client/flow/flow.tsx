@@ -10,6 +10,7 @@ import {
   createContext, createEffect, createMemo, createSignal, For, onCleanup, onMount,
   useContext, type JSX,
 } from "solid-js";
+import { createStore, reconcile } from "solid-js/store";
 
 // ── 公共类型 ──────────────────────────────────────────────
 
@@ -191,6 +192,16 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
     });
   });
 
+  // 节点按 id 入 store 再渲染：props.nodes 每次拖拽都换新对象引用，直接 <For> 会把
+  // 被拖节点的 DOM 整个重建 → 指针捕获丢失、拖拽断掉（实测卡成“每次只动一点”）。
+  // reconcile 按 id 原地合并字段，代理引用稳定 → DOM 不重建，样式细粒度更新。
+  const [nodeStore, setNodeStore] = createStore<Record<string, N>>(
+    Object.fromEntries(props.nodes.map((n) => [n.id, n])),
+  );
+  createEffect(() => {
+    setNodeStore(reconcile(Object.fromEntries(props.nodes.map((n) => [n.id, n]))));
+  });
+
   // 边的端点需要绝对坐标：沿父链累加
   const absPos = createMemo(() => {
     const map = new Map<string, { x: number; y: number }>();
@@ -342,9 +353,15 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
     );
   }
 
-  /** 递归渲染：子节点 DOM 嵌在父节点里，position 父相对值直接用 */
+  /** 递归渲染：子节点 DOM 嵌在父节点里，position 父相对值直接用；条目取 store 代理保持引用稳定 */
   function NodeTree(props2: { parentId?: string }) {
-    const kids = createMemo(() => props.nodes.filter((n) => n.parentId === props2.parentId));
+    const kids = createMemo(() =>
+      props.nodes.flatMap((n) => {
+        if (n.parentId !== props2.parentId) return [];
+        const s = nodeStore[n.id]; // 同步窗口期可能未入 store，过滤掉
+        return s ? [s] : [];
+      }),
+    );
     return (
       <For each={kids()}>
         {(n) => (

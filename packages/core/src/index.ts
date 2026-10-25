@@ -1,19 +1,12 @@
 import type { Component } from "@workspace/htmx";
 
-/** @deprecated 死代码：module.json 约定已删、codegen 对 .ui/.controller 文件直接报错，勿用（待移除） */
-export { moduleAggregator } from "./plugin";
-/** @deprecated 同上 */
-export type { ModuleAggregatorOptions } from "./plugin";
 export { elysiaxAPI, elysiaxModule, inferdiElysia } from "./di";
 export { elysiaxModule as defineRoutes } from "./di";
 export type { ElysiaxAPIOptions } from "./di";
 export { definePage } from "./pages";
 export type { PageCtx, PageEntry, PageHandler, PageMeta, ServiceSpecs } from "./pages";
 export { defineLayout, getLayout } from "./layout";
-/** @deprecated 死代码且语义过期：只护页面 URL、不护 /api 写端点；鉴权请用 start({ auth }) 宏方案（待移除） */
-export { elysiaxGuard } from "./guard";
-/** @deprecated 同上 */
-export type { GuardOptions } from "./guard";
+
 export { elysiaxAuth } from "./auth";
 export { ServiceError, errorBanner } from "./errors";
 export { codegen, defineModule, provide, lazy, extractRoutes } from "./codegen";

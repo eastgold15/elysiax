@@ -93,7 +93,11 @@ preload = ["./test/preload.ts"]
 ```ts
 // test/preload.ts
 import { setupClientTest } from "@elysiax/solid/testing";
-setupClientTest(); // happy-dom 全局 DOM + Solid JSX 预编译
+// htmx + Solid 混用应用必须收窄 filter：@kitajs/html 语义的 .tsx（如 @workspace/htmx
+// 的 toast.tsx）被 Solid 编译会注入 solid-js/web 而解析失败。只放行 client/ 与 flow 包。
+setupClientTest({
+  filter: /(apps\/myapp\/src\/pages\/.*\/client|packages\/flow\/src).*\.tsx$/,
+});
 ```
 
 ```json
@@ -103,6 +107,8 @@ setupClientTest(); // happy-dom 全局 DOM + Solid JSX 预编译
 ```
 
 测试文件放组件旁边（`*.test.tsx`，无需 jsx pragma——编译走插件）。只断 DOM 结构与行为钩子（data-* 属性、文本），不断样式像素。样例见 `client/flow.test.tsx`。
+
+**服务端 repository 测试**（非 client，另一套约定）：内存 sqlite 跑真迁移——`new Database(":memory:")` + `PRAGMA foreign_keys = ON`（FK cascade 行为必须真实）+ `migrate(db, migrationsJournal)`，journal 从 `shared/migrations-journal.ts` 引（与生产同一份聚合，跨原子 import 只能落 shared）。裸 SQL 造上游行时注意 drizzle `$defaultFn` 列要手工给值。样例见 `deploy/deploy.repository.test.ts`——它就靠这套抓住了一个潜伏 bug：0011 迁移的 `groupId REFERENCES service_groups(id)` 是悬空外键（真名 canvas_groups），老库因改名历史无恙，全新装库 FK ON 下插入必炸。
 
 ## 浏览器打包铁律
 

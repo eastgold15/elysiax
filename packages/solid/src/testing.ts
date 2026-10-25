@@ -44,10 +44,15 @@ import { solidPlugin } from "./index";
 /**
  * 一行装配 client 测试环境：
  * 1. happy-dom 注册全局 DOM（document/window/PointerEvent…）；
- * 2. Bun.plugin 挂 Solid JSX 预编译（测试进程里所有 .tsx 都按 Solid 编译——
- *    client 测试只引浏览器侧代码（岛边界规则），框架包的 .tsx 源也要过同一转换）。
+ * 2. Bun.plugin 挂 Solid JSX 预编译。
+ *
+ * filter 陷阱：插件按路径拦截 .tsx——monorepo 里还有 @kitajs/html 语义的 .tsx
+ * （如 @workspace/htmx 的 toast.tsx），一旦被 Solid 编译会注入 solid-js/web 依赖
+ * 而解析失败。默认放行全部 .tsx 只适合纯 Solid 应用；混用 htmx 的应用必须传
+ * filter 收窄到「应用 client/ 目录 + @elysiax/flow 包」，例如：
+ * `setupClientTest({ filter: /(apps\/myapp\/.*\/client|packages\/flow\/src).*\.tsx$/ })`
  */
-export function setupClientTest(): void {
+export function setupClientTest(opts?: { filter?: RegExp }): void {
   // happy-dom 是应用的 devDependency：必须从应用根（cwd）解析，
   // 从本包位置 require 在 isolated node_modules 布局下找不到它
   const appRequire = createRequire(resolve(process.cwd(), "package.json"));
@@ -56,8 +61,8 @@ export function setupClientTest(): void {
     GlobalRegistrator: { register(): Promise<void> | void };
   };
   GlobalRegistrator.register();
-  // 测试进程里所有 .tsx 都按 Solid 编译：client 测试只引浏览器侧代码
+  // 测试进程里命中的 .tsx 都按 Solid 编译：client 测试只引浏览器侧代码
   // （doctor 岛边界本来就禁 client 引服务端），框架包（@elysiax/flow 的 .tsx 源）
-  // 也要过同一个转换，不能用窄过滤器只放行 client/ 目录。
-  Bun.plugin(solidPlugin());
+  // 也要过同一个转换，不能只放行应用 client/ 目录而漏掉 flow。
+  Bun.plugin(solidPlugin(opts?.filter ? { filter: opts.filter } : undefined));
 }

@@ -5,24 +5,110 @@ import { existsSync, cpSync, readFileSync, writeFileSync, readdirSync, mkdirSync
 import { resolve, basename, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** 解析 socket 文件的导出符号表（named/type re-export + 本地声明） */
-function socketExports(src: string): Set<string> {
+/** 剥离 // 行注释与 块注释（正则级实现，骨架/插座场景足够；
+ *  带 [^:] 前缀兜底避免误伤字符串里的 "https://…"） */
+function stripComments(src: string): string {
+  return src
+    .replaceAll(/\/\*[\s\S]*?\*\//g, "")
+    .replaceAll(/(^|[^:"'`])\/\/[^\n]*/g, "$1");
+}
+
+/** 按顶层逗号切分声明列表（忽略括号/方括号/花括号内部的逗号） */
+function splitDeclarators(list: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let cur = "";
+  for (const ch of list) {
+    if ("([{".includes(ch)) depth++;
+    else if (")]}".includes(ch)) depth--;
+    if (ch === "," && depth === 0) {
+      parts.push(cur);
+      cur = "";
+    } else cur += ch;
+  }
+  if (cur.trim()) parts.push(cur);
+  return parts;
+}
+
+/**
+ * 解析 socket 文件的导出符号表（named/type re-export + 本地声明）。
+ * 先剥注释再匹配，避免注释里的示例 export 被计为真实出口；
+ * resolveFile 用于递归解析 export * from "./x"（限深防环，HEAD 对比时不传）。
+ */
+function socketExports(
+  src: string,
+  resolveFile?: (spec: string) => string | undefined,
+  depth = 0,
+): Set<string> {
   const names = new Set<string>();
+  const code = stripComments(src);
   // export { A, B as C } / export type { ... }（可多行）
-  for (const m of src.matchAll(/export\s+(?:type\s+)?\{([^}]*)\}/gs))
+  for (const m of code.matchAll(/export\s+(?:type\s+)?\{([^}]*)\}/gs))
     for (const part of m[1]!.split(",")) {
       const p = part.trim().replace(/^type\s+/, "");
       if (!p) continue;
       const asM = /\bas\s+(\w+)$/.exec(p);
       names.add(asM ? asM[1]! : p);
     }
-  // export class/function/const/interface/type X
-  for (const m of src.matchAll(/^export\s+(?:async\s+)?(?:class|function|const|let|var|interface|type|enum)\s+(\w+)/gm))
+  // export class/function/interface/type/enum X
+  for (const m of code.matchAll(/^export\s+(?:async\s+)?(?:class|function|interface|type|enum)\s+(\w+)/gm))
     names.add(m[1]!);
+  // export const/let/var 支持多声明：export const a = 1, b = 2
+  for (const m of code.matchAll(/^export\s+(?:const|let|var)\s+([^;\n]+)/gm))
+    for (const decl of splitDeclarators(m[1]!)) {
+      const id = /^\s*(\w+)/.exec(decl);
+      if (id) names.add(id[1]!);
+    }
+  // export * from "./x"：递归收集目标文件出口
+  if (resolveFile && depth < 3)
+    for (const m of code.matchAll(/export\s+\*\s+from\s+["']([^"']+)["']/g)) {
+      const target = resolveFile(m[1]!);
+      if (target)
+        for (const n of socketExports(readFileSync(target, "utf8"), resolveFile, depth + 1))
+          names.add(n);
+    }
   return names;
 }
 
 const templateDir = fileURLToPath(new URL("../template", import.meta.url));
+
+/** @gen 别名预检：骨架代码 import "@gen"，目标项目 tsconfig paths 必须配了该别名 */
+function assertGenAlias(root: string) {
+  const tsconfigPath = resolve(root, "tsconfig.json");
+  if (!existsSync(tsconfigPath)) return; // 无 tsconfig 不拦（非 TS 项目）
+  // tsconfig 允许注释与尾逗号（JSONC），先剥掉再 parse
+  const tsconfig = JSON.parse(
+    stripComments(readFileSync(tsconfigPath, "utf8")).replaceAll(/,(\s*[}\]])/g, "$1"),
+  ) as { compilerOptions?: { paths?: Record<string, unknown> } };
+  const paths = tsconfig.compilerOptions?.paths ?? {};
+  if (!("@gen" in paths))
+    throw new Error(
+      `目标项目 tsconfig.json 缺少 @gen paths 别名，骨架代码里的 import "@gen" 无法解析。\n` +
+        `请在 compilerOptions.paths 中添加：\n` +
+        `  "@gen": ["./.elysiax/index.ts"],\n` +
+        `  "@gen/*": ["./.elysiax/*"]`,
+    );
+}
+
+/** 生成自含迁移骨架（幂等，副作用执行；参照 apps/demo/src/pages/todo/migrations.ts 实测写法） */
+function migrationsSkeleton(name: string, dir: string, root: string): string {
+  const C = camel(name);
+  // shared/db 单例的相对路径；目标项目没有该文件时注释掉 import 并提示调整
+  const dbFile = resolve(root, "src/shared/db.ts");
+  const hasDb = existsSync(dbFile);
+  const spec = relative(dir, dbFile).replaceAll("\\", "/").replace(/\.ts$/, "");
+  const importLine = `import { db } from "${spec.startsWith(".") ? spec : `./${spec}`}";`;
+  return (
+    `// ${name} 原子自含迁移（幂等）：本文件被 import 时执行，保证本原子的表存在。\n` +
+    `// 执行时机：由本原子的依赖链路引入（如 ${name}.service.ts 顶部 import "./migrations"），\n` +
+    `// 跟随 shared/db 单例连接启动即跑；CREATE TABLE IF NOT EXISTS 保证重复执行安全。\n` +
+    (hasDb
+      ? `${importLine}\n`
+      : `// ${importLine}  // 未找到 src/shared/db.ts，请按项目实际的数据库单例调整\n`) +
+    `\n// 建好 schema.ts 后把 DDL 放这里（或从 schema.ts import DDL 常量）：\n` +
+    `// db.run(\`CREATE TABLE IF NOT EXISTS ${C}_items (id INTEGER PRIMARY KEY AUTOINCREMENT)\`);\n`
+  );
+}
 
 interface ModuleManifest {
   name: string;
@@ -74,6 +160,33 @@ cli.addCommand({
         writeFileSync(p, readFileSync(p, "utf8").replaceAll("{{name}}", name));
     }
 
+    // workspace:/catalog: 依赖只能在 elysiax monorepo 内安装；
+    // 向上找 packages/core 判定是否在 monorepo 内，不在则提示改用已发布版本号
+    let inMonorepo = false;
+    for (let d = target, i = 0; i < 6; i++) {
+      if (existsSync(resolve(d, "packages/core/package.json"))) {
+        inMonorepo = true;
+        break;
+      }
+      const parent = resolve(d, "..");
+      if (parent === d) break;
+      d = parent;
+    }
+    if (!inMonorepo) {
+      const pkg = JSON.parse(readFileSync(resolve(target, "package.json"), "utf8")) as {
+        dependencies?: Record<string, string>;
+        devDependencies?: Record<string, string>;
+      };
+      const wsDeps = Object.entries({ ...pkg.dependencies, ...pkg.devDependencies })
+        .filter(([, v]) => v.startsWith("workspace:") || v === "catalog:")
+        .map(([k]) => k);
+      if (wsDeps.length)
+        logger.warn(
+          `⚠️ 目标目录不在 elysiax monorepo 内，以下依赖使用 workspace:/catalog: 协议装不上，` +
+            `请改用已发布版本号: ${wsDeps.join(", ")}`,
+        );
+    }
+
     logger.info(`✅ 项目已创建: ${target}`);
     logger.info(`下一步:`);
     logger.info(`  cd ${argument[0] ?? "."}`);
@@ -98,6 +211,7 @@ async function scaffoldPage(name: string, logger: { info: (m: string) => void })
     throw new Error(`页面名须为 kebab-case: ${name}`);
 
   const root = process.cwd();
+  assertGenAlias(root);
   const { loadConfig, codegen } = await import("@elysiax/core");
   const config = await loadConfig(root);
   const pagesDir = config.pages ?? "src/pages";
@@ -129,13 +243,8 @@ async function scaffoldPage(name: string, logger: { info: (m: string) => void })
 // export type ${P}Item = typeof ${C}Items.$inferSelect;
 `,
   );
-  // 迁移 journal 片段：shared/db 聚合所有原子的片段后按 timestamp 排序重放
-  writeFileSync(
-    resolve(dir, "migrations.ts"),
-    `// drizzle-kit generate 生成 SQL 后，把语句放进这里（保留 name/timestamp）
-export default [] as { name: string; timestamp: number; sql: string }[];
-`,
-  );
+  // 自含迁移（幂等，副作用执行）：模块加载即保证表存在，参照 demo todo 原子实测写法
+  writeFileSync(resolve(dir, "migrations.ts"), migrationsSkeleton(name, dir, root));
   // 插座：本原子对外承诺的唯一出口；跨原子 import 只允许指向这个文件
   writeFileSync(
     resolve(dir, `${name}.socket.ts`),
@@ -151,6 +260,7 @@ export { ${P}Service } from "./${name}.service";
 import { ${P}Service } from "./${name}.service";
 
 export default defineModule({
+  // 注意：页面原子的 URL 由目录推导，route 仅用于旧 modules（controller）形态
   route: "/${name}",
   provides: {
     // 键 = camelCase 类名；依赖写类引用（编译期校验），懒加载用 lazy(Class)
@@ -220,6 +330,7 @@ async function scaffoldModule(
     throw new Error(`模块名须为 kebab-case: ${name}`);
 
   const root = process.cwd();
+  assertGenAlias(root);
   const { loadConfig, codegen } = await import("@elysiax/core");
   const config = await loadConfig(root);
   const pagesDir = config.pages ?? "src/pages";
@@ -236,10 +347,12 @@ async function scaffoldModule(
   const deps = { ...pkg.dependencies, ...pkg.devDependencies };
   if (withDb && !deps["drizzle-orm"])
     throw new Error(`--db 数据层骨架需要 drizzle-orm，请先 bun add drizzle-orm`);
-  if (ui === "react" && !deps["react-dom"])
-    throw new Error(
-      `react 形态需要 react + react-dom + @elysia/eden，请先 bun add react react-dom @elysia/eden`,
-    );
+  if (ui === "react") {
+    // 三者都是真依赖：client/index.tsx 用 react-dom，client/api.ts 用 @elysia/eden
+    const missing = ["react", "react-dom", "@elysia/eden"].filter((d) => !deps[d]);
+    if (missing.length)
+      throw new Error(`react 形态缺少依赖: ${missing.join(", ")}，请先 bun add ${missing.join(" ")}`);
+  }
 
   mkdirSync(dir, { recursive: true });
 
@@ -262,6 +375,7 @@ import { ${P}Service } from "./${name}.service";
 
 // 模块身份证：codegen 据此自动发现，无需手工注册（契约 §1.1）
 export default defineModule({
+  // 注意：页面原子的 URL 由目录推导，route 仅用于旧 modules（controller）形态
   route: "/${name}",
   provides: {
     // 键 = camelCase 类名；依赖写类引用（编译期校验），值服务用字符串键，
@@ -304,13 +418,8 @@ export type ${P}Api = typeof ${C}Api;
 // export type ${P}Item = typeof ${C}Items.$inferSelect;
 `,
     );
-    writeFileSync(
-      resolve(dir, "migrations.ts"),
-      `// drizzle-kit generate 生成 SQL 后，把语句放进这里（保留 name/timestamp）；
-// shared/db 聚合所有原子的片段后按 timestamp 排序重放
-export default [] as { name: string; timestamp: number; sql: string }[];
-`,
-    );
+    // 自含迁移（幂等，副作用执行）：模块加载即保证表存在，参照 demo todo 原子实测写法
+    writeFileSync(resolve(dir, "migrations.ts"), migrationsSkeleton(name, dir, root));
   }
 
   if (ui === "htmx") {
@@ -727,12 +836,14 @@ cli.addCommand({
         if (existsSync(cand)) return cand;
       return undefined;
     };
-    // 插座导出符号缓存（适配检查用）
+    // 插座导出符号缓存（适配检查用）；传 resolver 让 export * from "./x" 也能被解析
     const socketSymbols = new Map<string, Set<string>>();
     const symbolsOf = (sf: string) => {
       let syms = socketSymbols.get(sf);
       if (!syms) {
-        syms = socketExports(readFileSync(sf, "utf8"));
+        syms = socketExports(readFileSync(sf, "utf8"), (spec) =>
+          spec.startsWith(".") ? resolveImport(sf, spec) : undefined,
+        );
         socketSymbols.set(sf, syms);
       }
       return syms;
@@ -740,9 +851,10 @@ cli.addCommand({
     for await (const f of new Glob(`${pagesDir}/**/*.ts*`).scan({ cwd: root })) {
       const abs = resolve(root, f);
       const src = readFileSync(abs, "utf8");
-      for (const m of src.matchAll(/^import\s+(?:type\s+)?([^"']*?)from\s+["']([^"']+)["']/gm)) {
-        const clause = m[1]!;
-        const spec = m[2]!;
+      // 三种跨文件引用形态都查：import ... from / export ... from（再导出）/ import "..."（副作用）
+      for (const m of src.matchAll(/^\s*(?:import\s+(?:type\s+)?([^"']*?)from|export\s+(?:type\s+)?([^"']*?)from|import)\s*["']([^"']+)["']/gm)) {
+        const clause = m[1] ?? m[2] ?? "";
+        const spec = m[3]!;
         // 只查相对 import 与 @/ 别名（指向 src/ 内部）；包与 shared 基建不查
         if (!spec.startsWith(".") && !spec.startsWith("@/")) continue;
         const target = resolveImport(abs, spec);
@@ -818,28 +930,39 @@ cli.addCommand({
     if (!removedTotal) logger.info("✅ 插座出口只增不减");
 
     // 8) 数据层门禁（契约 §8）：表名全局唯一、迁移 timestamp 全局唯一、
-    //    迁移只许动自己的表（外键 REFERENCES 别家表是插头，允许；CREATE/ALTER 别家表禁止）
+    //    迁移只许动自己的表（外键 REFERENCES 别家表是插头，允许；CREATE/ALTER 别家表禁止）。
+    //    表分两类计数：drizzle sqliteTable 锚点 与 裸 SQL（CREATE TABLE）——裸 SQL 原子
+    //    没有 drizzle 表，只认 sqliteTable 会报「0 张表」假绿
     let dataIssues = 0;
     const tableOwner = new Map<string, string>(); // 表名 → schema.ts 绝对路径
+    const rawSqlTables = new Set<string>(); // 裸 SQL 建表（CREATE TABLE）去重
+    /** 表归属/前缀检查，drizzle 与裸 SQL 共用 */
+    const checkTable = (tbl: string, abs: string, f: string) => {
+      const owner = tableOwner.get(tbl);
+      if (owner && owner !== abs) {
+        logger.error(`❌ 表名撞车: "${tbl}" 同时定义在 ${relative(root, owner)} 与 ${f}——复制原子时请改表名前缀`);
+        dataIssues++;
+        errors++;
+      } else tableOwner.set(tbl, abs);
+      // 表名前缀 = 原子名（下划线化）：复制原子进项目时防撞、一眼知归属
+      const atomDir = atomOf(abs);
+      const prefix = atomDir ? basename(atomDir).replaceAll("-", "_") : undefined;
+      if (prefix && !tbl.startsWith(prefix)) {
+        logger.error(`❌ ${f}: 表 "${tbl}" 未以原子名 "${prefix}" 开头（契约 §9.1：表名前缀 = 原子名）`);
+        dataIssues++;
+        errors++;
+      }
+    };
     for await (const f of new Glob(`${pagesDir}/**/schema.ts`).scan({ cwd: root })) {
       const abs = resolve(root, f);
-      const src = readFileSync(abs, "utf8");
-      for (const m of src.matchAll(/sqliteTable\(\s*["'`](\w+)["'`]/g)) {
-        const tbl = m[1]!;
-        const owner = tableOwner.get(tbl);
-        if (owner && owner !== abs) {
-          logger.error(`❌ 表名撞车: "${tbl}" 同时定义在 ${relative(root, owner)} 与 ${f}——复制原子时请改表名前缀`);
-          dataIssues++;
-          errors++;
-        } else tableOwner.set(tbl, abs);
-        // 表名前缀 = 原子名（下划线化）：复制原子进项目时防撞、一眼知归属
-        const atomDir = atomOf(abs);
-        const prefix = atomDir ? basename(atomDir).replaceAll("-", "_") : undefined;
-        if (prefix && !tbl.startsWith(prefix)) {
-          logger.error(`❌ ${f}: 表 "${tbl}" 未以原子名 "${prefix}" 开头（契约 §9.1：表名前缀 = 原子名）`);
-          dataIssues++;
-          errors++;
-        }
+      // 剥注释：骨架里的注释示例（sqliteTable/CREATE TABLE）不算真实表锚点
+      const src = stripComments(readFileSync(abs, "utf8"));
+      for (const m of src.matchAll(/sqliteTable\(\s*["'`](\w+)["'`]/g))
+        checkTable(m[1]!, abs, f);
+      // 裸 SQL 原子：schema.ts 里直接写 CREATE TABLE 也算表锚点
+      for (const m of src.matchAll(/\bCREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?["'`]?(\w+)["'`]?/gi)) {
+        rawSqlTables.add(m[1]!);
+        checkTable(m[1]!, abs, f);
       }
     }
     // timestamp 撞名判定：同 timestamp + 同 name = 合法（拆分片段）；
@@ -847,7 +970,8 @@ cli.addCommand({
     const seenTs = new Map<number, Map<string, string>>(); // ts → (name → file)
     for await (const f of new Glob(`${pagesDir}/**/migrations.ts`).scan({ cwd: root })) {
       const abs = resolve(root, f);
-      const src = readFileSync(abs, "utf8");
+      // 剥注释：骨架注释里的 DDL 示例不算真实迁移
+      const src = stripComments(readFileSync(abs, "utf8"));
       // 逐条 journal 抓 name + timestamp（条目形如 { name: "...", timestamp: N, ... }）
       for (const m of src.matchAll(/\{[^{}]*?name:\s*["'`]([^"'`]+)["'`][^{}]*?timestamp:\s*(\d+)[^{}]*?\}/gs)) {
         const [, name, tsRaw] = m;
@@ -870,6 +994,7 @@ cli.addCommand({
       }
       const fileAtom = atomOf(abs);
       for (const m of src.matchAll(/\b(?:CREATE\s+TABLE|ALTER\s+TABLE|DROP\s+TABLE)\s+(?:IF\s+(?:NOT\s+)?EXISTS\s+)?["`](\w+)["`]/gi)) {
+        if (/^\s*CREATE\s+TABLE/i.test(m[0])) rawSqlTables.add(m[1]!);
         const owner = tableOwner.get(m[1]!);
         if (owner && atomOf(owner) !== fileAtom) {
           logger.error(`❌ ${f}: 迁移改动了别家原子的表 "${m[1]}"（属 ${relative(root, owner)}）——跨原子 DDL 禁止，外键引用才是插头`);
@@ -878,13 +1003,19 @@ cli.addCommand({
         }
       }
     }
-    if (!dataIssues) logger.info(`✅ 数据层门禁通过（${tableOwner.size} 张表 / ${seenTs.size} 条迁移）`);
+    // 表数区分 drizzle 锚点与裸 SQL；两者皆为 0 才报 0
+    const drizzleCount = tableOwner.size - [...rawSqlTables].filter((t) => tableOwner.has(t)).length;
+    if (!dataIssues)
+      logger.info(
+        `✅ 数据层门禁通过（drizzle 表 ${Math.max(drizzleCount, 0)} 张 / 裸 SQL 表 ${rawSqlTables.size} 张 / ${seenTs.size} 条迁移）`,
+      );
 
     // 9) 端点 schema 完整性（警告，不 fail）：2-arg 形态的端点 handler
     //    解构了 params/query/body 但路由没声明 schema——Eden/OpenAPI 的类型缺口
     let schemaWarnings = 0;
     for await (const f of new Glob(`${pagesDir}/**/*.actions.ts*`).scan({ cwd: root })) {
-      const src = readFileSync(resolve(root, f), "utf8");
+      // 先剥注释：骨架里的注释示例（.post("/", {...}, ({ body }) => ...)）不算违规
+      const src = stripComments(readFileSync(resolve(root, f), "utf8"));
       for (const m of src.matchAll(/\.(get|post|put|patch|delete)\(\s*["'`]([^"'`]+)["'`]\s*,\s*(?:async\s*)?\(\s*\{([^}]*)\}/g)) {
         const keys = m[3]!;
         if (/\bparams\b/.test(keys)) {

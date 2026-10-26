@@ -240,7 +240,7 @@ server.registerResource(
 // 无参数 = MCP server（stdio）
 const emitIdx = process.argv.indexOf("--emit");
 if (emitIdx !== -1) {
-  const out = resolve(REPO_ROOT, process.argv[emitIdx + 1] ?? "docs/atoms.md");
+  const out = resolve(REPO_ROOT, process.argv[emitIdx + 1] ?? "apps/docs/docs/atoms.md");
   const cards = await buildCards();
   const doc = [
     "<!-- 由 scripts/atoms-mcp.ts --emit 生成，勿手改 -->",

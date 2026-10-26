@@ -9,7 +9,7 @@
    不按“数据库/网络/状态管理”切，按“用户看到什么”切。
 
 3. **一棵目录树 `src/pages/`，页面文件夹内聚一切。**
-   整页、hx 片段、写端点、DI、service、repository、可选 React client，
+   整页、hx 片段、写端点、DI、service、repository、可选 Solid client，
    都在同一个文件夹里。URL = 文件夹路径，没有路由配置。
 
 4. **页面内标准结构：**
@@ -22,7 +22,7 @@ src/pages/<name>/
   <name>.di.ts            ← 服务声明（defineModule，L3）
   <name>.service.ts       ← 业务逻辑
   <name>.repository.ts    ← 数据访问
-  client/                 ← React 逃生舱（可选，L5）
+  client/                 ← Solid 逃生舱（可选，L5）
 ```
 
 5. **没有 .page.tsx 的文件夹 = 纯服务模块。**
@@ -50,8 +50,8 @@ src/pages/<name>/
 11. **services 抛 ServiceError，actions 零 try/catch 回显。**
     预期错误 `return status(code, { error })`；错误展示收敛在框架统一映射。
 
-12. **client 页整页归 React，与 htmx 永不操作同一 DOM。**
-    模态/表单 React 内实现；后端走 actions 的 JSON 端点；
+12. **client 页整页归 Solid，与 htmx 永不操作同一 DOM。**
+    模态/表单 Solid 内实现（UI 原语用 Kobalte）；后端走 actions 的 JSON 端点；
     依赖链禁 Node-only 包（dotenv/bun:sqlite 会让浏览器打包 500）。
 
 ## 四、依赖方向
@@ -72,12 +72,12 @@ src/pages/<name>/
 
 17. **加一个页面 = 加一个文件夹**（或 `elysiax new page <name>`）。
 18. **加一个纯服务 = 加 di + service**（或 `elysiax new service <name>`）。
-19. **页面升舱 React = 加 client/**（或 `elysiax new client <name>`）。
+19. **页面升舱 Solid = 加 client/**（或 `elysiax new client <name>`）。
 
 ---
 
 **一句话总纲：**
 
-> 一棵目录树，页面即文件夹，URL 即路径；htmx 优先、React 兜底；判定收敛框架层，业务代码零样板。
+> 一棵目录树，页面即文件夹，URL 即路径；htmx 优先、Solid 兜底（补 htmx 交互不足，React 已弃用）；判定收敛框架层，业务代码零样板。
 
 **完整文档见 [apps/website/docs](./apps/website/docs/)**：[框架概念](./apps/website/docs/elysiax.mdx) · [页面架构 L0-L5](./apps/website/docs/page-architecture.md) · [dockyard 实战](./apps/website/docs/dockyard.mdx) · [踩坑记录](./apps/website/docs/pitfalls.mdx)

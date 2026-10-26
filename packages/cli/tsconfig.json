@@ -5,6 +5,9 @@
     "module": "Preserve",
     "moduleDetection": "force",
     "allowJs": true,
+    // htmx 包出口直指源码 .tsx（@kitajs/html 语义），消费方必须带 JSX 配置
+    "jsx": "react-jsx",
+    "jsxImportSource": "@kitajs/html",
     "types": ["bun"],
 
     "moduleResolution": "bundler",

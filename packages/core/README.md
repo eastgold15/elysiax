@@ -1,6 +1,6 @@
 # @elysiax/core
 
-Bun + Elysia 2 + htmx（服务端 TSX）+ React 逃生舱的页面架构全栈框架。
+Bun + Elysia 2 + htmx（服务端 TSX）+ Solid 逃生舱的页面架构全栈框架。
 一棵目录树 `src/pages/`，URL = 文件夹路径，DI 由 InferDI 容器装配。
 
 ## 一个页面长什么样
@@ -11,7 +11,7 @@ src/pages/<name>/
   <name>.partials.tsx  # hx 片段子路由（defineRoutes，GET）
   <name>.actions.tsx   # 写端点子路由（POST/DELETE）
   <name>.di.ts         # 唯一事实源：服务声明
-  client/index.tsx     # 可选：client 模式（整页 React，L5 逃生舱）
+  client/index.tsx     # 可选：client 模式（整页 Solid，L5 逃生舱）
 ```
 
 没有 `.page.tsx` 的文件夹 = 纯服务模块（无路由）。`.controller./.ui.` 旧约定已废除，codegen 检测到报错。

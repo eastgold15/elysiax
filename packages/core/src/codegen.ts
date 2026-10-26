@@ -734,13 +734,21 @@ export async function codegen(
         // core 只按包名探测，不认识 Solid/babel 的任何细节。
         let scriptSrc = relative(shellsDir, p.clientIndex).replaceAll("\\", "/");
         let clientPlugin: Bun.BunPlugin | null = null;
+        // 两种失败必须分开：resolve 失败 = 未装（合法，走内置 JSX）；
+        // resolve 成功但 import/构造失败 = 装了但坏 → 直接抛，不折叠成"未装"。
+        let solidEntry: string | null = null;
         try {
-          const mod = (await import(Bun.resolveSync("@elysiax/solid", root))) as {
-            solidPlugin: () => Bun.BunPlugin;
-          };
-          clientPlugin = mod.solidPlugin();
+          solidEntry = Bun.resolveSync("@elysiax/solid", root);
         } catch {
           /* 应用未装 @elysiax/solid → 走 Bun 内置 JSX transform */
+        }
+        if (solidEntry) {
+          const mod = (await import(solidEntry)) as {
+            solidPlugin: (options?: { resolveFrom?: string; dev?: boolean }) => Bun.BunPlugin;
+          };
+          // resolveFrom=应用根：solid-js 一律解析到宿主实体（peer 去重，见 solid 包注释）；
+          // dev 决定挑 browser.development（dist/dev.js）还是 browser（dist/solid.js）入口
+          clientPlugin = mod.solidPlugin({ resolveFrom: root, dev: process.env.NODE_ENV !== "production" });
         }
         if (clientPlugin) {
           await Bun.build({
@@ -953,11 +961,17 @@ export async function codegen(
         "  );",
         "",
         `  const port = Number(process.env.PORT ?? ${d.port ?? 3000});`,
+        "  const deadline = Date.now() + 30_000;",
         "  for (;;) {",
         "    try {",
         "      if ((await fetch(`http://localhost:${port}/`)).ok) break;",
         "    } catch {}",
         "    if (server.exitCode !== null) throw new Error(\"server 进程提前退出\");",
+        "    if (Date.now() > deadline)",
+        "      throw new Error(",
+        "        `等待 server 就绪超时（30s，端口 ${port}）：进程仍在运行但 / 无响应。` +",
+        "        \"server 的 stdout/stderr 已继承到本终端，请往上翻看启动日志。\",",
+        "      );",
         "    await Bun.sleep(100);",
         "  }",
         "",

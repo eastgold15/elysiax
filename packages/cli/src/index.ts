@@ -725,14 +725,11 @@ cli.addCommand({
     cpSync(source, target, { recursive: true });
     logger.info(`✅ 已安装 ${name} → ${baseDir}/${name}/`);
     if (manifest?.route) logger.info(`   路由前缀: ${manifest.route}`);
-    // 装配校验（依赖是否都有提供者）交给 gen，错误会在那里集中报出
+    // 装配校验（依赖是否都有提供者）交给 gen，错误会在那里集中报出。
+    // 失败必须抛出（退出码非零）：CI/脚本靠退出码区分成败，只打日志等于静默放行。
     const { codegen } = await import("@elysiax/core");
-    try {
-      await codegen(process.cwd());
-      logger.info(`   .elysiax/ 已重新生成，依赖校验通过`);
-    } catch (error) {
-      logger.error(`   装配校验失败: ${(error as Error).message}`);
-    }
+    await codegen(process.cwd());
+    logger.info(`   .elysiax/ 已重新生成，依赖校验通过`);
   },
 });
 
@@ -1368,6 +1365,9 @@ cli.addCommand({
   ],
   execute: async ({ options, logger }) => {
     const root = process.cwd();
+    // codegen 的 client 预打包按 NODE_ENV 挑 solid 入口（dev.js/solid.js）——
+    // build 是生产构建，先烙死再 codegen，与下面 compile 的 define 一致
+    process.env.NODE_ENV = "production";
     const { codegen, loadConfig } = await import("@elysiax/core");
     const config = await loadConfig(root);
     await codegen(root, config);

@@ -94,6 +94,16 @@ export async function start(opts: {
   for (const p of pages) {
     if (p.client && p.shell) routes[p.url] = p.shell;
     else if (p.page) routes[p.url] = handle;
+    // 非法组合必须启动即抛，否则 URL 静默 404、排查无门。
+    // 注意：仅有 partials/actions 的条目合法（只出 hx 片段/写端点，URL 本身无整页）。
+    else if (p.client)
+      throw new Error(
+        `页面 ${p.url} 声明了 client 模式但缺少 shell（.elysiax/shells/ 未生成？请先跑 elysiax gen）`,
+      );
+    else if (!p.partials && !p.actions)
+      throw new Error(
+        `页面 ${p.url} 没有任何可服务的内容（page/client/partials/actions 全空，请重新跑 elysiax gen）`,
+      );
   }
   if (opts.gen.globalCss)
     routes[`${apiPrefix}/assets/global.css`] = new Response(opts.gen.globalCss, {

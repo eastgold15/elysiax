@@ -80,4 +80,4 @@ src/pages/<name>/
 
 > 一棵目录树，页面即文件夹，URL 即路径；htmx 优先、Solid 兜底（补 htmx 交互不足，React 已弃用）；判定收敛框架层，业务代码零样板。
 
-**完整文档见 [apps/website/docs](./apps/website/docs/)**：[框架概念](./apps/website/docs/elysiax.mdx) · [页面架构 L0-L5](./apps/website/docs/page-architecture.md) · [dockyard 实战](./apps/website/docs/dockyard.mdx) · [踩坑记录](./apps/website/docs/pitfalls.mdx)
+**完整文档见 [apps/docs/docs](./apps/docs/docs/)**：[框架概念](./apps/docs/docs/elysiax.mdx) · [页面架构 L0-L5](./apps/docs/docs/page-architecture.md) · [踩坑记录](./apps/docs/docs/pitfalls.mdx)

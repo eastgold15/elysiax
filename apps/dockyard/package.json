@@ -17,6 +17,7 @@
     "@elysiax/core": "workspace:*",
     "@inferdi/elysia": "workspace:*",
     "@inferdi/inferdi": "^6.1.0",
+    "@kobalte/core": "^0.13.14",
     "@meitaim/ssh": "^1.0.0",
     "@types/dotenv": "^8.2.3",
     "@visulima/fs": "^6.0.18",

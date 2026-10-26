@@ -373,6 +373,9 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
           top: `${n().position.y}px`,
           width: n().width ? `${n().width}px` : undefined,
           height: n().height ? `${n().height}px` : undefined,
+          // 非拖拽态的位置变化走补间（拖拽被拒弹回原位等场景）；
+          // 拖拽中禁用过渡，否则卡片追不上指针
+          transition: n().dragging ? undefined : "left .25s ease, top .25s ease",
         }}
         onPointerDown={onDown}
         onPointerMove={onMove}

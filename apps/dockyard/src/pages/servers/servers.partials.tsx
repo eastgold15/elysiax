@@ -7,6 +7,11 @@ import type { ServerResource } from "../resources/resources.socket";
 import type { ServerService } from "./servers.service";
 import type { ResourceService } from "../resources/resources.socket";
 import { Badge, Button, Empty, Field, PageHeader } from "../../shared/ui";
+import { isLocalHost } from "./servers.socket";
+
+/** 本机/远程徽章（部署通道分界线：本机=回环地址，画布上两区硬隔离） */
+const scopeBadge = (s: Server) =>
+  isLocalHost(s.host) ? <Badge label="本机" tone="ok" /> : <Badge label="远程" tone="muted" />;
 
 const dockerBadge = (s: Server) => {
   if (s.dockerStatus === "ok") return <Badge label={`docker ${s.dockerVersion ?? "ok"}`} tone="ok" />;
@@ -18,6 +23,7 @@ export const ServerRow: Component<{ server: Server; message?: string }> = ({ ser
   <div class="border-b border-harbor-800/60" id={`server-${server.id}`}>
     <div class="flex h-12 items-center gap-4 px-6 hover:bg-harbor-900">
       <span class="text-sm font-medium text-neutral-100">{server.name}</span>
+      {scopeBadge(server)}
       <span class="mono text-xs text-neutral-500">{server.user}@{server.host}:{server.port}</span>
       <span class="mono text-xs text-neutral-600">{server.authType}</span>
       <span class="ml-auto">{dockerBadge(server)}</span>

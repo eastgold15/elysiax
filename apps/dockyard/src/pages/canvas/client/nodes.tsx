@@ -10,6 +10,7 @@ import { api, canvasApi, unwrap } from "./api";
 import { lens } from "./lens";
 import { useServiceState, useTargetLive } from "./live";
 import { emitRefresh, useUi } from "./ui";
+import { confirmAction, toast } from "./feedback";
 import { HandleView, Resizer, type FlowNodeBase } from "@elysiax/flow";
 
 export type ServerFlowNode = FlowNodeBase & { type: "server"; data: { server: CardModel["server"] } };
@@ -94,15 +95,18 @@ async function deployTarget(ui: ReturnType<typeof useUi>, targetId: number) {
 }
 
 async function removeTarget(t: { id: number; name: string; logical: boolean }) {
-  const hint = t.logical
-    ? `移除逻辑库「${t.name}」的记录？（远端数据库保留，不会 DROP）`
-    : `移除部署目标「${t.name}」？（远端容器不动）`;
-  if (!confirm(hint)) return;
+  const ok = await confirmAction({
+    title: t.logical ? `移除逻辑库「${t.name}」？` : `移除部署目标「${t.name}」？`,
+    body: t.logical ? "远端数据库保留，不会 DROP。" : "远端容器不动。",
+    confirmLabel: "移除",
+    danger: true,
+  });
+  if (!ok) return;
   try {
     await unwrap(api.targets({ id: t.id }).delete());
   } catch (e) {
     // 例如：实例下还有逻辑库，被阻止（409 + 错误文本）
-    alert((e as Error).message);
+    toast((e as Error).message, "err");
     return;
   }
   emitRefresh();

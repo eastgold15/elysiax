@@ -59,6 +59,17 @@
 - Deployments Tab：trigger 徽章（自动/回滚←#n）、每行「回滚」按钮（无快照置灰）、部署策略三态选择器（手动/仅提醒/自动）、本地导入 app 的「传输产物」按钮；
 - 跨服务器拖拽迁移：命中另一台服务器卡触发 move 通道，跨界拒绝时 alert + 弹回原位（体验层预判，服务端兜底）。
 
+2026-10-26 区域硬隔离补刀（源码已改，徽章已浏览器验，拖拽守卫未验）：
+
+- servers 列表每行加「本机/远程」徽章（isLocalHost 回环地址派生，正主在 servers.socket）；
+- 画布服务器卡跨区禁拖：本机卡不能进远程区（x≥0 拒绝）、远程卡不能进本机区——client 预判 alert 弹回 + 服务端 PATCH /nodes 422 兜底。
+
+2026-10-26 画布交互反馈整改（源码已改，浏览器未验；回应用户"丑/瞬移/原生弹窗"三点批评）：
+
+- 拖拽被拒改为**动画弹回起点**：flow NodeShell 非拖拽态 `left/top` 加 .25s 补间（拖拽中禁用），board 记录 dragOrigin、拒绝时 bounce——有意偏差：位移动效规范优先 transform/opacity，此处单节点低频弹回用 left/top 过渡，待验收确认观感与性能；
+- 区域隔离从"坐标魔法线"重构为**车道模型**（`canvas/zones.ts` 单一事实源，用户批评"空气墙和背景不同步"后的重做）：中立带 ±24px，本机车道右缘钉 -GAP、远程车道左缘钉 +GAP；背景 tint 车道由卡片 bounds 派生、与墙读同一规则，不可能脱节；拖拽中按**卡片完整矩形**钳制，服务端 422 同规则裁决，右键建卡自动归位本车道；
+- 画布 client 全面去原生弹窗：新建 `client/feedback.tsx`（Kobalte Dialog + Toast），alert→toast、confirm→confirmAction、prompt→promptAction，覆盖 board/drawers/nodes 全部 8 处。
+
 ### 全局层（app.layout + global.css + shared/ui）
 
 **状态：未开始**

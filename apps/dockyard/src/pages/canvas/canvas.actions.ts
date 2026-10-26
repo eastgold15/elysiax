@@ -7,6 +7,7 @@ import type { EdgeService } from "../edge/edge.socket";
 import type { BoardModel, CardModel } from "./canvas.model";
 import type { CanvasService } from "./canvas.service";
 import { isLocalHost } from "./canvas.socket";
+import { clampCardX, violatesLane } from "./zones";
 
 interface Ctx {
   project: ProjectService;
@@ -144,15 +145,20 @@ export default defineRoutes()
   // 首帧发容器状态全量快照（订阅即齐，不等下轮 diff）
   .get("/events", ({ di }) =>
     events.stream(CANVAS_CHANNEL, () => di.get("containerPoller").statesAll()))
-  // 服务器卡上画：幂等——同 serverId 已存在则返回已有卡，不新建
+  // 服务器卡上画：幂等——同 serverId 已存在则返回已有卡，不新建。
+  // 落点钳进该服务器的车道（右键在对面车道建卡时直接归位，不报错——建卡无恶意场景）
   .post(
     "/nodes",
     { body: t.Object({ serverId: t.Number(), x: t.Number(), y: t.Number() }) },
     async ({ di, body }) => {
-      return ctxOf(di).canvas.addNode(body.serverId, body.x, body.y);
+      const ctx = ctxOf(di);
+      const server = await ctx.server.byId(body.serverId);
+      const x = server ? clampCardX(isLocalHost(server.host), body.x, 320) : body.x;
+      return ctx.canvas.addNode(body.serverId, x, body.y);
     },
   )
-  // 拖拽/resize 持久化
+  // 拖拽/resize 持久化。区域硬隔离：车道规则（zones.ts 单一事实源）——
+  // 卡片完整矩形不许压中立带，服务端按生效后的矩形裁决（client 钳制只是体验层）。
   .patch(
     "/nodes/:id",
     {
@@ -165,7 +171,19 @@ export default defineRoutes()
       }),
     },
     async ({ di, params, body, set }) => {
-      await ctxOf(di).canvas.moveNode(params.id, body);
+      const ctx = ctxOf(di);
+      if (body.x !== undefined || body.w !== undefined) {
+        const node = await ctx.canvas.byId(params.id);
+        const server = node ? await ctx.server.byId(node.serverId) : undefined;
+        if (node && server) {
+          const local = isLocalHost(server.host);
+          const x = body.x ?? node.x, w = body.w ?? node.w;
+          if (violatesLane(local, x, w)) {
+            return status(422, { error: local ? "本机服务器不能压到中立带（远程区一侧）" : "远程服务器不能压到中立带（本机区一侧）" });
+          }
+        }
+      }
+      await ctx.canvas.moveNode(params.id, body);
       set.status = 204;
     },
   )

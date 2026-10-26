@@ -8,6 +8,7 @@ import { createSignal, Match, onMount, Show, Switch } from "solid-js";
 import { canvasApi, unwrap } from "./api";
 import { Board } from "./board";
 import { DeployLogModal, DomainsModal, EnvDrawer, NewAppWizard, NewDbModal, ServiceDrawer } from "./drawers";
+import { FeedbackHost } from "./feedback";
 import { lens, setLens } from "./lens";
 import { emitRefresh, UiContext, type UiBus, type View } from "./ui";
 
@@ -123,6 +124,8 @@ export function App() {
         <Show when={view()} keyed>
           {(v) => <DrawerHost view={v} />}
         </Show>
+        {/* toast/确认框/输入框宿主（应用内反馈件，替代原生弹窗） */}
+        <FeedbackHost />
       </Show>
       </div>
     </UiContext.Provider>

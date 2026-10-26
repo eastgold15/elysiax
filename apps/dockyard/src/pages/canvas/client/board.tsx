@@ -1,5 +1,5 @@
 /** @jsxImportSource solid-js */
-import { createEffect, createSignal, For, onCleanup, onMount, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js";
 import { createStore } from "solid-js/store";
 import type { BoardModel, CardModel, TargetModel } from "../canvas.model";
 import {
@@ -9,6 +9,8 @@ import {
 import { api, canvasApi, unwrap } from "./api";
 import { emptyLive, LiveContext, LOG_TAIL_LIMIT, type LiveState } from "./live";
 import { useUi } from "./ui";
+import { confirmAction, promptAction, toast } from "./feedback";
+import { clampCardX, laneRect } from "../zones";
 import { FlowView, type ConnectResult, type FlowEdge, type NodeViewProps } from "@elysiax/flow";
 
 /** 全局 SSE 端点（世界地图：无 projectId 路径段；routes.gen 由 dev server 再生成，这里用字面量） */
@@ -342,8 +344,16 @@ export function Board(props: { lens: () => number | null }) {
   const resizingIds = new Set<string>();
 
   const onNodeMove = (id: string, pos: { x: number; y: number }) => {
+    // 区域硬隔离的体验层：车道是一堵墙，拖拽中把卡片完整矩形钳在本车道内
+    // （规则来自 zones.ts 单一事实源，服务端 422 仍是裁决者）
+    const dragged = nodes().find((n) => n.id === id);
+    let p = pos;
+    if (dragged?.type === "server") {
+      const local = (dragged.data as { server: { local: boolean } }).server.local;
+      p = { x: clampCardX(local, pos.x, dragged.width ?? 0), y: pos.y };
+    }
     setNodes((ns) => fitParents(
-      ns.map((n) => (n.id === id ? { ...n, position: pos, dragging: true } : n)),
+      ns.map((n) => (n.id === id ? { ...n, position: p, dragging: true } : n)),
       resizingIds,
     ));
   };
@@ -422,17 +432,35 @@ export function Board(props: { lens: () => number | null }) {
     return { x, y, serverId: cur.type === "server" ? cur.id : "" };
   };
 
-  const onNodeDragStart = () => {
-    interacting = true;
+  // 拖拽起点（flow 坐标，相对父）：拖拽被拒时动画弹回这里
+  const dragOrigin = new Map<string, { x: number; y: number }>();
+
+  /** 动画弹回：dragging 已置 false（NodeShell 的 left/top 过渡生效），位置补间回起点 */
+  const bounce = (id: string) => {
+    const o = dragOrigin.get(id);
+    if (o) setNodes((ns) => ns.map((n) => (n.id === id ? { ...n, position: { ...o } } : n)));
   };
 
-  const onNodeDragStop = (node: CanvasFlowNode) => {
+  const onNodeDragStart = (node: CanvasFlowNode) => {
+    interacting = true;
+    dragOrigin.set(node.id, { ...node.position });
+  };
+
+  const onNodeDragStop = async (node: CanvasFlowNode) => {
     interacting = false;
     setNodes((ns) => ns.map((n) => (n.id === node.id ? { ...n, dragging: false } : n)));
     const x = Math.round(node.position.x), y = Math.round(node.position.y);
     if (node.type === "server") {
       const nodeId = Number(node.id.replace("srv-", ""));
-      void unwrap(canvasApi.nodes({ id: nodeId }).patch({ x, y }));
+      // onNodeMove 已把分界线钳成墙，这里只剩服务端 422 兜底（如存量脏数据卡在对侧）
+      try {
+        await unwrap(canvasApi.nodes({ id: nodeId }).patch({ x, y }));
+      } catch (e) {
+        toast((e as Error).message, "err");
+        bounce(node.id);
+      }
+      flushPendingRefetch();
+      return;
     } else if (node.type === "group") {
       void unwrap(canvasApi.groups({ id: Number(node.id.replace("grp-", "")) }).patch({ x, y }));
     } else if (node.type === "app" || node.type === "db") {
@@ -450,21 +478,42 @@ export function Board(props: { lens: () => number | null }) {
         const t = findTarget(targetId);
         const from = structure.find((c) => `srv-${c.node.id}` === abs.serverId);
         const to = structure.find((c) => `srv-${c.node.id}` === srvHit.id);
-        const revert = () => void refetch(); // 本地已拖走，重拉结构恢复原位
+        const revert = () => bounce(node.id); // 动画弹回拖拽起点
         const crossing = from && to && from.server.local !== to.server.local;
         if (crossing && t) {
           // 体验层预判（服务端仍兜底）：跨界要么 app 且产物已传输，要么拒绝
-          if (t.kind !== "app") { alert("数据库不能跨区移动——数据不随卡走，请在目标服务器新建实例。"); return revert(); }
-          if (!t.artifactShipped) { alert("构建产物尚未传输到云端——先在服务抽屉执行「传输产物」。"); return revert(); }
-          if (!confirm(`将「${t.name}」迁移到远程服务器「${to.server.name}」？（旧容器不会自动清理）`)) return revert();
+          if (t.kind !== "app") {
+            toast("数据库不能跨区移动——数据不随卡走，请在目标服务器新建实例。", "err");
+            return revert();
+          }
+          if (!t.artifactShipped) {
+            toast("构建产物尚未传输到云端——先在服务抽屉执行「传输产物」。", "err");
+            return revert();
+          }
+          // 决策期间把卡钉在落点（dragging=true 让 deriveNodes 不用结构值覆盖它，
+          // 否则确认框打开期间一次 refetch 会把卡瞬移回起点——原生 confirm 是同步阻塞，没这个问题）
+          setNodes((ns) => ns.map((n) => (n.id === node.id ? { ...n, dragging: true } : n)));
+          const ok = await confirmAction({
+            title: `迁移「${t.name}」到「${to.server.name}」？`,
+            body: "跨区迁移要求构建产物已传输；旧服务器上的容器不会自动清理。",
+            confirmLabel: "迁移",
+          });
+          if (!ok) {
+            setNodes((ns) => ns.map((n) => (n.id === node.id ? { ...n, dragging: false } : n)));
+            return revert();
+          }
         }
         void (async () => {
           try {
             await unwrap(api.targets({ id: targetId }).move.patch({ nodeId: to!.node.id }));
+            // 成功：归属变了，清钉住标记让 deriveNodes 用新结构（x/y 已清 null → 自动摆位）
+            setNodes((ns) => ns.map((n) => (n.id === node.id ? { ...n, dragging: false } : n)));
+            await refetch();
           } catch (e) {
-            alert(`迁移被拒绝：${(e as Error).message}`);
+            toast(`迁移被拒绝：${(e as Error).message}`, "err");
+            setNodes((ns) => ns.map((n) => (n.id === node.id ? { ...n, dragging: false } : n)));
+            bounce(node.id);
           }
-          await refetch(); // 无论成败都重拉：成功=结构变了，失败=恢复原位
         })();
         flushPendingRefetch();
         return;
@@ -516,27 +565,35 @@ export function Board(props: { lens: () => number | null }) {
     }
   };
 
-  // 本机/远程分区：分界线固定在 flow 坐标 x=0，本机区 x<0、远程区 x>=0。
-  // 渲染在 FlowView transform 层内（background 插槽），随 pan/zoom；超大半径覆盖任意视野。
-  const ZONE = 100000;
-  const zoneBackground = (
-    <div
-      class="pointer-events-none absolute"
-      style={{ left: `${-ZONE}px`, top: `${-ZONE}px`, width: `${ZONE * 2}px`, height: `${ZONE * 2}px` }}
-    >
-      <div class="absolute top-0 bottom-0 left-0 w-1/2 bg-tide-400/[0.04]" />
-      <div class="absolute top-0 right-0 bottom-0 w-1/2 bg-brass-500/[0.03]" />
-      {/* 分界线 x=0 */}
-      <div class="absolute top-0 bottom-0 left-1/2 w-px bg-harbor-500/50" />
-      <span
-        class="absolute text-xs font-medium tracking-widest text-tide-400/50 select-none"
-        style={{ top: `${ZONE + 16}px`, right: `calc(50% + 12px)` }}
-      >本机</span>
-      <span
-        class="absolute text-xs font-medium tracking-widest text-brass-500/50 select-none"
-        style={{ top: `${ZONE + 16}px`, left: `calc(50% + 12px)` }}
-      >远程</span>
-    </div>
+  // 车道背景：本机/远程两个车道矩形从卡片 bounds 派生（内缘钉在中立带，zones.ts 单一事实源），
+  // 车道即容器——tint 就是约束的可视化，墙与背景不可能脱节。渲染在 FlowView transform 层内随 pan/zoom。
+  const lanes = createMemo(() => {
+    const srvs = nodes().filter((n) => n.type === "server");
+    const rectOf = (local: boolean) =>
+      laneRect(local, srvs
+        .filter((n) => (n.data as { server: { local: boolean } }).server.local === local)
+        .map((n) => ({ x: n.position.x, y: n.position.y, w: n.width ?? 0, h: n.height ?? 0 })));
+    return [
+      { local: true, label: "本机", rect: rectOf(true), cls: "border-tide-400/20 bg-tide-400/[0.04] text-tide-400/60" },
+      { local: false, label: "远程", rect: rectOf(false), cls: "border-brass-500/20 bg-brass-500/[0.03] text-brass-500/60" },
+    ];
+  });
+  const laneBackground = (
+    <For each={lanes()}>
+      {(lane) => (
+        <div
+          class={`pointer-events-none absolute rounded-xl border border-dashed ${lane.cls}`}
+          style={{
+            left: `${lane.rect.x}px`, top: `${lane.rect.y}px`,
+            width: `${lane.rect.w}px`, height: `${lane.rect.h}px`,
+          }}
+        >
+          <span class="absolute top-3 left-4 text-xs font-medium tracking-widest select-none">
+            {lane.label}
+          </span>
+        </div>
+      )}
+    </For>
   );
 
   return (
@@ -545,7 +602,7 @@ export function Board(props: { lens: () => number | null }) {
         nodes={nodes()}
         edges={edges()}
         nodeViews={nodeViews}
-        background={zoneBackground}
+        background={laneBackground}
         onNodeMove={onNodeMove}
         onNodeDragStart={onNodeDragStart}
         onNodeDragStop={onNodeDragStop}
@@ -588,7 +645,7 @@ export function Board(props: { lens: () => number | null }) {
                 <MenuItem
                   label="重命名分组"
                   onClick={async () => {
-                    const name = prompt("分组名称");
+                    const name = await promptAction({ title: "重命名分组" });
                     if (!name?.trim()) return;
                     await unwrap(canvasApi.groups({ id: m().groupId! }).patch({ name: name.trim() }));
                     await refetch();
@@ -598,7 +655,13 @@ export function Board(props: { lens: () => number | null }) {
                   label="删除分组"
                   danger
                   onClick={async () => {
-                    if (!confirm("删除分组？组内服务卡会回落到服务器卡（部署不动）")) return;
+                    const ok = await confirmAction({
+                      title: "删除分组？",
+                      body: "组内服务卡会回落到服务器卡（部署不动）。",
+                      confirmLabel: "删除",
+                      danger: true,
+                    });
+                    if (!ok) return;
                     await unwrap(canvasApi.groups({ id: m().groupId! }).delete());
                     await refetch();
                   }}
@@ -620,7 +683,7 @@ export function Board(props: { lens: () => number | null }) {
                 <MenuItem
                   label="新建分组"
                   onClick={async () => {
-                    const name = prompt("分组名称", "group");
+                    const name = await promptAction({ title: "新建分组", initial: "group" });
                     if (!name?.trim()) return;
                     await unwrap(canvasApi.nodes({ id: m().nodeId! }).groups.post({ name: name.trim() }));
                     await refetch();
@@ -630,7 +693,13 @@ export function Board(props: { lens: () => number | null }) {
                   label="移除卡片"
                   danger
                   onClick={async () => {
-                    if (!confirm("移除这张卡片？（服务器与部署目标不动）")) return;
+                    const ok = await confirmAction({
+                      title: "移除这张卡片？",
+                      body: "只是从画布移除卡片，服务器与部署目标不动。",
+                      confirmLabel: "移除",
+                      danger: true,
+                    });
+                    if (!ok) return;
                     await unwrap(canvasApi.nodes({ id: m().nodeId! }).delete());
                     await refetch();
                   }}

@@ -22,6 +22,7 @@ import { serviceEnvToText, textToEnvMap } from "../../../shared/env-text";
 import { api, deployPaths, unwrap } from "./api";
 import { ConsoleView } from "./console";
 import { emitRefresh, useUi } from "./ui";
+import { confirmAction } from "./feedback";
 import { useDeployLog, useTargetLive } from "./live";
 
 // ── 壳与通用件 ──
@@ -586,7 +587,7 @@ export function DomainsModal(props: { targetId: number }) {
   onMount(load);
 
   const remove = async (d: Domain) => {
-    if (!confirm(`解绑 ${d.hostname}？`)) return;
+    if (!(await confirmAction({ title: `解绑 ${d.hostname}？`, confirmLabel: "解绑", danger: true }))) return;
     try {
       await unwrap(api.domains({ id: d.id }).delete());
       emitRefresh();
@@ -1077,8 +1078,14 @@ function DeploymentsTab(props: { data: ServiceDrawerData; svc?: string; mutate: 
                   disabled={!(d.status === "success" && d.snapshotJson)}
                   title={d.status === "success" && d.snapshotJson ? `回滚到 run #${d.id}` : "无快照，无法回滚"}
                   onClick={() => {
-                    if (!confirm(`回滚到 run #${d.id}（${d.commitSha ?? "无 sha"}）？容器将切回当时的镜像与配置。`)) return;
                     void (async () => {
+                      const ok = await confirmAction({
+                        title: `回滚到 run #${d.id}？`,
+                        body: `提交 ${d.commitSha ?? "无 sha"}——容器将切回当时的镜像与配置。`,
+                        confirmLabel: "回滚",
+                        danger: true,
+                      });
+                      if (!ok) return;
                       await unwrap(api.targets({ id: t().id }).rollback.post({ runId: d.id }));
                       ui.open({ kind: "log", targetId: t().id });
                     })();
@@ -1261,11 +1268,13 @@ function NetworkTab(props: { data: ServiceDrawerData; svc?: string; mutate: Muta
               <button
                 class="ml-auto text-neutral-600 hover:text-signal-500"
                 onClick={() => {
-                  if (!confirm(`解绑 ${d.hostname}？`)) return;
-                  void props.mutate(
-                    () => unwrap(api.targets({ id: t().id }).service.domains({ domainId: d.id }).delete({ query: { svc: props.svc } })),
-                    { refreshBoard: true },
-                  );
+                  void (async () => {
+                    if (!(await confirmAction({ title: `解绑 ${d.hostname}？`, confirmLabel: "解绑", danger: true }))) return;
+                    void props.mutate(
+                      () => unwrap(api.targets({ id: t().id }).service.domains({ domainId: d.id }).delete({ query: { svc: props.svc } })),
+                      { refreshBoard: true },
+                    );
+                  })();
                 }}
               >
                 ✕

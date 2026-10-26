@@ -111,6 +111,7 @@ export function Resizer(props: {
   let start: { px: number; py: number; w: number; h: number } | null = null;
 
   const onDown = (e: PointerEvent) => {
+    if (e.button !== 0) return; // 只认左键，右/中键不进拉伸态
     e.stopPropagation();
     e.preventDefault();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
@@ -147,6 +148,7 @@ export function Resizer(props: {
       onPointerDown={onDown}
       onPointerMove={onMove}
       onPointerUp={onUp}
+      onPointerCancel={() => (start = null)}
     />
   );
 }
@@ -254,6 +256,7 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
   // ── 视口平移/缩放 ──
   let panStart: { px: number; py: number; tx: number; ty: number } | null = null;
   const onPanePointerDown = (e: PointerEvent) => {
+    if (e.button !== 0) return; // 右/中键不平移不起线
     // 事件委托接 Handle 拖线起点（HandleView 带 data-nodrag，下面的 nodrag 早退会拦掉它，
     // 必须先判）：点到 source handle = 开始拖线
     const handle = (e.target as HTMLElement).closest("[data-handle-type='source']");
@@ -344,6 +347,7 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
     let moved = false;
 
     const onDown = (e: PointerEvent) => {
+      if (e.button !== 0) return; // 右键留给 contextmenu，不进拖拽态
       if ((e.target as HTMLElement).closest("[data-nodrag], a, button, input, select, textarea")) return;
       e.stopPropagation();
       moved = false;
@@ -385,6 +389,11 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
         onPointerDown={onDown}
         onPointerMove={onMove}
         onPointerUp={onUp}
+        onPointerCancel={() => {
+          // 触摸/触控笔中断：只清状态不提交 dragStop，避免陈旧起点跳变
+          dragStart = null;
+          moved = false;
+        }}
         onContextMenu={(e) => {
           e.stopPropagation();
           props.onNodeContextMenu?.(e, n());
@@ -474,6 +483,11 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
         onPointerDown={onPanePointerDown}
         onPointerMove={onPanePointerMove}
         onPointerUp={onPanePointerUp}
+      onPointerCancel={() => {
+        panStart = null;
+        connSource = null;
+        setConn(null);
+      }}
         onClick={(e) => {
           if (!(e.target as HTMLElement).closest(".flow-node, [data-flow-menu]")) {
             props.onNodeSelect?.(null);

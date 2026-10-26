@@ -891,17 +891,31 @@ export async function codegen(
     const cssFile = join(root, config.clientCss ?? "src/global.css");
     if (existsSync(cssFile)) {
       let cssText: string;
+      let pluginPath: string | null = null;
       try {
-        const pluginPath = Bun.resolveSync("bun-plugin-tailwind", root);
-        const tailwind = (await import(pluginPath)).default;
-        const out = await Bun.build({
-          entrypoints: [cssFile],
-          plugins: [tailwind],
-          throw: true,
-        });
-        cssText = await out.outputs[0]!.text();
+        pluginPath = Bun.resolveSync("bun-plugin-tailwind", root);
       } catch {
-        cssText = await Bun.file(cssFile).text(); // 无插件/编译失败 → 原样服务
+        /* 插件未安装 → 原样服务 */
+      }
+      if (pluginPath) {
+        try {
+          const tailwind = (await import(pluginPath)).default;
+          const out = await Bun.build({
+            entrypoints: [cssFile],
+            plugins: [tailwind],
+            throw: true,
+          });
+          cssText = await out.outputs[0]!.text();
+        } catch (error) {
+          // 插件装了但编译失败：原样服务会把含 @import 的生 CSS 发出去、样式全废，
+          // 必须留下警告（此前静默吞掉，页面裸奔无任何日志）
+          console.warn(
+            `[elysiax] tailwind 编译失败，改原样服务未编译 CSS：${(error as Error).message}`,
+          );
+          cssText = await Bun.file(cssFile).text();
+        }
+      } else {
+        cssText = await Bun.file(cssFile).text();
       }
       writeFileSync(
         join(outDir, "assets.gen.ts"),

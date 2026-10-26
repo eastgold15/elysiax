@@ -5,12 +5,46 @@ import { existsSync, cpSync, readFileSync, writeFileSync, readdirSync, mkdirSync
 import { resolve, basename, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** 剥离 // 行注释与 块注释（正则级实现，骨架/插座场景足够；
- *  带 [^:] 前缀兜底避免误伤字符串里的 "https://…"） */
+/** 剥离 // 行注释与 块注释（字符级状态机：字符串/模板串/正则里的 // 不误伤，
+ *  doctor 的检查 8/11 都基于剥皮后的源码，误伤会产生幻影对比） */
 function stripComments(src: string): string {
-  return src
-    .replaceAll(/\/\*[\s\S]*?\*\//g, "")
-    .replaceAll(/(^|[^:"'`])\/\/[^\n]*/g, "$1");
+  let out = "";
+  let i = 0;
+  let quote: string | null = null; // ' " ` 之一，null = 不在字符串里
+  while (i < src.length) {
+    const c = src[i]!;
+    const next = src[i + 1];
+    if (quote) {
+      out += c;
+      if (c === "\\") {
+        out += next ?? "";
+        i += 2;
+        continue;
+      }
+      if (c === quote) quote = null;
+      i++;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === "`") {
+      quote = c;
+      out += c;
+      i++;
+      continue;
+    }
+    if (c === "/" && next === "/") {
+      while (i < src.length && src[i] !== "\n") i++;
+      continue;
+    }
+    if (c === "/" && next === "*") {
+      i += 2;
+      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) i++;
+      i += 2;
+      continue;
+    }
+    out += c;
+    i++;
+  }
+  return out;
 }
 
 /** 按顶层逗号切分声明列表（忽略括号/方括号/花括号内部的逗号） */
@@ -802,8 +836,11 @@ cli.addCommand({
     const { Glob } = await import("bun");
     for await (const f of new Glob(`${pagesDir}/**/client/**/*.ts*`).scan({ cwd: root })) {
       const src = readFileSync(resolve(root, f), "utf8");
-      // 只查值级 import（type import 会被擦除，不进入浏览器包）
-      for (const m of src.matchAll(/^import\s+(?!type\b)[^"']*from\s+["']([^"']+)["']/gm)) {
+      // 只查值级 import（type import 会被擦除，不进入浏览器包）；
+      // 第二分支兜副作用导入（import "bun:sqlite" 无 from 子句）
+      const importRe =
+        /^import\s+(?!type\b)(?:[^"']*from\s+)?["']([^"']+)["']/gm;
+      for (const m of src.matchAll(importRe)) {
         const spec = m[1]!;
         if (/\.elysiax(\/index)?$/.test(spec) || spec === ".elysiax" || spec === "@gen") {
           logger.error(
@@ -1109,10 +1146,11 @@ cli.addCommand({
       // HEAD:./<rel> 的 ./ 前缀让 git 按 cwd 解析（monorepo 子目录下裸相对路径会解析到仓库根）
       const old = Bun.spawnSync(["git", "show", `HEAD:./${rel}`], { cwd: root, stdout: "pipe", stderr: "ignore" });
       if (old.exitCode !== 0) continue; // 未入库的新文件跳过
-      // 抓迁移条目的原始文本块：name/timestamp → 整块文本（到下一个条目或数组尾）
+      // 抓迁移条目的原始文本块：name/timestamp → 整块文本（到下一个条目或数组尾）。
+      // 先剥注释：被注释掉的条目不能当成历史迁移（否则幻影对比/误报）
       const entriesOf = (src: string) => {
         const map = new Map<string, string>();
-        for (const m of src.matchAll(/\{[^{}]*?name:\s*["'`]([^"'`]+)["'`][^{}]*?timestamp:\s*(\d+)[^{}]*?\}/gs))
+        for (const m of stripComments(src).matchAll(/\{[^{}]*?name:\s*["'`]([^"'`]+)["'`][^{}]*?timestamp:\s*(\d+)[^{}]*?\}/gs))
           map.set(`${m[1]}@${m[2]}`, m[0].replaceAll(/\s+/g, ""));
         return map;
       };

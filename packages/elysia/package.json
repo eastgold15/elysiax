@@ -49,6 +49,6 @@
     "typescript": "^7"
   },
   "devDependencies": {
-    "tsup": "^8"
+    "tsup": "^9.0.0"
   }
 }

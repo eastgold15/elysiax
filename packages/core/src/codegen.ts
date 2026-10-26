@@ -584,93 +584,6 @@ export async function codegen(
   writeFileSync(join(outDir, "modules.gen.ts"), ml.join("\n") + "\n");
   written.push(".elysiax/modules.gen.ts");
 
-  // pages.gen.ts：页面路由表 + 真实 import；client 页额外生成壳 HTML
-  if (pageScan.pages.length) {
-    const shellsDir = join(outDir, "shells");
-    const pl: string[] = [
-      header,
-      `import type { PageEntry } from "@elysiax/core";`,
-    ];
-    const entries: string[] = [];
-    let idx = 0;
-    // client 页的全局样式（默认 src/global.css，config.clientCss 可覆盖）
-    const clientCss = config.clientCss ?? "src/global.css";
-    const cssPath = join(root, clientCss);
-    for (const p of pageScan.pages) {
-      const i = idx++;
-      const parts: string[] = [`url: ${JSON.stringify(p.url)}`];
-      if (p.clientIndex) {
-        parts.push("client: true");
-        mkdirSync(shellsDir, { recursive: true });
-        const slug = shellSlug(p.url);
-        // client 入口预打包：应用装了框架自造的 @elysiax/solid 插件包 →
-        // 经它的 Bun 插件把 client 入口编成纯 JS 产物（落盘可见，见 lowering.md），
-        // 壳 HTML 引用产物；没装（如 React 应用）→ 照旧直引 .tsx 走 Bun 内置 JSX。
-        // core 只按包名探测，不认识 Solid/babel 的任何细节。
-        let scriptSrc = relative(shellsDir, p.clientIndex).replaceAll("\\", "/");
-        let clientPlugin: Bun.BunPlugin | null = null;
-        try {
-          const mod = (await import(Bun.resolveSync("@elysiax/solid", root))) as {
-            solidPlugin: () => Bun.BunPlugin;
-          };
-          clientPlugin = mod.solidPlugin();
-        } catch {
-          /* 应用未装 @elysiax/solid → 走 Bun 内置 JSX transform */
-        }
-        if (clientPlugin) {
-          await Bun.build({
-            entrypoints: [p.clientIndex],
-            outdir: shellsDir,
-            naming: `${slug}.client.[ext]`,
-            plugins: [clientPlugin],
-            target: "browser",
-            throw: true,
-          });
-          scriptSrc = `./${slug}.client.js`;
-        }
-        const cssLink = existsSync(cssPath)
-          ? `    <link rel="stylesheet" href="${relative(shellsDir, cssPath).replaceAll("\\", "/")}" />\n`
-          : "";
-        writeFileSync(
-          join(shellsDir, `${slug}.html`),
-          [
-            "<!doctype html>",
-            `<html lang="zh-CN">`,
-            `  <head>`,
-            `    <meta charset="utf-8" />`,
-            `    <meta name="viewport" content="width=device-width, initial-scale=1" />`,
-            cssLink.trimEnd(),
-            `  </head>`,
-            `  <body>`,
-            `    <div id="root"></div>`,
-            `    <script type="module" src="${scriptSrc}"></script>`,
-            `  </body>`,
-            `</html>`,
-            "",
-          ].filter((l) => l !== "").join("\n"),
-        );
-        pl.push(`import shell${i} from "./shells/${slug}.html";`);
-        parts.push(`shell: shell${i}`);
-      }
-      if (p.page) {
-        pl.push(`import page${i} from "${rel(p.page)}";`);
-        parts.push(`page: page${i}`);
-      }
-      if (p.partials) {
-        pl.push(`import partials${i} from "${rel(p.partials)}";`);
-        parts.push(`partials: partials${i}`);
-      }
-      if (p.actions) {
-        pl.push(`import actions${i} from "${rel(p.actions)}";`);
-        parts.push(`actions: actions${i}`);
-      }
-      entries.push(`  { ${parts.join(", ")} },`);
-    }
-    pl.push("", "export const pages: PageEntry[] = [", ...entries, "];", "");
-    writeFileSync(join(outDir, "pages.gen.ts"), pl.join("\n") + "\n");
-    written.push(".elysiax/pages.gen.ts");
-  }
-
   // routes.gen.ts：静态解析 controller 源码里的字面量路由，生成类型化路径助手。
   // hx-post={routes.deploy.uiDetect()} —— 改路由/前缀时 TSX 编译报错，不再静默 404。
   // （不 import controller：controller → .elysiax → modules.gen → controller 存在循环）
@@ -767,6 +680,94 @@ export async function codegen(
   rl.push("} as const;", "");
   writeFileSync(join(outDir, "routes.gen.ts"), rl.join("\n") + "\n");
   written.push(".elysiax/routes.gen.ts");
+
+  // pages.gen.ts：页面路由表 + 真实 import；client 页额外生成壳 HTML
+  if (pageScan.pages.length) {
+    const shellsDir = join(outDir, "shells");
+    const pl: string[] = [
+      header,
+      `import type { PageEntry } from "@elysiax/core";`,
+    ];
+    const entries: string[] = [];
+    let idx = 0;
+    // client 页的全局样式（默认 src/global.css，config.clientCss 可覆盖）
+    const clientCss = config.clientCss ?? "src/global.css";
+    const cssPath = join(root, clientCss);
+    for (const p of pageScan.pages) {
+      const i = idx++;
+      const parts: string[] = [`url: ${JSON.stringify(p.url)}`];
+      if (p.clientIndex) {
+        parts.push("client: true");
+        mkdirSync(shellsDir, { recursive: true });
+        const slug = shellSlug(p.url);
+        // client 入口预打包：应用装了框架自造的 @elysiax/solid 插件包 →
+        // 经它的 Bun 插件把 client 入口编成纯 JS 产物（落盘可见，见 lowering.md），
+        // 壳 HTML 引用产物；没装（如 React 应用）→ 照旧直引 .tsx 走 Bun 内置 JSX。
+        // core 只按包名探测，不认识 Solid/babel 的任何细节。
+        let scriptSrc = relative(shellsDir, p.clientIndex).replaceAll("\\", "/");
+        let clientPlugin: Bun.BunPlugin | null = null;
+        try {
+          const mod = (await import(Bun.resolveSync("@elysiax/solid", root))) as {
+            solidPlugin: () => Bun.BunPlugin;
+          };
+          clientPlugin = mod.solidPlugin();
+        } catch {
+          /* 应用未装 @elysiax/solid → 走 Bun 内置 JSX transform */
+        }
+        if (clientPlugin) {
+          await Bun.build({
+            entrypoints: [p.clientIndex],
+            outdir: shellsDir,
+            naming: `${slug}.client.[ext]`,
+            plugins: [clientPlugin],
+            target: "browser",
+            throw: true,
+          });
+          scriptSrc = `./${slug}.client.js`;
+        }
+        const cssLink = existsSync(cssPath)
+          ? `    <link rel="stylesheet" href="${relative(shellsDir, cssPath).replaceAll("\\", "/")}" />\n`
+          : "";
+        writeFileSync(
+          join(shellsDir, `${slug}.html`),
+          [
+            "<!doctype html>",
+            `<html lang="zh-CN">`,
+            `  <head>`,
+            `    <meta charset="utf-8" />`,
+            `    <meta name="viewport" content="width=device-width, initial-scale=1" />`,
+            cssLink.trimEnd(),
+            `  </head>`,
+            `  <body>`,
+            `    <div id="root"></div>`,
+            `    <script type="module" src="${scriptSrc}"></script>`,
+            `  </body>`,
+            `</html>`,
+            "",
+          ].filter((l) => l !== "").join("\n"),
+        );
+        pl.push(`import shell${i} from "./shells/${slug}.html";`);
+        parts.push(`shell: shell${i}`);
+      }
+      if (p.page) {
+        pl.push(`import page${i} from "${rel(p.page)}";`);
+        parts.push(`page: page${i}`);
+      }
+      if (p.partials) {
+        pl.push(`import partials${i} from "${rel(p.partials)}";`);
+        parts.push(`partials: partials${i}`);
+      }
+      if (p.actions) {
+        pl.push(`import actions${i} from "${rel(p.actions)}";`);
+        parts.push(`actions: actions${i}`);
+      }
+      entries.push(`  { ${parts.join(", ")} },`);
+    }
+    pl.push("", "export const pages: PageEntry[] = [", ...entries, "];", "");
+    writeFileSync(join(outDir, "pages.gen.ts"), pl.join("\n") + "\n");
+    written.push(".elysiax/pages.gen.ts");
+  }
+
 
   // services.gen.ts：从 di 声明推导 ServiceMap（类型一体化，di 泛型可省）
   const sl: string[] = [

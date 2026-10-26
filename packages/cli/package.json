@@ -10,7 +10,7 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
-    "@visulima/cerebro": "^3.1.2",
+    "@visulima/cerebro": "^4.0.1",
     "@elysiax/core": "workspace:*"
   },
   "devDependencies": {

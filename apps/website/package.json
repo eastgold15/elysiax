@@ -8,6 +8,6 @@
     "doctor": "blume doctor"
   },
   "dependencies": {
-    "blume": "^2.0.3"
+    "blume": "^2.2.6"
   }
 }

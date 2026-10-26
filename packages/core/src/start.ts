@@ -6,7 +6,7 @@ import * as typeboxSchema from "typebox/schema";
 import * as typeboxCompile from "typebox/compile";
 import { serve } from "bun";
 import type { Container } from "@inferdi/inferdi";
-import type { LayoutComponent } from "@workspace/htmx";
+import type { LayoutComponent } from "@elysiax/htmx";
 import { elysiaxAPI, type ElysiaxAPIOptions } from "./di";
 import type { GuardOptions } from "./auth";
 import { getLayout } from "./layout";
@@ -98,7 +98,7 @@ export async function start(opts: {
   // auth 由 elysiaxAPI 的 auth 宏按路由挂载（7.5），不再包全局 URL 匹配守卫
 
   serve({
-    port: opts.port ?? 3000,
+    port: opts.port ?? 3004,
     routes: routes as never,
     development: true,
   });

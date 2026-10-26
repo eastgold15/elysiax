@@ -61,13 +61,17 @@ export function defineRealtime<T>(options: RealtimeOptions<T> = {}) {
       const frame = (event: string, data: string) =>
         encode.encode(`event: ${event}\ndata: ${data}\n\n`);
 
+      // wake/done 必须在 generator 外：cancel 时 generator 挂在 await 上，
+      // frames.return() 只会排队等当前 await 落定——若不先 wake?.() 唤醒，
+      // finally 永不执行，心跳 interval 与订阅永久泄漏。
+      let wake: (() => void) | null = null;
+      let done = false;
       // 内部 async generator 产出 SSE 帧；Response cancel 时 return() 触发 finally 清理
       const frames = (async function* () {
         type Item = T | "ping";
         const snap =
           snapshot ?? (options.snapshot ? () => options.snapshot!(ch) : undefined);
         const queue: Item[] = snap ? await snap() : [];
-        let wake: (() => void) | null = null;
         const push = (d: Item) => {
           queue.push(d);
           wake?.();
@@ -75,13 +79,14 @@ export function defineRealtime<T>(options: RealtimeOptions<T> = {}) {
         const unsub = subscribe(ch, push);
         const hb = heartbeatMs > 0 ? setInterval(() => push("ping"), heartbeatMs) : null;
         try {
-          while (true) {
+          while (!done) {
             while (queue.length) {
               const item = queue.shift()!;
               yield item === "ping"
                 ? frame("ping", "{}")
                 : frame("message", JSON.stringify(item));
             }
+            if (done) break;
             await new Promise<void>((resolve) => {
               wake = resolve;
             });
@@ -103,6 +108,10 @@ export function defineRealtime<T>(options: RealtimeOptions<T> = {}) {
           }
         },
         cancel() {
+          // 先唤醒再 return：generator 挂在 await 上时 return() 会排队，
+          // 不唤醒则 finally（清心跳/退订）永不执行
+          done = true;
+          wake?.();
           void frames.return(undefined as never);
         },
       });

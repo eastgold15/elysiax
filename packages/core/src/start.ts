@@ -82,7 +82,10 @@ export async function start(opts: {
   // 动态路由表（Bun.serve routes 不支持热增，新增页面需重启 dev server）：
   // - client 页 URL → codegen 生成的壳 HTMLBundle（自带 JS/CSS 资产服务）
   // - SSR 页 URL → Elysia（PageResult 双响应）
-  // - /api/* → Elysia（模块 controller + 页面 partials/actions）
+  // - <apiPrefix>/* → Elysia（模块 controller + 页面 partials/actions）
+  // 注意：前缀必须与传给 elysiaxAPI 的 apiPrefix 一致，字面量写死会让
+  // 自定义前缀的应用全部 API 落 404。
+  const apiPrefix = opts.apiPrefix ?? "/api";
   const routes: Record<string, unknown> = {};
   if (opts.index) routes["/"] = opts.index;
   for (const p of pages) {
@@ -90,10 +93,10 @@ export async function start(opts: {
     else if (p.page) routes[p.url] = handle;
   }
   if (opts.gen.globalCss)
-    routes["/api/assets/global.css"] = new Response(opts.gen.globalCss, {
+    routes[`${apiPrefix}/assets/global.css`] = new Response(opts.gen.globalCss, {
       headers: { "content-type": "text/css; charset=utf-8" },
     });
-  routes["/api/*"] = handle;
+  routes[`${apiPrefix}/*`] = handle;
 
   // auth 由 elysiaxAPI 的 auth 宏按路由挂载（7.5），不再包全局 URL 匹配守卫
 

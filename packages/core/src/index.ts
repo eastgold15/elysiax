@@ -21,7 +21,7 @@ export type { ElysiaxGenerated } from "./start";
 export { defineConfig, loadConfig } from "./config";
 export type { ElysiaxConfig } from "./config";
 
-/** 模块清单（modules/<name>/module.json） */
+/** 模块清单（主形态 = <name>.di.ts 的 defineModule；modules/<name>/module.json 为旧形态可选兜底） */
 export interface ModuleManifest {
   name: string;
   version: string;

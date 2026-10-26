@@ -316,13 +316,13 @@ export default defineRoutes();
 }
 
 /**
- * 契约 §1 原子脚手架：`elysiax new module <name> --ui htmx|react [--db]`
+ * 契约 §1 原子脚手架：`elysiax new module <name> --ui htmx|solid [--db]`
  * 两种形态共用：service + di（含 route）+ socket（唯一对外插座）；
  * --db 追加数据层骨架（schema.ts + migrations.ts）。
  */
 async function scaffoldModule(
   name: string,
-  ui: "htmx" | "react",
+  ui: "htmx" | "solid",
   withDb: boolean,
   logger: { info: (m: string) => void },
 ) {
@@ -341,17 +341,17 @@ async function scaffoldModule(
   const P = pascal(name);
   const C = camel(name);
 
-  // 依赖预检：数据层需要 drizzle-orm；react 形态需要 react + react-dom + @elysia/eden。
+  // 依赖预检：数据层需要 drizzle-orm；solid 形态需要 solid-js + @elysiax/solid + @elysia/eden。
   // 没装就直接报错提示，避免生成后类型检查挂
   const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
   const deps = { ...pkg.dependencies, ...pkg.devDependencies };
   if (withDb && !deps["drizzle-orm"])
     throw new Error(`--db 数据层骨架需要 drizzle-orm，请先 bun add drizzle-orm`);
-  if (ui === "react") {
-    // 三者都是真依赖：client/index.tsx 用 react-dom，client/api.ts 用 @elysia/eden
-    const missing = ["react", "react-dom", "@elysia/eden"].filter((d) => !deps[d]);
+  if (ui === "solid") {
+    // 三者都是真依赖：client/index.tsx 用 solid-js，codegen 预打包插件在 @elysiax/solid，client/api.ts 用 @elysia/eden
+    const missing = ["solid-js", "@elysiax/solid", "@elysia/eden"].filter((d) => !deps[d]);
     if (missing.length)
-      throw new Error(`react 形态缺少依赖: ${missing.join(", ")}，请先 bun add ${missing.join(" ")}`);
+      throw new Error(`solid 形态缺少依赖: ${missing.join(", ")}，请先 bun add ${missing.join(" ")}`);
   }
 
   mkdirSync(dir, { recursive: true });
@@ -395,9 +395,9 @@ export default defineModule({
 // 禁止穿透 import 原子内部文件（父子原子也走插座，doctor 插座门禁强制）。
 export { ${P}Service } from "./${name}.service";
 ${
-  ui === "react"
+  ui === "solid"
     ? `
-// Eden Treaty 的 API 类型出口（react 形态追加）：本原子 client/api.ts 据此获得端到端类型
+// Eden Treaty 的 API 类型出口（solid 形态追加）：本原子 client/api.ts 据此获得端到端类型
 import type ${C}Api from "./${name}.actions";
 export type ${P}Api = typeof ${C}Api;
 `
@@ -466,13 +466,13 @@ export default defineRoutes();
 `,
     );
   } else {
-    // ── 形态 B：react 模块（契约 §1.3-B，L5 整页 client 模式）──
+    // ── 形态 B：solid 模块（契约 §1.3-B，L5 整页 client 模式）──
     // 纯 API 的 Elysia 实例：default export 供 Eden 推导类型（socket.ts 的 ${P}Api）
     writeFileSync(
       resolve(dir, `${name}.actions.ts`),
       `import { defineRoutes } from "@gen";
 
-/** 纯 JSON API（react 形态无 .page.tsx，壳由 codegen 的 HTMLBundle 服务）。
+/** 纯 JSON API（solid 形态无 .page.tsx，壳由 codegen 的 HTMLBundle 服务）。
  *  default export 是本原子的类型出口：${name}.socket.ts 用 typeof 导出给 Eden 推导。
  *  预期错误 return status(code, { error })，actions 不写 try/catch（契约 §4） */
 export default defineRoutes().get("/", () => ({ name: "${name}", ok: true }));
@@ -482,17 +482,17 @@ export default defineRoutes().get("/", () => ({ name: "${name}", ok: true }));
     mkdirSync(resolve(dir, "client"), { recursive: true });
     writeFileSync(
       resolve(dir, "client/index.tsx"),
-      `/** @jsxImportSource react */
-// client 模式（L5）：/${name} 由壳 HTMLBundle 服务、不走 htmx，整页归 React。
+      `/** @jsxImportSource solid-js */
+// client 模式（L5）：/${name} 由壳 HTMLBundle 服务、不走 htmx，整页归 Solid。
 // 铁律：client/ 依赖链禁止 Node-only 包（dotenv/bun:sqlite → 浏览器打包 500）；
-// 后端数据经 client/api.ts 的 Eden Treaty 客户端访问（契约 §1.3-B）。
-import { createRoot } from "react-dom/client";
+// UI 原语用 Kobalte，后端数据经 client/api.ts 的 Eden Treaty 客户端访问（契约 §1.3-B）。
+import { render } from "solid-js/web";
 
 function App() {
   return <div>${P} client</div>;
 }
 
-createRoot(document.getElementById("root")!).render(<App />);
+render(() => <App />, document.getElementById("root")!);
 `,
     );
     writeFileSync(
@@ -574,23 +574,25 @@ async function scaffoldClient(page: string, logger: { info: (m: string) => void 
 
   const P = pascal(page);
   mkdirSync(dir, { recursive: true });
-  // client 需要 react / react-dom，没装就直接报错提示（避免生成后类型检查挂）
+  // client 需要 solid-js + @elysiax/solid，没装就直接报错提示（避免生成后类型检查挂）
   const pkg = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8"));
   const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-  if (!deps["react-dom"])
-    throw new Error(`client 模式需要 react + react-dom，请先 bun add react react-dom`);
+  const missing = ["solid-js", "@elysiax/solid"].filter((d) => !deps[d]);
+  if (missing.length)
+    throw new Error(`client 模式缺少依赖: ${missing.join(", ")}，请先 bun add ${missing.join(" ")}`);
   writeFileSync(
     resolve(dir, "index.tsx"),
-    `import { createRoot } from "react-dom/client";
+    `/** @jsxImportSource solid-js */
+import { render } from "solid-js/web";
 
-// client 模式：/${page} 由 codegen 壳 HTMLBundle 服务，整页归 React。
+// client 模式：/${page} 由 codegen 壳 HTMLBundle 服务，整页归 Solid。
 // 铁律：依赖链不得 import Node-only 包（dotenv/bun:sqlite 等会让浏览器打包 500）；
 // 后端数据走 /api/${page} 的 JSON 端点（${page}.actions.ts）。
 function App() {
   return <div>${P} client</div>;
 }
 
-createRoot(document.getElementById("root")!).render(<App />);
+render(() => <App />, document.getElementById("root")!);
 `,
   );
   await codegen(root, config);
@@ -600,7 +602,7 @@ createRoot(document.getElementById("root")!).render(<App />);
 cli.addCommand({
   name: "new",
   description:
-    "脚手架：new module <name> --ui htmx|react [--db] 契约原子；new page|service|client 旧形态",
+    "脚手架：new module <name> --ui htmx|solid [--db] 契约原子；new page|service|client 旧形态",
   arguments: [
     { name: "kind", description: "module | page | service | client", type: String },
     { name: "name", description: "名称（client 时为目标页面）", type: String },
@@ -609,7 +611,7 @@ cli.addCommand({
     {
       name: "ui",
       type: String,
-      description: "module 的 UI 形态：htmx（默认）| react（L5 整页 client 模式）",
+      description: "module 的 UI 形态：htmx（默认）| solid（L5 整页 client 模式）",
     },
     {
       name: "db",
@@ -621,7 +623,7 @@ cli.addCommand({
     const [kind, name] = argument;
     if (!name) throw new Error("用法: elysiax new module|page|service|client <name>");
     if (kind === "module") {
-      const ui = options.ui === "react" ? "react" : ("htmx" as const);
+      const ui = options.ui === "solid" ? "solid" : ("htmx" as const);
       return scaffoldModule(name, ui, Boolean(options.db), logger);
     }
     if (kind === "page") return scaffoldPage(name, logger);

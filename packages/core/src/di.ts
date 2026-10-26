@@ -26,7 +26,7 @@ type ServiceSpecs<S extends Record<string, unknown>> = {
 /**
  * 定义一个模块 controller：与 `new Elysia()` 相同，但上下文里的 `di`
  * （每请求一个 InferDI scope）带有类型 —— 泛型参数声明本模块需要
- * 从容器解析的服务（对应 module.json 的 requires / provides）。
+ * 从容器解析的服务（对应 <name>.di.ts 里 provide 声明的键）。
  *
  * 运行时的 `di` 由 `elysiaxAPI` 在挂载时注入（derive 沿同一实例链传播），
  * 这里只补充类型，不产生任何运行时行为。

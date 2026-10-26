@@ -97,13 +97,14 @@ export async function start(opts: {
 
   // auth 由 elysiaxAPI 的 auth 宏按路由挂载（7.5），不再包全局 URL 匹配守卫
 
+  const port = opts.port ?? 3004;
   serve({
-    port: opts.port ?? 3004,
+    port,
     routes: routes as never,
     development: true,
   });
 
-  console.log(`✅ elysiax: http://localhost:${opts.port ?? 3000}`);
+  console.log(`✅ elysiax: http://localhost:${port}`);
   console.log(`   已挂载模块: ${Object.keys(opts.gen.modules).join(", ") || "(无)"}`);
   if (pages.length)
     console.log(

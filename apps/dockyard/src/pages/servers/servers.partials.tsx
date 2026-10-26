@@ -6,7 +6,7 @@ import type { Server } from "./schema";
 import type { ServerResource } from "../resources/resources.socket";
 import type { ServerService } from "./servers.service";
 import type { ResourceService } from "../resources/resources.socket";
-import { Badge, Button, Empty, Field, PageHeader } from "../../shared/ui";
+import { Badge, Button, Empty, Field, Modal, PageHeader } from "../../shared/ui";
 import { isLocalHost } from "./servers.socket";
 
 /** 本机/远程徽章（部署通道分界线：本机=回环地址，画布上两区硬隔离） */
@@ -108,18 +108,6 @@ export const ServerList: Component<{ servers: Server[] }> = ({ servers }) => (
 
 const DB_TYPES = ["postgres", "mysql", "redis", "mongo"] as const;
 
-const Modal: Component<{ title: string }> = ({ title, children }) => (
-  <div class="fixed inset-0 z-40 flex items-center justify-center bg-black/70" onclick="if(event.target===this)this.remove()">
-    <div class="max-h-[85vh] w-[36rem] overflow-y-auto rounded border border-harbor-700 bg-harbor-900 p-5 shadow-2xl">
-      <div class="mb-4 flex items-center justify-between">
-        <h3 class="text-sm font-semibold text-neutral-100">{title}</h3>
-        <button class="text-neutral-500 hover:text-neutral-200" onclick="this.closest('.fixed').remove()">✕</button>
-      </div>
-      {children}
-    </div>
-  </div>
-);
-
 const ResourceRow: Component<{ resource: ServerResource; url: string | null }> = ({ resource, url }) => (
   <div class="flex flex-col gap-1 rounded border border-harbor-800 bg-harbor-950 px-3 py-2">
     <div class="flex items-center gap-2">
@@ -172,8 +160,10 @@ export const SharedResourcesModal: Component<{
   server: Server;
   resources: { resource: ServerResource; url: string | null }[];
 }> = ({ server, resources }) => (
-  <Modal title={`共享资源 — ${server.name}`}>
-    <ResourceListBody server={server} resources={resources} />
+  <Modal title={`共享资源 — ${server.name}`} width="lg">
+    <div class="p-5">
+      <ResourceListBody server={server} resources={resources} />
+    </div>
   </Modal>
 );
 

@@ -37,9 +37,54 @@ const toastScript = `
     });
   });
   document.body.addEventListener('htmx:responseError', function (e) {
-    show('请求失败（' + e.detail.xhr.status + '）', 'error');
+    // 优先展示服务端 { error } 文本（ServiceError 约定），兜底状态码
+    var msg = '请求失败（' + e.detail.xhr.status + '）';
+    try {
+      var j = JSON.parse(e.detail.xhr.responseText);
+      if (j && typeof j.error === 'string') msg = j.error;
+    } catch (_) {}
+    show(msg, 'error');
   });
 })();`
+
+/**
+ * hx-confirm 的样式化确认框（替代原生 confirm）：拦截 htmx:confirm（仅带
+ * hx-confirm 属性的请求），用 layout 里的全局 <dialog id="hx-confirm-dialog">
+ * 单例展示。原生 <dialog>.showModal() 自带 Esc（closedby="closerequest"）、
+ * 焦点约束、::backdrop 遮罩——行为语义与 Solid 侧 Kobalte Dialog 对齐。
+ * 确认 → issueRequest(true) 放行原请求；取消/Esc → 关闭，请求中止。
+ */
+export const confirmScript = `
+(function () {
+  var dlg = document.getElementById('hx-confirm-dialog');
+  if (!dlg) return;
+  var q = dlg.querySelector('[data-confirm-question]');
+  var okBtn = dlg.querySelector('[data-confirm-ok]');
+  var pending = null;
+  document.body.addEventListener('htmx:confirm', function (e) {
+    var elt = e.detail && e.detail.elt;
+    if (!elt || !elt.hasAttribute('hx-confirm')) return;
+    e.preventDefault();
+    pending = e.detail;
+    q.textContent = e.detail.question || '确认操作？';
+    dlg.showModal();
+  });
+  okBtn.addEventListener('click', function () {
+    var d = pending; pending = null;
+    dlg.close();
+    if (d) d.issueRequest(true);
+  });
+  dlg.addEventListener('close', function () { pending = null; });
+})();`
+
+/** AppLayout 里 <ConfirmScript /> 一次引入（需配合 #hx-confirm-dialog 单例 markup） */
+export function ConfirmScript() {
+  return (
+    <script>
+      {confirmScript}
+    </script>
+  )
+}
 
 /** AppLayout 里 <ToastScripts /> 一次引入两段启动脚本 */
 export function ToastScripts() {

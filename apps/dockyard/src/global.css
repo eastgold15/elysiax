@@ -39,6 +39,30 @@
   }
 }
 
+@layer components {
+  /* 全局 toast（@workspace/htmx ToastRoot + toast 事件）：右下角堆栈，层级在模态之上 */
+  #toast-root {
+    position: fixed;
+    right: 1.5rem;
+    bottom: 1.5rem;
+    z-index: 70;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    width: 20rem;
+    pointer-events: none;
+  }
+  .toast {
+    @apply rounded border border-harbor-700 bg-harbor-900 px-3 py-2 text-sm text-neutral-200 shadow-xl;
+  }
+  .toast-success {
+    @apply border-tide-400/40 text-tide-400;
+  }
+  .toast-error {
+    @apply border-signal-500/50 text-signal-500;
+  }
+}
+
 @layer utilities {
   /* htmx 请求中的加载态：带 htmx-indicator 的元素平时隐藏，请求时显示 */
   .htmx-indicator {

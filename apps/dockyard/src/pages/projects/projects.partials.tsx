@@ -6,7 +6,7 @@ import { configFile, loadConfig } from "./config";
 import type { RepoBrief } from "../github/github.socket";
 import type { LocalProject, LocalService } from "./local.service";
 import type { ProjectService } from "./projects.service";
-import { Button, Empty, PageHeader } from "../../shared/ui";
+import { Button, Empty, Modal, PageHeader } from "../../shared/ui";
 
 export interface ProjectListModel {
   local: LocalProject[];
@@ -162,15 +162,7 @@ export const ProjectList: Component<ProjectListModel> = ({ local, remote, editor
 
 // ── 扫描目录配置弹窗：一行一个目录，支持 ~/ ──
 export const ConfigModal: Component<{ scanDirs: string[] }> = ({ scanDirs }) => (
-  <div class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" onclick="if(event.target===this)this.remove()">
-    <div class="fixed top-1/2 left-1/2 flex w-[26rem] max-w-full -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-harbor-700 bg-harbor-900 shadow-2xl">
-      <div class="flex items-start justify-between border-b border-harbor-800 px-5 py-4">
-        <div class="flex flex-col gap-1">
-          <h3 class="text-sm font-semibold text-neutral-100">扫描目录</h3>
-          <p class="text-xs text-neutral-500">浅扫一级子目录，含 .git 或 package.json 即识别为项目</p>
-        </div>
-        <button class="text-neutral-500 hover:text-neutral-200" onclick="this.closest('.fixed.inset-0').remove()">✕</button>
-      </div>
+  <Modal title="扫描目录" sub="浅扫一级子目录，含 .git 或 package.json 即识别为项目" width="sm">
       <form class="flex flex-col gap-3 px-5 py-4" hx-post={routes.pages.projects.config()} hx-target="#main" hx-swap="innerHTML">
         <textarea
           class="h-28 rounded border border-harbor-700 bg-harbor-950 px-2.5 py-1.5 text-sm text-neutral-200 outline-none mono focus:border-brass-500"
@@ -187,28 +179,18 @@ export const ConfigModal: Component<{ scanDirs: string[] }> = ({ scanDirs }) => 
           保存并重新扫描
         </button>
       </form>
-    </div>
-  </div>
+  </Modal>
 );
 
 // ── 新建项目弹窗：项目 = 仓库，gh CLI 列出账号仓库直接选；也可跳过绑定纯数据库项目 ──
 export const NewProjectModal: Component<{ repos: RepoBrief[]; error?: string }> = ({ repos, error }) => (
-  <div class="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" onclick="if(event.target===this)this.remove()">
-    <div class="fixed top-1/2 left-1/2 flex max-h-[80vh] w-[30rem] max-w-full -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-harbor-700 bg-harbor-900 shadow-2xl">
-      <div class="flex items-start justify-between border-b border-harbor-800 px-5 py-4">
-        <div class="flex flex-col gap-1">
-          <h3 class="text-sm font-semibold text-neutral-100">新建项目</h3>
-          <p class="text-xs text-neutral-500">项目 = 仓库：项目画布就是这个仓库的部署视图</p>
-        </div>
-        <button class="text-neutral-500 hover:text-neutral-200" onclick="this.closest('.fixed.inset-0').remove()">✕</button>
-      </div>
-
+  <Modal title="新建项目" sub="项目 = 仓库：项目画布就是这个仓库的部署视图" width="md">
+      {/* 失败回显走全局 toast（responseError 脚本读服务端 { error } 文本），不再用原生 alert */}
       <form
         class="flex min-h-0 flex-1 flex-col gap-3 px-5 py-4"
         hx-post={routes.pages.projects.index()}
         hx-target="#main"
         hx-swap="innerHTML"
-        {...{ "hx-on::response-error": "alert(event.detail.xhr.responseText)" }}
       >
         <input
           id="np-name"
@@ -253,8 +235,7 @@ export const NewProjectModal: Component<{ repos: RepoBrief[]; error?: string }> 
           <span class="htmx-indicator">创建中…</span>
         </button>
       </form>
-    </div>
-  </div>
+  </Modal>
 );
 
 // ── GET 片段路由：弹窗内容（挂载在 /api/projects 前缀下） ──

@@ -16,7 +16,15 @@
 
 ### servers（htmx，样板候选 #1）
 
-**状态：未开始（第一个样板）**
+**状态：待视觉验收（2026-10-26 部分实施，证据 /tmp/htmx-confirm.png、/tmp/htmx-modal.png，视口 1280×633）**
+
+已实施：
+- 共享资源弹窗迁移到 shared/ui `Modal`（lg 672px，遮罩 60% 黑 z-60、Esc/遮罩关闭、内容独立滚动）；
+- 行内 hx-confirm 删除确认 → 全局样式化确认框（原生 `<dialog>` 单例 + htmx:confirm 拦截，行为对标 Kobalte AlertDialog）；
+- 导航色源 neutral→harbor 统一（当前项 aria-current 待 layout 契约带路径后补）；
+- 全局 toast 样式补齐（此前 #toast-root 无样式，toast 一直是裸 div）；responseError 弹服务端 `{error}` 文本。
+
+仍待做：添加表单/TrustPrompt 细节规格、aria-current、语义 token 落 global.css。
 
 现状差异（来自源码审查，非浏览器验收）：
 
@@ -29,7 +37,7 @@
 
 ### projects（htmx，样板候选 #2）
 
-**状态：未开始**
+**状态：待视觉验收（2026-10-26 部分实施：两个弹窗迁移到 shared/ui `Modal`，扫描目录 sm 384 / 新建项目 md 480；原生 alert 的 hx-on::response-error 已删，失败走全局 toast）**
 
 现状差异：
 
@@ -80,7 +88,7 @@
 - 导航无当前项状态（无 `aria-current`、无选中底色）；
 - 内嵌 CDN 的 htmx/idiomorph 脚本（jsdelivr），桌面离线/内网场景是外部依赖——非视觉项，但与“工具自包含”相关，待决策是否本地化；
 - `global.css` 的 `@theme` 只定义了 9 个颜色原语，语义 token（surface/border/text 层级）未定义——样板页实施时一次补齐；
-- `shared/ui` 已有 Button/Badge/PageHeader/Field/Empty 五件，Modal/Drawer/SubmitBtn 在画布私有——抽取与否按“两处真实复用”原则在样板阶段决策。
+- `shared/ui` 已有 Button/Badge/PageHeader/Field/Empty/Modal 六件（2026-10-26 Modal 入库，宽三档 sm/md/lg，htmx 三个私有弹窗已迁移）；Drawer/SubmitBtn 仍在画布私有。
 
 ### 其他
 

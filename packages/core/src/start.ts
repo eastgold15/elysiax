@@ -63,6 +63,9 @@ export async function start(opts: {
   layout?: LayoutComponent;
   /** API 前缀，默认 "/api" */
   apiPrefix?: string;
+  /** Bun.serve 的 development 开关：缺省按 NODE_ENV !== "production" 判定。
+   *  elysiax dev 显式带 development；build/package 的产物经 define 烙死 production */
+  development?: boolean;
   /** 传入选项才启用 auth 宏（7.5）：页面/端点按 PageMeta.auth 受保护，不挂载零开销零行为 */
   auth?: GuardOptions;
   /** 透传 elysiaxAPI 的其余选项（如 validationError） */
@@ -104,7 +107,7 @@ export async function start(opts: {
   serve({
     port,
     routes: routes as never,
-    development: true,
+    development: opts.development ?? process.env.NODE_ENV !== "production",
   });
 
   console.log(`✅ elysiax: http://localhost:${port}`);

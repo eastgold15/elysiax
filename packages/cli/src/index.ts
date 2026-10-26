@@ -1228,6 +1228,8 @@ cli.addCommand({
       const c = spawn("bun", ["--hot", entry], {
         stdio: "inherit",
         cwd: process.cwd(),
+        // 显式开发态：start() 据此开 Bun.serve development（错误细节/资产缓存策略）
+        env: { ...process.env, NODE_ENV: "development" },
       });
       c.on("exit", (code) => {
         if (child === c) process.exit(code ?? 0);
@@ -1407,6 +1409,8 @@ cli.addCommand({
         entrypoints: [entry],
         target: "bun",
         plugins: [tailwind],
+        // 产物烙死生产态：start() 的 development 判定读到 "production"
+        define: { "process.env.NODE_ENV": JSON.stringify("production") },
         compile,
       });
       if (!result.success) {

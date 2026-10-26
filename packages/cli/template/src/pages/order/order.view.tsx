@@ -1,4 +1,4 @@
-import type { Component } from "@workspace/htmx";
+import type { Component } from "@elysiax/htmx";
 
 /** 订单面板（整页直接渲染用；交互片段走 order.partials 的 GET 子路由）。
  *  纯展示组件：hx URL 由调用方经 props 注入，本文件不 import .elysiax——

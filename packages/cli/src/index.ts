@@ -282,7 +282,7 @@ export default definePage(({ di }) => ({
   );
   writeFileSync(
     resolve(dir, `${name}.partials.tsx`),
-    `import type { Component } from "@workspace/htmx";
+    `import type { Component } from "@elysiax/htmx";
 import { defineRoutes } from "@gen";
 
 /** 展示组件（整页与片段刷新共用） */
@@ -437,7 +437,7 @@ export default definePage(({ di }) => ({
     );
     writeFileSync(
       resolve(dir, `${name}.partials.tsx`),
-      `import type { Component } from "@workspace/htmx";
+      `import type { Component } from "@elysiax/htmx";
 import { defineRoutes } from "@gen";
 
 /** 展示组件（整页与片段刷新共用） */

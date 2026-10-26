@@ -1,4 +1,4 @@
-import type { Component } from "@workspace/htmx";
+import type { Component } from "@elysiax/htmx";
 
 export { elysiaxAPI, elysiaxModule, inferdiElysia } from "./di";
 export { elysiaxModule as defineRoutes } from "./di";

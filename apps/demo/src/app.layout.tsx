@@ -1,5 +1,5 @@
 import { defineLayout } from "@elysiax/core";
-import { ToastRoot, ToastScripts } from "@workspace/htmx";
+import { ToastRoot, ToastScripts } from "@elysiax/htmx";
 
 /** 全局壳（L0 唯一 AppLayout）：<html><head>、导航、toast 容器；纯视觉边框不查业务数据 */
 export default defineLayout(({ title, content }) => (

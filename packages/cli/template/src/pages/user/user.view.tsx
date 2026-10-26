@@ -1,4 +1,4 @@
-import type { Component } from "@workspace/htmx";
+import type { Component } from "@elysiax/htmx";
 import type { User } from "./user.model";
 
 /** 用户列表（整页与 POST 创建后的片段刷新共用）。

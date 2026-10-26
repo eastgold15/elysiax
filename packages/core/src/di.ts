@@ -3,7 +3,7 @@ import { websocket } from "elysia/websocket";
 import { compress } from "@elysia/compress";
 import { openapi } from "@elysia/openapi";
 import { inferdiElysia } from "@inferdi/elysia";
-import { actions, html, type LayoutComponent } from "@workspace/htmx";
+import { actions, html, type LayoutComponent } from "@elysiax/htmx";
 import type { Container, Lifetime, Spec } from "@inferdi/inferdi";
 import type { ModuleEntry } from "./index";
 import type { PageEntry } from "./pages";
@@ -96,7 +96,7 @@ export function elysiaxModule<S extends Record<string, unknown>>(
 /**
  * 创建 DI 插件并挂载所有模块的 controller / ui 片段。
  *
- * 内部已应用 `@workspace/htmx` 的 `html()` 插件（autoDetect），模块路由
+ * 内部已应用 `@elysiax/htmx` 的 `html()` 插件（autoDetect），模块路由
  * 直接 `return <Component/>` 或 HTML 字符串即可获得 text/html 响应，
  * 无需 `html()` 包裹；裸返回 `<html>...` 会自动补 `<!doctype html>`。
  *

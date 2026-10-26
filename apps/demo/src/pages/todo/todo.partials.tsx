@@ -1,4 +1,4 @@
-import type { Component } from "@workspace/htmx";
+import type { Component } from "@elysiax/htmx";
 import { routes } from "../../../.elysiax";
 import type { Todo } from "./schema";
 

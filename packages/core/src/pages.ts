@@ -1,4 +1,4 @@
-import { brandPageResult } from "@workspace/htmx";
+import { brandPageResult } from "@elysiax/htmx";
 import type { Container, Lifetime, Spec } from "@inferdi/inferdi";
 
 /** 与 di.ts 同一映射：服务名 → InferDI 容器图谱 */

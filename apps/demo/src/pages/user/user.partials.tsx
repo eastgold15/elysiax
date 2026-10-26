@@ -1,5 +1,5 @@
 import { defineRoutes } from "../../../.elysiax";
-import type { Component } from "@workspace/htmx";
+import type { Component } from "@elysiax/htmx";
 import { routes } from "../../../.elysiax";
 import type { User } from "./user.model";
 

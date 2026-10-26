@@ -1,1 +1,0 @@
-ALTER TABLE `deploy_targets` ADD `dependsOn` text;

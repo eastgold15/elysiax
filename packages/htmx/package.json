@@ -1,5 +1,5 @@
 {
-  "name": "@workspace/htmx",
+  "name": "@elysiax/htmx",
   "module": "src/index.ts",
   "type": "module",
   "devDependencies": {

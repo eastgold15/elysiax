@@ -1,4 +1,4 @@
-import type { LayoutComponent } from "@workspace/htmx";
+import type { LayoutComponent } from "@elysiax/htmx";
 
 /**
  * 全局壳注册：全站唯一一个 AppLayout（<html><head>、导航、toast 容器）。

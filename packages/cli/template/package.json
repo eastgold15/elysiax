@@ -19,7 +19,7 @@
     "elysia": "catalog:",
     "tailwindcss": "^4.1.11",
     "@inferdi/elysia": "workspace:*",
-    "@workspace/htmx": "workspace:*",
+    "@elysiax/htmx": "workspace:*",
     "webview-bun": "^2.4.0"
   },
   "devDependencies": {

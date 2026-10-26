@@ -47,7 +47,7 @@ import { solidPlugin } from "./index";
  * 2. Bun.plugin 挂 Solid JSX 预编译。
  *
  * filter 陷阱：插件按路径拦截 .tsx——monorepo 里还有 @kitajs/html 语义的 .tsx
- * （如 @workspace/htmx 的 toast.tsx），一旦被 Solid 编译会注入 solid-js/web 依赖
+ * （如 @elysiax/htmx 的 toast.tsx），一旦被 Solid 编译会注入 solid-js/web 依赖
  * 而解析失败。默认放行全部 .tsx 只适合纯 Solid 应用；混用 htmx 的应用必须传
  * filter 收窄到「应用 client/ 目录 + @elysiax/flow 包」，例如：
  * `setupClientTest({ filter: /(apps\/myapp\/.*\/client|packages\/flow\/src).*\.tsx$/ })`

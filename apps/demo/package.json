@@ -16,7 +16,7 @@
     "@elysiax/core": "workspace:*",
     "@inferdi/elysia": "workspace:*",
     "@inferdi/inferdi": "^6.1.0",
-    "@workspace/htmx": "workspace:*",
+    "@elysiax/htmx": "workspace:*",
     "bun-plugin-tailwind": "^0.1.2",
     "elysia": "catalog:",
     "solid-js": "^1.9.17",

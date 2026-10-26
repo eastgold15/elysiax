@@ -1,1 +1,0 @@
-ALTER TABLE `deploy_targets` ADD `overrideCompose` text;

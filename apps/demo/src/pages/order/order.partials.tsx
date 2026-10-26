@@ -1,4 +1,4 @@
-import type { Component } from "@workspace/htmx";
+import type { Component } from "@elysiax/htmx";
 import { defineRoutes, routes } from "../../../.elysiax";
 
 /** 订单面板（整页直接渲染用；交互片段走下面 GET 子路由） */

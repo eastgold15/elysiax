@@ -229,14 +229,17 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
   const absPos = createMemo(() => {
     const map = new Map<string, { x: number; y: number }>();
     const byId = new Map(props.nodes.map((n) => [n.id, n]));
-    const walk = (n: N): { x: number; y: number } => {
+    const walk = (n: N, visiting = new Set<string>()): { x: number; y: number } => {
       const hit = map.get(n.id);
       if (hit) return hit;
+      // 父链成环（a.parent=b, b.parent=a）时按无父处理，不无限递归爆栈
+      if (visiting.has(n.id)) return n.position;
+      visiting.add(n.id);
       let { x, y } = n.position;
       if (n.parentId) {
         const p = byId.get(n.parentId);
         if (p) {
-          const pp = walk(p);
+          const pp = walk(p, visiting);
           x += pp.x;
           y += pp.y;
         }
@@ -328,6 +331,8 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
   // ── 键盘删边 ──
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.key !== "Delete" && e.key !== "Backspace") return;
+    // 事件从节点内 input/textarea 冒泡上来时是在编辑文本，不能删边
+    if ((e.target as HTMLElement).closest?.("input, textarea, select, [contenteditable]")) return;
     const ids = props.edges.filter((ed) => ed.selected).map((ed) => ed.id);
     if (ids.length) props.onEdgesRemove?.(ids);
   };

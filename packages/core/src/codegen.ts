@@ -322,9 +322,14 @@ async function scanPages(root: string, pagesDir: string): Promise<PageScan> {
   return { pages: [...groups.values()], dis };
 }
 
-/** client 页壳 HTML 的 slug：URL 段拼合（/projects/:id/env → projects_id_env） */
+/** client 页壳 HTML 的 slug：URL 段拼合；参数段保留可区分形式（:id → _id），
+ *  否则 /projects/:id/env 与字面量目录 /projects/id/env 撞 slug 静默互覆 */
 const shellSlug = (url: string) =>
-  url.split("/").filter(Boolean).join("_").replaceAll(":", "") || "root";
+  url
+    .split("/")
+    .filter(Boolean)
+    .map((seg) => (seg.startsWith(":") ? `_${seg.slice(1)}` : seg))
+    .join("_") || "root";
 
 /** 从 controller 源码提取路由。负向后瞻排除 di.get("...")；只认 "/" 开头字面量 */
 export function extractRoutes(
@@ -332,8 +337,10 @@ export function extractRoutes(
   fallbackPrefix: string,
 ): { prefix: string; paths: string[] } {
   // prefix 允许出现在 options 对象的任意位置（不再要求必须是第一个属性）
+  // 泛型段允许一层内层 <>（如 defineController<Record<string, Foo>>），
+  // 否则 [^>]* 提前闭合导致 prefix 失配、静默回落 fallback → 路由助手全错
   const prefixMatch = src.match(
-    /defineController(?:<[^>]*>)?\(\s*\{[\s\S]*?\bprefix\s*:\s*["'`]([^"'`]+)["'`]/,
+    /defineController(?:<(?:[^<>]|<[^>]*>)*>)?\(\s*\{[\s\S]*?\bprefix\s*:\s*["'`]([^"'`]+)["'`]/,
   );
   const prefix = prefixMatch?.[1] ?? fallbackPrefix;
   const routeRe =
@@ -457,9 +464,21 @@ export async function codegen(
 
   // ── 拓扑排序：dep 的提供者必须先装配 ──
   const provider = new Map<string, number>(); // key → 模块下标（-1 = infra）
-  if (infra) for (const k of Object.keys(infra.provides)) provider.set(k, -1);
+  const providerOwner = new Map<string, string>(); // key → 原子名（冲突报错用）
+  const claimProvider = (key: string, idx: number, owner: string) => {
+    const prev = providerOwner.get(key);
+    if (prev !== undefined)
+      throw new Error(
+        `[elysiax] provide 键 "${key}" 冲突：原子 "${prev}" 与 "${owner}" 都提供了它，` +
+          `依赖方会静默注入后扫描到的那个，请改名`,
+      );
+    provider.set(key, idx);
+    providerOwner.set(key, owner);
+  };
+  if (infra) for (const k of Object.keys(infra.provides)) claimProvider(k, -1, "infra");
   mods.forEach((mod, i) => {
-    if (mod.di) for (const k of Object.keys(mod.di.provides)) provider.set(k, i);
+    if (mod.di)
+      for (const k of Object.keys(mod.di.provides)) claimProvider(k, i, mod.manifest.name);
   });
 
   const depsOf = (di: ModuleDi): string[] =>
@@ -618,6 +637,12 @@ export async function codegen(
       }
       const sig = params.map((p) => `${p}: P`).join(", ");
       const body = path.replaceAll(/:([^/]+)/g, (_, p) => `\${${p}}`);
+      // 助手名撞车（/a/:id 与 /a/by-id 都推导出 aById）会静默覆盖丢条目，直接报错
+      const prev = entries.find(([n]) => n === name);
+      if (prev)
+        throw new Error(
+          `[elysiax] 路由助手名冲突：${prefix} 下的路径都推导出 "${name}"，请改路径区分`,
+        );
       entries.push([name, `(${sig}) => \`${apiPrefix}${body}\``]);
     }
     return entries;
@@ -625,6 +650,9 @@ export async function codegen(
   for (const mod of mods) {
     const n = mod.manifest.name;
     if (!mod.controller) continue;
+    // 模块名撞保留命名空间 pages（页面助手块同名）会静默互覆
+    if (n === "pages" && pageScan.pages.length)
+      throw new Error(`[elysiax] 模块名 "pages" 与页面路由助手保留键冲突，请改模块名`);
     const src = await Bun.file(mod.controller).text();
     const { prefix, paths } = extractRoutes(src, mod.manifest.route ?? `/${n}`);
     const entries = buildEntries(prefix, paths);

@@ -1244,23 +1244,32 @@ cli.addCommand({
     };
     let last = await snapshot();
     let lastStructure = await structureSnapshot();
+    // codegen 含 Bun.build 可能超过 500ms：上一轮没完直接跳过，
+    // 否则两个 codegen 并发写同一批 .elysiax 文件 → 截断/交错产物被 --hot 加载
+    let running = false;
     setInterval(async () => {
-      const structure = await structureSnapshot();
-      const now = await snapshot();
-      if (structure === lastStructure && now === last) return;
+      if (running) return;
+      running = true;
       try {
-        await codegen(process.cwd(), config);
-      } catch (error) {
-        logger.error((error as Error).message);
-        return;
-      }
-      if (structure !== lastStructure) {
-        lastStructure = structure;
-        last = now;
-        restart();
-      } else {
-        last = now;
-        logger.info("🔄 模块声明变化，.elysiax/ 已重新生成");
+        const structure = await structureSnapshot();
+        const now = await snapshot();
+        if (structure === lastStructure && now === last) return;
+        try {
+          await codegen(process.cwd(), config);
+        } catch (error) {
+          logger.error((error as Error).message);
+          return;
+        }
+        if (structure !== lastStructure) {
+          lastStructure = structure;
+          last = now;
+          restart();
+        } else {
+          last = now;
+          logger.info("🔄 模块声明变化，.elysiax/ 已重新生成");
+        }
+      } finally {
+        running = false;
       }
     }, 500);
 

@@ -787,9 +787,10 @@ cli.addCommand({
     //    不 export default、不导出实例（共享可变状态绕过 DI）
     let purityIssues = 0;
     for (const sf of socketFiles) {
-      const src = readFileSync(sf, "utf8");
+      // 先剥注释：块注释里被注释掉的 export default 不能算违规
+      const src = stripComments(readFileSync(sf, "utf8"));
       const rel = relative(root, sf);
-      if (/^export\s+default\s/m.test(src)) {
+      if (/^export\s+default\s/m.test(src) || /^export\s*\{[^}]*\bas\s+default\b/m.test(src)) {
         logger.error(`❌ ${rel}: 插座含 export default——插座只许 named/type export（契约 §3.1）`);
         purityIssues++;
         errors++;

@@ -43,7 +43,12 @@ export function stripComments(src: string): string {
     }
     if (c === "/" && next === "*") {
       i += 2;
-      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) i++;
+      // 块注释里的换行要保留：否则注释前后的两行代码会被拼到一行，
+      // 依赖行首锚点的匹配（import ...）就漏了
+      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) {
+        if (src[i] === "\n") out += "\n";
+        i++;
+      }
       i += 2;
       continue;
     }
@@ -153,7 +158,17 @@ export async function checkSocketGate(root: string, pagesDir: string): Promise<S
       : spec.startsWith("@/")
         ? resolve(root, "src", spec.slice(2))
         : resolve(fromFile, "..", spec);
-    for (const cand of [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`])
+    // NodeNext 风格显式扩展名：./x.socket.js 实际落在 ./x.socket.ts
+    const stripped = base.replace(/\.(c|m)?jsx?$/, "");
+    for (const cand of [
+      base,
+      `${base}.ts`,
+      `${base}.tsx`,
+      `${stripped}.ts`,
+      `${stripped}.tsx`,
+      `${base}/index.ts`,
+      `${base}/index.tsx`,
+    ])
       if (existsSync(cand)) return cand;
     return undefined;
   };
@@ -170,41 +185,49 @@ export async function checkSocketGate(root: string, pagesDir: string): Promise<S
   };
 
   const violations: SocketViolation[] = [];
+  /** 判定一条跨文件引用（静态 import/export、副作用 import、动态 import 共用） */
+  const checkSpec = (fileRel: string, absFile: string, spec: string, clause: string) => {
+    // 只查相对 import 与 @/ 别名（指向 src/ 内部）；包与 shared 基建不查
+    if (!spec.startsWith(".") && !spec.startsWith("@/")) return;
+    const target = resolveImport(absFile, spec);
+    if (!target || !target.includes(`/${pagesDir}/`)) return;
+    const srcAtom = atomOf(absFile);
+    const tgtAtom = atomOf(target);
+    if (!tgtAtom || tgtAtom === srcAtom) return; // 原子内部 / 非原子目标
+    if (!/\.socket\.tsx?$/.test(target)) {
+      violations.push({
+        file: fileRel,
+        message: `跨原子 import 绕过了插座（${spec}）——只允许指向对方的 <name>.socket.ts，被引用方请先把符号登记进插座`,
+      });
+      return;
+    }
+    // 适配检查（符号级）：插头引用的每个符号，插座必须真实导出——
+    // 源码分发场景下"接口对不上"在安装期就报出来，而不是运行时炸
+    const named = /^\{([^}]*)\}/s.exec(clause.trim())?.[1];
+    if (!named) return; // default/namespace import：插座无 default（§3.1），tsc 会抓
+    for (const part of named.split(",")) {
+      const sym = part.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0]!.trim();
+      if (!sym) continue;
+      if (!symbolsOf(target).has(sym)) {
+        violations.push({
+          file: fileRel,
+          message: `插头插不上——插座 ${relativeSpec(root, target)} 没有导出 "${sym}"（插座出口被删/改名，或复制来的原子与对方插座版本不匹配）`,
+        });
+      }
+    }
+  };
+
   for await (const f of new Glob(`${pagesDir}/**/*.ts*`).scan({ cwd: root })) {
     const abs = resolve(root, f);
-    const src = readFileSync(abs, "utf8");
-    // 三种跨文件引用形态都查：import ... from / export ... from（再导出）/ import "..."（副作用）
+    // 先剥注释：注释里的示例 import 不能算数，import 花括号里的行注释也不能混进符号名
+    const src = stripComments(readFileSync(abs, "utf8"));
+    // 静态形态：import ... from / export ... from（再导出）/ import "..."（副作用）
     for (const m of src.matchAll(/^\s*(?:import\s+(?:type\s+)?([^"']*?)from|export\s+(?:type\s+)?([^"']*?)from|import)\s*["']([^"']+)["']/gm)) {
-      const clause = m[1] ?? m[2] ?? "";
-      const spec = m[3]!;
-      // 只查相对 import 与 @/ 别名（指向 src/ 内部）；包与 shared 基建不查
-      if (!spec.startsWith(".") && !spec.startsWith("@/")) continue;
-      const target = resolveImport(abs, spec);
-      if (!target || !target.includes(`/${pagesDir}/`)) continue;
-      const srcAtom = atomOf(abs);
-      const tgtAtom = atomOf(target);
-      if (!tgtAtom || tgtAtom === srcAtom) continue; // 原子内部 / 非原子目标
-      if (!/\.socket\.tsx?$/.test(target)) {
-        violations.push({
-          file: f,
-          message: `跨原子 import 绕过了插座（${spec}）——只允许指向对方的 <name>.socket.ts，被引用方请先把符号登记进插座`,
-        });
-        continue;
-      }
-      // 适配检查（符号级）：插头引用的每个符号，插座必须真实导出——
-      // 源码分发场景下"接口对不上"在安装期就报出来，而不是运行时炸
-      const named = /^\{([^}]*)\}/s.exec(clause.trim())?.[1];
-      if (!named) continue; // default/namespace import：插座无 default（§3.1），tsc 会抓
-      for (const part of named.split(",")) {
-        const sym = part.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0]!.trim();
-        if (!sym) continue;
-        if (!symbolsOf(target).has(sym)) {
-          violations.push({
-            file: f,
-            message: `插头插不上——插座 ${relativeSpec(root, target)} 没有导出 "${sym}"（插座出口被删/改名，或复制来的原子与对方插座版本不匹配）`,
-          });
-        }
-      }
+      checkSpec(f, abs, m[3]!, m[1] ?? m[2] ?? "");
+    }
+    // 动态 import(): 同样是跨原子引用通道，别名/相对路径一律按同一口径判
+    for (const m of src.matchAll(/\bimport\s*\(\s*["']([^"']+)["']\s*\)/g)) {
+      checkSpec(f, abs, m[1]!, "");
     }
   }
   return { violations, atomDirs: atomsDirs, socketFiles, symbols };

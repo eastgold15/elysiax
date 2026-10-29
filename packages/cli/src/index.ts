@@ -1274,13 +1274,28 @@ cli.addCommand({
       }
       return files.sort().join("|");
     };
-    const restart = () => {
+    // client 原子源内容快照（组件/样式）。
+    // 内容变化必须 codegen + 重启子进程，不能只靠 --hot：
+    // client 入口是 codegen 预打包产物（.elysiax/shells/*.client.js），bun --hot
+    // 不支持对「被外部重写的预打包 JS」做 HMR；而且依赖它对 HTMLBundle 的热重载
+    // 会命中 bun 的失效 bundle bug（产物重写后壳引用的 hash URL 永久 404，
+    // 报 "Failed to load bundled module './canvas.client.js'"）。重启 = 全新 bundle 图。
+    const clientSnapshot = async () => {
+      const times: string[] = [];
+      for await (const f of new Glob(`${pagesDir}/**/client/**/*`).scan({ cwd: process.cwd() })) {
+        if (!/\.(ts|tsx|css)$/.test(f)) continue;
+        times.push(`${f}:${(await Bun.file(f).lastModified)}`);
+      }
+      return times.sort().join("|");
+    };
+    const restart = (why: string) => {
       child.kill();
       child = spawnChild();
-      logger.info("🔄 页面结构变化，dev server 已重启");
+      logger.info(`🔄 ${why}，dev server 已重启（client 页请刷新浏览器）`);
     };
     let last = await snapshot();
     let lastStructure = await structureSnapshot();
+    let lastClient = await clientSnapshot();
     // codegen 含 Bun.build 可能超过 500ms：上一轮没完直接跳过，
     // 否则两个 codegen 并发写同一批 .elysiax 文件 → 截断/交错产物被 --hot 加载
     let running = false;
@@ -1289,8 +1304,9 @@ cli.addCommand({
       running = true;
       try {
         const structure = await structureSnapshot();
+        const client = await clientSnapshot();
         const now = await snapshot();
-        if (structure === lastStructure && now === last) return;
+        if (structure === lastStructure && client === lastClient && now === last) return;
         try {
           await codegen(process.cwd(), config);
         } catch (error) {
@@ -1300,7 +1316,12 @@ cli.addCommand({
         if (structure !== lastStructure) {
           lastStructure = structure;
           last = now;
-          restart();
+          lastClient = client;
+          restart("页面结构变化");
+        } else if (client !== lastClient) {
+          lastClient = client;
+          last = now;
+          restart("client 源变化");
         } else {
           last = now;
           logger.info("🔄 模块声明变化，.elysiax/ 已重新生成");

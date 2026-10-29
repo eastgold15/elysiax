@@ -68,6 +68,8 @@ interface FlowCtx {
   zoom(): number;
   onResize(id: string, w: number, h: number, resizing: boolean): void;
   onResizeEnd(id: string, w: number, h: number): void;
+  /** 滚轮缩放后重建进行中手势的换算基准（拖拽/拉伸共用同一槽位）；传 null 注销 */
+  setRebase(fn: (() => void) | null): void;
 }
 const FlowContext = createContext<FlowCtx>();
 
@@ -109,7 +111,15 @@ export function Resizer(props: {
 }) {
   const ctx = useContext(FlowContext)!;
   // pointerId = 拉伸态 owner：与 pan/conn/node 三态同一偏序，第二根指针不得覆写起点
-  let start: { pointerId: number; px: number; py: number; w: number; h: number } | null = null;
+  let start: {
+    pointerId: number;
+    px: number;
+    py: number;
+    w: number;
+    h: number;
+    lastX: number;
+    lastY: number;
+  } | null = null;
 
   const onDown = (e: PointerEvent) => {
     if (e.button !== 0) return; // 只认左键，右/中键不进拉伸态
@@ -117,13 +127,29 @@ export function Resizer(props: {
     e.stopPropagation();
     e.preventDefault();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    start = { pointerId: e.pointerId, px: e.clientX, py: e.clientY, w: props.width, h: props.height };
+    start = {
+      pointerId: e.pointerId,
+      px: e.clientX,
+      py: e.clientY,
+      w: props.width,
+      h: props.height,
+      lastX: e.clientX,
+      lastY: e.clientY,
+    };
+    // 滚轮在拉伸中途缩放时，以「当前尺寸 + 上一次指针位置」重建起点；
+    // 不重建的话下一次 move 拿旧 k 的基准算尺寸，手柄与指针脱节
+    ctx.setRebase(() => {
+      if (!start) return;
+      start = { ...start, px: start.lastX, py: start.lastY, w: props.width, h: props.height };
+    });
   };
   const onMove = (e: PointerEvent) => {
     if (!start || e.pointerId !== start.pointerId) return;
     const k = ctx.zoom();
     const w = Math.max(props.minW, start.w + (e.clientX - start.px) / k);
     const h = Math.max(props.minH, start.h + (e.clientY - start.py) / k);
+    start.lastX = e.clientX;
+    start.lastY = e.clientY;
     ctx.onResize(props.nodeId, w, h, true);
   };
   const onUp = (e: PointerEvent) => {
@@ -132,6 +158,7 @@ export function Resizer(props: {
     const w = Math.max(props.minW, start.w + (e.clientX - start.px) / k);
     const h = Math.max(props.minH, start.h + (e.clientY - start.py) / k);
     start = null;
+    ctx.setRebase(null);
     ctx.onResize(props.nodeId, w, h, false);
     ctx.onResizeEnd(props.nodeId, w, h);
     props.onEnd(w, h);
@@ -156,6 +183,7 @@ export function Resizer(props: {
         if (!start || e.pointerId !== start.pointerId) return;
         const s = start;
         start = null;
+        ctx.setRebase(null);
         ctx.onResize(props.nodeId, s.w, s.h, false);
         ctx.onResizeEnd(props.nodeId, s.w, s.h);
       }}
@@ -558,6 +586,11 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
         zoom: () => t().k,
         onResize: (id, w, h, resizing) => props.onNodeResize?.(id, w, h, resizing),
         onResizeEnd: (id, w, h) => props.onNodeResizeEnd?.(id, w, h),
+        // 拖拽与拉伸共用同一槽位：同一时刻只可能有一个手势 owner（节点/手柄/拉伸各自单指），
+        // 滚轮缩放时由 onWheel 调它重建「屏幕 → 画布」换算基准
+        setRebase: (fn) => {
+          rebaseActiveGesture = fn;
+        },
       }}
     >
       <div

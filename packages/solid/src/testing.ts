@@ -69,6 +69,21 @@ export function setupClientTest(opts?: { filter?: RegExp; resolveFrom?: string }
   // 测试进程里命中的 .tsx 都按 Solid 编译：client 测试只引浏览器侧代码
   // （doctor 岛边界本来就禁 client 引服务端），框架包（@elysiax/flow 的 .tsx 源）
   // 也要过同一个转换，不能只放行应用 client/ 目录而漏掉 flow。
+  //
+  // runtime peer 去重（比 Bun.build 侧更关键）：Bun.plugin 的 onResolve 在
+  // `bun test` 运行时不生效（实测不触发），link: 引入的 @elysiax/flow 会从自己的
+  // node_modules 拿到另一份 solid-js——两份实例的响应式图互不相通，表现为
+  // 「外部 props 变化后 flow 内部 DOM 纹丝不动」，比报错更隐蔽。用 bun:test 的
+  // mock.module 把 solid-js 全量钉到应用根副本，和浏览器构建保持同一实例。
+  try {
+    const { mock } = appRequire("bun:test") as { mock: { module(spec: string, factory: () => unknown): void } };
+    for (const spec of ["solid-js", "solid-js/web", "solid-js/store"]) {
+      const mod = appRequire(spec);
+      mock.module(spec, () => mod);
+    }
+  } catch {
+    // 非 bun test 环境（如构建脚本）：没有 bun:test，跳过即可
+  }
   Bun.plugin(
     solidPlugin({
       ...(opts?.filter ? { filter: opts.filter } : {}),

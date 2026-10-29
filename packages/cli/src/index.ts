@@ -1288,6 +1288,17 @@ cli.addCommand({
       }
       return times.sort().join("|");
     };
+    // 壳产物时间戳：捕捉「外部 codegen」——typecheck（`elysiax gen && tsc`）或 CI
+    // 会在 dev server 之外重写 .elysiax/shells/，而子进程仍握着旧 HTMLBundle，
+    // 浏览器就会报 "Failed to load bundled module './canvas.client.js'"。
+    // 源快照全没变、只有壳时间戳变 = 外部重写 → 重启自愈（不能只靠 --hot，见上）。
+    const shellsSnapshot = async () => {
+      const times: string[] = [];
+      for await (const f of new Glob(".elysiax/shells/**/*").scan({ cwd: process.cwd() })) {
+        times.push(`${f}:${(await Bun.file(f).lastModified)}`);
+      }
+      return times.sort().join("|");
+    };
     const restart = (why: string) => {
       child.kill();
       child = spawnChild();
@@ -1296,6 +1307,7 @@ cli.addCommand({
     let last = await snapshot();
     let lastStructure = await structureSnapshot();
     let lastClient = await clientSnapshot();
+    let lastShells = await shellsSnapshot();
     // codegen 含 Bun.build 可能超过 500ms：上一轮没完直接跳过，
     // 否则两个 codegen 并发写同一批 .elysiax 文件 → 截断/交错产物被 --hot 加载
     let running = false;
@@ -1306,13 +1318,22 @@ cli.addCommand({
         const structure = await structureSnapshot();
         const client = await clientSnapshot();
         const now = await snapshot();
-        if (structure === lastStructure && client === lastClient && now === last) return;
+        const shells = await shellsSnapshot();
+        // 源全没变、壳被外部重写 → 只重启，不必重新 codegen（内容已由外部生成）
+        if (structure === lastStructure && client === lastClient && now === last) {
+          if (shells !== lastShells) {
+            lastShells = shells;
+            restart("外部 codegen 重写壳产物");
+          }
+          return;
+        }
         try {
           await codegen(process.cwd(), config);
         } catch (error) {
           logger.error((error as Error).message);
           return;
         }
+        lastShells = await shellsSnapshot(); // 吃下自己的产物，避免下一轮误判为外部重写
         if (structure !== lastStructure) {
           lastStructure = structure;
           last = now;

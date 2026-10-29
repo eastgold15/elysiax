@@ -17,8 +17,8 @@
 
 | 文件 | 作用 |
 |---|---|
-| `schema.ts` | drizzle 表定义，本原子的表锚点 |
-| `migrations.ts` | 本原子的迁移 |
+| `schema.ts` | 本原子的表锚点：drizzle 表定义，或（裸 SQL 项目）`CREATE TABLE` DDL 字符串 |
+| `migrations.ts` | 本原子的迁移（裸 SQL 项目通常 `db.run(<name>DDL)`，幂等） |
 | `<name>.repository.ts` | 数据访问，依赖 `"db"` 值服务 |
 
 ### 1.3 UI 层：渲染器单选，格式单一
@@ -134,6 +134,8 @@ di 的 deps 是原子的"凸"（要插哪些插座）；doctor 在 import 扫描
 3. **禁止跨原子 DDL**：本原子的 `migrations.ts` 只许 CREATE/ALTER/DROP 自己的表；外键 `REFERENCES` 别家表是插头（正当），ALTER 别家表是拆墙（报错）。
 4. **迁移只追加（doctor 强制）**：对比 `git HEAD`，历史迁移条目（name+timestamp）的 SQL 被修改或整条被删即报错——存量库不会重跑已执行的迁移，改历史 = 制造 schema 漂移。
 5. **schema 漂移检查（doctor，有库才跑）**：`--db <路径>` 指定（或项目内 `data/`、`.data/` 自动探测 .db 文件）时，对比 schema.ts 声明表与存量库 `sqlite_master` 实际表，双向漂移（声明了但库里没有 / 库里有但没声明）都报错。CI/新克隆无库自动跳过。
+
+   推论：**表建在哪里，锚点就得写在哪里**。裸 SQL 项目把 DDL 写在 `shared/db.ts`（或 repository 构造函数）里而不在 schema.ts 留锚点，doctor 会把真实业务表报成「旧表名残留」——共享文件只放连接，表锚点永远在原子内（demo 的 user/order/board 三个原子即按此迁移）。
 
 ## 10. 端点 schema 完整性
 

@@ -137,6 +137,8 @@ di 的 deps 是原子的"凸"（要插哪些插座）；doctor 在 import 扫描
 
    推论：**表建在哪里，锚点就得写在哪里**。裸 SQL 项目把 DDL 写在 `shared/db.ts`（或 repository 构造函数）里而不在 schema.ts 留锚点，doctor 会把真实业务表报成「旧表名残留」——共享文件只放连接，表锚点永远在原子内（demo 的 user/order/board 三个原子即按此迁移）。
 
+   盲区：这项检查只看**表名**，不比列结构。裸 SQL 原子的 `schema.ts` 里改了 DDL（加列/改类型）而库里还是旧结构时，doctor 依旧全绿——列变更必须走一条显式迁移（`ALTER TABLE`），并且只追加：新克隆靠迁移补齐，存量库靠已执行记录跳过，两边最终一致。drizzle 原子同理，改 schema 后忘记生成迁移不会被这条检查拦下。
+
 ## 10. 端点 schema 完整性
 
 Eden Treaty 与 OpenAPI 的类型质量取决于端点的 t schema 完备度：

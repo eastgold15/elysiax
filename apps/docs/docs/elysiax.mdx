@@ -136,6 +136,8 @@ hx-post={routes.pages.servers.index()}
 
 > **client 页（浏览器代码）必须 `import { routes } from ".elysiax/routes.gen"` 直接引文件**，不能引 `.elysiax` 桶文件——桶文件会把整个服务端图谱打进浏览器 bundle。doctor 会检查。
 
+同一份数据另有机器可读旁产物 `.elysiax/routes.table.json`（`{ kind, method, path, source }[]`，页面/client 壳/片段/actions/controller 全覆盖，确定性输出无时间戳）。`elysiax routes` 打印它，doctor 的「路由冲突」检查也以它为准——同一「方法 + 归一化路径」被两个源文件声明即报错。
+
 ## 跨原子组合视图
 
 页面 A 要渲染页面 B 的展示组件时，**必须经 B 的插座**：
@@ -204,6 +206,7 @@ elysiax new service auth   # 纯服务模块（di + service，无路由）
 elysiax new client canvas  # 已有页面升舱 client 模式
 elysiax dev                # codegen + bun --hot；页面结构变化自动重启，声明变化自动重生成
 elysiax gen                # 手动重生成 .elysiax/
+elysiax routes [--json]    # 全部挂载路由（页面/client 壳/片段/actions/controller），源自 .elysiax/routes.table.json
 elysiax doctor [--db x.db] # 体检 12 项：DI 图、路由冲突、岛边界、插座门禁/纯度/只增不减、
                            #   数据层、端点 schema、schema 漂移（--db）、迁移只追加、错误约定
                            #   插座门禁已在 codegen 强制（dev/gen/build 都会拦），doctor 复用同一实现

@@ -6,6 +6,8 @@ import { resolve, basename, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 // 插座门禁与源码解析工具：与 core 的 codegen 共用同一实现（契约不能有两套判定）
 import { checkSocketGate, socketExports, stripComments } from "@elysiax/core/socket-gate";
+// 类型专用 import：doctor 读 codegen 落盘的路由表（运行期实现仍动态 import core）
+import type { RouteRow } from "@elysiax/core";
 
 const templateDir = fileURLToPath(new URL("../template", import.meta.url));
 
@@ -686,9 +688,8 @@ cli.addCommand({
   ],
   execute: async ({ options, logger }) => {
     const root = process.cwd();
-    const { codegen, loadConfig, extractRoutes } = await import("@elysiax/core");
+    const { codegen, loadConfig } = await import("@elysiax/core");
     const config = await loadConfig(root);
-    const modulesDir = config.modules ?? "src/modules";
     let errors = 0;
 
     // 1) DI 图 + codegen（依赖缺失/环会在这里抛出来）
@@ -700,33 +701,38 @@ cli.addCommand({
       errors++;
     }
 
-    // 2) 跨模块路由冲突：同一路径被两个模块声明，运行时才炸太晚了
-    const pathOwner = new Map<string, string>();
-    const modDirs = existsSync(resolve(root, modulesDir))
-      ? readdirSync(resolve(root, modulesDir), { withFileTypes: true })
-      : [];
-    for (const entry of modDirs) {
-      if (!entry.isDirectory()) continue;
-      const dir = resolve(root, modulesDir, entry.name);
-      for (const f of readdirSync(dir)) {
-        const m = f.match(/^(.+)\.controller\.tsx?$/);
-        if (!m) continue;
-        const src = readFileSync(resolve(dir, f), "utf8");
-        const { paths } = extractRoutes(src, `/${entry.name}`);
-        for (const p of paths) {
-          // 参数段归一化后再比（/a/:id 与 /a/:name 是同一路径）
-          const norm = p.replaceAll(/:[^/]+/g, ":");
-          const owner = pathOwner.get(norm);
-          if (owner && owner !== entry.name) {
-            logger.error(`❌ 路由冲突: ${p}（${entry.name}）与 ${owner} 模块重复`);
-            errors++;
-          } else {
-            pathOwner.set(norm, entry.name);
-          }
-        }
+    // 2) 路由冲突：以 codegen 落盘的 .elysiax/routes.table.json 为准——
+    //    页面 / client 壳 / htmx 片段 / actions / 模块 controller 全在内。
+    //    （旧实现只扫 modules/*.controller.tsx，页面时代恒为 0 条，报告"无冲突"是假通过）
+    let routeRows: RouteRow[] = [];
+    try {
+      routeRows = JSON.parse(
+        readFileSync(resolve(root, ".elysiax/routes.table.json"), "utf8"),
+      ) as RouteRow[];
+    } catch {
+      // codegen 失败时上一步已报错，这里不重复刷屏
+    }
+    const routeOwner = new Map<string, string>();
+    let routeConflicts = 0;
+    for (const r of routeRows) {
+      // 参数段归一化后再比（/a/:id 与 /a/:name 是同一挂载点）；同文件重复声明不算冲突
+      const norm = `${r.method} ${r.path.replaceAll(/:[^/]+/g, ":")}`;
+      const prev = routeOwner.get(norm);
+      if (prev && prev !== r.source) {
+        logger.error(`❌ 路由冲突: ${r.method} ${r.path}（${r.source}）与 ${prev} 重复`);
+        routeConflicts++;
+        errors++;
+      } else {
+        routeOwner.set(norm, r.source);
       }
     }
-    if (errors === 0) logger.info(`✅ 路由无冲突（${pathOwner.size} 条）`);
+    if (!routeConflicts) {
+      const byKind = (k: RouteRow["kind"]) => routeRows.filter((r) => r.kind === k).length;
+      logger.info(
+        `✅ 路由无冲突（${routeRows.length} 条：page ${byKind("page")} / client ${byKind("client")} / ` +
+          `partials ${byKind("partials")} / actions ${byKind("actions")} / controller ${byKind("controller")}）`,
+      );
+    }
 
     // 3) client 模式边界：client/ 是浏览器代码，import .elysiax 桶文件会把服务端
     //    图谱（modules.gen → service → bun:sqlite）打进浏览器 bundle，
@@ -1027,6 +1033,49 @@ cli.addCommand({
     const { codegen } = await import("@elysiax/core");
     const files = await codegen(process.cwd());
     for (const f of files) logger.info(`✅ ${f}`);
+  },
+});
+
+// ─────────────────────────────────────────────
+// elysiax routes — 路由表 dump（页面 / client 壳 / htmx 片段 / actions / 模块 controller）
+// ─────────────────────────────────────────────
+cli.addCommand({
+  name: "routes",
+  description: "列出全部挂载路由（先跑 codegen，再打印 .elysiax/routes.table.json）",
+  options: [
+    {
+      name: "json",
+      type: Boolean,
+      description: "输出机器可读 JSON（不打印表格）",
+    },
+  ],
+  execute: async ({ options, logger }) => {
+    const root = process.cwd();
+    const { codegen, loadConfig } = await import("@elysiax/core");
+    await codegen(root, await loadConfig(root));
+    const rows = JSON.parse(
+      readFileSync(resolve(root, ".elysiax/routes.table.json"), "utf8"),
+    ) as RouteRow[];
+    if (options.json) {
+      // 纯 JSON 走 stdout，不带日志前缀，便于 jq / 脚本消费
+      console.log(JSON.stringify(rows, null, 2));
+      return;
+    }
+    if (!rows.length) {
+      logger.info("（没有挂载的路由）");
+      return;
+    }
+    // 路径优先排序；列宽按内容取最大值，不写死
+    const sorted = [...rows].sort(
+      (a, b) => a.path.localeCompare(b.path) || a.method.localeCompare(b.method),
+    );
+    const wMethod = Math.max(...sorted.map((r) => r.method.length));
+    const wPath = Math.max(...sorted.map((r) => r.path.length));
+    const wKind = Math.max(...sorted.map((r) => r.kind.length));
+    for (const r of sorted)
+      logger.info(
+        `${r.method.padEnd(wMethod)}  ${r.path.padEnd(wPath)}  ${r.kind.padEnd(wKind)}  ${r.source}`,
+      );
   },
 });
 

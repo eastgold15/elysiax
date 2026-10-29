@@ -342,11 +342,22 @@ const shellSlug = (url: string) =>
     .map((seg) => (seg.startsWith(":") ? `_${seg.slice(1)}` : seg))
     .join("_") || "root";
 
+/** 路由表一行：挂载形态 + 方法 + 实际路径 + 源文件（.elysiax/routes.table.json 的条目） */
+export interface RouteRow {
+  kind: "page" | "client" | "partials" | "actions" | "controller";
+  /** HTTP 方法；`.ui()` 渲染页归一为 GET */
+  method: string;
+  /** 实际挂载路径（含模块前缀 / apiPrefix / 页面 URL） */
+  path: string;
+  /** 源文件（相对 root） */
+  source: string;
+}
+
 /** 从 controller 源码提取路由。负向后瞻排除 di.get("...")；只认 "/" 开头字面量 */
 export function extractRoutes(
   src: string,
   fallbackPrefix: string,
-): { prefix: string; paths: string[] } {
+): { prefix: string; paths: string[]; routes: { method: string; path: string }[] } {
   // prefix 允许出现在 options 对象的任意位置（不再要求必须是第一个属性）
   // 泛型段允许一层内层 <>（如 defineController<Record<string, Foo>>），
   // 否则 [^>]* 提前闭合导致 prefix 失配、静默回落 fallback → 路由助手全错
@@ -355,18 +366,27 @@ export function extractRoutes(
   );
   const prefix = prefixMatch?.[1] ?? fallbackPrefix;
   const routeRe =
-    /(?<![\w$])\.(?:get|post|put|patch|delete|ui)\(\s*["'`](\/[^"'`]*)["'`]/g;
+    /(?<![\w$])\.(get|post|put|patch|delete|ui)\(\s*["'`](\/[^"'`]*)["'`]/g;
+  // paths 按路径去重（助手名只关心路径）；routes 按「方法 + 路径」去重（路由表要能区分同一路径的 GET/POST）
   const paths: string[] = [];
   const seen = new Set<string>();
+  const routes: { method: string; path: string }[] = [];
+  const seenRoute = new Set<string>();
   for (const m of src.matchAll(routeRe)) {
-    const sub = m[1]!;
+    const method = m[1] === "ui" ? "GET" : m[1]!.toUpperCase();
+    const sub = m[2]!;
     const path = sub === "/" ? prefix : `${prefix}${sub}`;
     if (!seen.has(path)) {
       seen.add(path);
       paths.push(path);
     }
+    const key = `${method} ${path}`;
+    if (!seenRoute.has(key)) {
+      seenRoute.add(key);
+      routes.push({ method, path });
+    }
   }
-  return { prefix, paths };
+  return { prefix, paths, routes };
 }
 
 /**
@@ -637,6 +657,9 @@ export async function codegen(
   // hx-post={routes.deploy.uiDetect()} —— 改路由/前缀时 TSX 编译报错，不再静默 404。
   // （不 import controller：controller → .elysiax → modules.gen → controller 存在循环）
   const apiPrefix = config.apiPrefix ?? "/api";
+  // 路由表旁产物：routes.gen 是给人用的类型助手，这张表是给机器用的
+  // （doctor 冲突检查、`elysiax routes` 打印，见体检报告卡 7）
+  const routeTable: RouteRow[] = [];
   const rl: string[] = [
     header,
     "/** 路径参数 */",
@@ -684,7 +707,14 @@ export async function codegen(
     if (n === "pages" && pageScan.pages.length)
       throw new Error(`[elysiax] 模块名 "pages" 与页面路由助手保留键冲突，请改模块名`);
     const src = await Bun.file(mod.controller).text();
-    const { prefix, paths } = extractRoutes(src, mod.manifest.route ?? `/${n}`);
+    const { prefix, paths, routes } = extractRoutes(src, mod.manifest.route ?? `/${n}`);
+    for (const r of routes)
+      routeTable.push({
+        kind: "controller",
+        method: r.method,
+        path: r.path,
+        source: relative(root, mod.controller),
+      });
     const entries = buildEntries(prefix, paths);
     if (!entries.length) continue;
     rl.push(`  ${JSON.stringify(n)}: {`);
@@ -713,6 +743,12 @@ export async function codegen(
       rl.push(`    ${JSON.stringify(key)}: {`);
       const emitted = new Set<string>(["page"]);
       if (p.page || p.clientIndex) {
+        routeTable.push({
+          kind: p.clientIndex ? "client" : "page",
+          method: "GET",
+          path: p.url,
+          source: relative(root, (p.clientIndex ?? p.page)!),
+        });
         const body = p.url.replaceAll(/:([^/]+)/g, (_, pm) => `\${${pm}}`);
         const params = [...p.url.matchAll(/:([^/]+)/g)].map((m) => m[1]);
         const sig = params.map((pm) => `${pm}: P`).join(", ");
@@ -722,7 +758,15 @@ export async function codegen(
         const file = p[kind];
         if (!file) continue;
         const src = await Bun.file(file).text();
-        const { paths } = extractRoutes(src, p.url);
+        const { paths, routes } = extractRoutes(src, p.url);
+        // 实际挂载点 = apiPrefix + 页面 URL + 子路径（与 routes.gen 助手的 body 同源）
+        for (const r of routes)
+          routeTable.push({
+            kind,
+            method: r.method,
+            path: `${apiPrefix}${r.path}`,
+            source: relative(root, file),
+          });
         for (const [name, fn] of buildEntries(p.url, paths)) {
           // GET /config（partials）与 POST /config（actions）同名同 URL：
           // 助手只返路径，重名即重复，跳过后者
@@ -738,6 +782,9 @@ export async function codegen(
   rl.push("} as const;", "");
   writeFileSync(join(outDir, "routes.gen.ts"), rl.join("\n") + "\n");
   written.push(".elysiax/routes.gen.ts");
+  // 机器可读路由表：确定性输出（无时间戳）便于 diff；总是写，空表也写（doctor 以此为准）
+  writeFileSync(join(outDir, "routes.table.json"), JSON.stringify(routeTable, null, 2) + "\n");
+  written.push(".elysiax/routes.table.json");
 
   // pages.gen.ts：页面路由表 + 真实 import；client 页额外生成壳 HTML
   if (pageScan.pages.length) {

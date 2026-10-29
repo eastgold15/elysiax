@@ -51,8 +51,13 @@ import { solidPlugin } from "./index";
  * 而解析失败。默认放行全部 .tsx 只适合纯 Solid 应用；混用 htmx 的应用必须传
  * filter 收窄到「应用 client/ 目录 + @elysiax/flow 包」，例如：
  * `setupClientTest({ filter: /(apps\/myapp\/.*\/client|packages\/flow\/src).*\.tsx$/ })`
+ *
+ * peer 去重：link: 引入的框架包（@elysiax/flow 等）若自己有 node_modules/solid-js
+ * 副本，测试进程会混进两个 Solid 实例——`onMount` 与 ref 的调度器分属不同实例，
+ * 表现为「render 时 pane 还是 undefined」这类跨实例错乱。默认以 cwd（应用根）为
+ * 重定向基准，与浏览器构建保持一致。
  */
-export function setupClientTest(opts?: { filter?: RegExp }): void {
+export function setupClientTest(opts?: { filter?: RegExp; resolveFrom?: string }): void {
   // happy-dom 是应用的 devDependency：必须从应用根（cwd）解析，
   // 从本包位置 require 在 isolated node_modules 布局下找不到它
   const appRequire = createRequire(resolve(process.cwd(), "package.json"));
@@ -64,5 +69,10 @@ export function setupClientTest(opts?: { filter?: RegExp }): void {
   // 测试进程里命中的 .tsx 都按 Solid 编译：client 测试只引浏览器侧代码
   // （doctor 岛边界本来就禁 client 引服务端），框架包（@elysiax/flow 的 .tsx 源）
   // 也要过同一个转换，不能只放行应用 client/ 目录而漏掉 flow。
-  Bun.plugin(solidPlugin(opts?.filter ? { filter: opts.filter } : undefined));
+  Bun.plugin(
+    solidPlugin({
+      ...(opts?.filter ? { filter: opts.filter } : {}),
+      resolveFrom: opts?.resolveFrom ?? process.cwd(),
+    }),
+  );
 }

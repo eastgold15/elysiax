@@ -20,7 +20,7 @@
  *   - data-flow-menu：浮层菜单（右键菜单等），点击不触发 pane 的取消选中
  */
 import {
-  createContext, createEffect, createMemo, createSignal, For, onCleanup, onMount,
+  createContext, createEffect, createMemo, createSignal, For,
   useContext, type JSX,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
@@ -552,9 +552,6 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
     [...new Set(edgePaths().map((p) => p.e.arrowColor).filter((c): c is string => Boolean(c)))],
   );
 
-  onMount(() => pane.addEventListener("wheel", onWheel, { passive: false }));
-  onCleanup(() => pane.removeEventListener("wheel", onWheel));
-
   return (
     <FlowContext.Provider
       value={{
@@ -565,6 +562,10 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
     >
       <div
         ref={pane}
+        // wheel 走 JSX 监听（元素上的 wheel 监听默认非 passive，preventDefault 有效）：
+        // 不再在 onMount 里手工挂接——那要求 ref 先于 onMount 赋值，
+        // 而 Provider 的 children 是渲染效果里求值的，测试环境（乃至某些调度顺序）下会拿到 undefined
+        onWheel={onWheel}
         tabIndex={0}
         class="relative h-full w-full overflow-hidden outline-none"
         style={{

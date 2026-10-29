@@ -6,7 +6,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./plugin": "./src/plugin.ts",
-    "./di": "./src/di.ts"
+    "./di": "./src/di.ts",
+    "./socket-gate": "./src/socket-gate.ts"
   },
   "dependencies": {
     "@elysia/compress": "^2.0.0-rc.0",

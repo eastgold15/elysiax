@@ -3,6 +3,7 @@ import { basename, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ModuleManifest } from "./index";
 import { DEFAULTS, loadConfig, type ElysiaxConfig } from "./config";
+import { checkSocketGate } from "./socket-gate";
 
 /**
  * 模块 DI 声明条目（<name>.di.ts 的 provides 值，defineModule 归一化后的形态）：
@@ -371,6 +372,20 @@ export async function codegen(
   const pagesDir = config.pages ?? DEFAULTS.pages;
   const entry = config.build?.entry ?? DEFAULTS.entry;
   const written: string[] = [];
+
+  // 插座门禁前移到生成管线：跨原子私拉电线必须在 dev/gen/build/add 就失败，
+  // 不能只靠人记得跑 doctor（体检报告卡6）。判定口径与 doctor 共用同一实现。
+  if (existsSync(join(root, pagesDir))) {
+    const gate = await checkSocketGate(root, pagesDir);
+    if (gate.violations.length > 0) {
+      throw new Error(
+        [
+          `[elysiax] 插座门禁未通过（${gate.violations.length} 处，契约 §3：跨原子只能 import 对方 <name>.socket.ts）：`,
+          ...gate.violations.map((v) => `  ❌ ${v.file}: ${v.message}`),
+        ].join("\n"),
+      );
+    }
+  }
 
   // 页面树扫描（新约定）：URL = 文件夹路径，页面文件夹内聚一切
   const pageScan = await scanPages(root, pagesDir);

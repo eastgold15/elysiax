@@ -254,7 +254,9 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
   });
 
   // ── 视口平移/缩放 ──
-  let panStart: { px: number; py: number; tx: number; ty: number } | null = null;
+  // pointerId = 平移态的所有者：多指按下时先到者独占，后来者一律早退。
+  // 没有这个偏序，第二根指头的 down 会覆写起点，第一根指头的 move 按新起点算 → 画布跳变。
+  let panStart: { pointerId: number; px: number; py: number; tx: number; ty: number } | null = null;
   const onPanePointerDown = (e: PointerEvent) => {
     if (e.button !== 0) return; // 右/中键不平移不起线
     // 事件委托接 Handle 拖线起点（HandleView 带 data-nodrag，下面的 nodrag 早退会拦掉它，
@@ -270,18 +272,20 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
     }
     // 点在节点/手柄/浮层菜单上不 pan
     if ((e.target as HTMLElement).closest("[data-nodrag], .flow-node, [data-flow-menu]")) return;
+    if (panStart) return; // 已有指针在平移：第二根指针不得覆写起点
     props.onMoveStart?.();
-    panStart = { px: e.clientX, py: e.clientY, tx: t().x, ty: t().y };
+    panStart = { pointerId: e.pointerId, px: e.clientX, py: e.clientY, tx: t().x, ty: t().y };
     pane.setPointerCapture(e.pointerId);
   };
   const onPanePointerMove = (e: PointerEvent) => {
     if (panStart) {
+      if (e.pointerId !== panStart.pointerId) return; // 非 owner 的移动不参与平移
       setT((c) => ({ ...c, x: panStart!.tx + e.clientX - panStart!.px, y: panStart!.ty + e.clientY - panStart!.py }));
     }
     updateConn(e);
   };
   const onPanePointerUp = (e: PointerEvent) => {
-    panStart = null;
+    if (panStart?.pointerId === e.pointerId) panStart = null;
     finishConn(e);
   };
   const onWheel = (e: WheelEvent) => {
@@ -300,22 +304,24 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
 
   // ── 拖线连接（Handle source → target）──
   const [conn, setConn] = createSignal<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
-  let connSource: { nodeId: string; handleId: string } | null = null;
+  // pointerId 同理：拖线态只有一个 owner，第二根指针不能把线接到别处
+  let connSource: { pointerId: number; nodeId: string; handleId: string } | null = null;
   const onHandlePointerDown = (e: PointerEvent, nodeId: string, handleId: string) => {
     e.stopPropagation();
     e.preventDefault();
-    connSource = { nodeId, handleId };
+    if (connSource) return; // 已有指针在拖线
+    connSource = { pointerId: e.pointerId, nodeId, handleId };
     const p = screenToFlowPosition({ x: e.clientX, y: e.clientY });
     setConn({ x1: p.x, y1: p.y, x2: p.x, y2: p.y });
     pane.setPointerCapture(e.pointerId);
   };
   const updateConn = (e: PointerEvent) => {
-    if (!connSource) return;
+    if (!connSource || connSource.pointerId !== e.pointerId) return;
     const p = screenToFlowPosition({ x: e.clientX, y: e.clientY });
     setConn((c) => (c ? { ...c, x2: p.x, y2: p.y } : c));
   };
   const finishConn = (e: PointerEvent) => {
-    if (!connSource) return;
+    if (!connSource || connSource.pointerId !== e.pointerId) return;
     const el = document.elementFromPoint(e.clientX, e.clientY)?.closest("[data-handle-type='target']");
     const src = connSource;
     connSource = null;
@@ -343,27 +349,29 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
   // ── 节点外壳：定位 + 拖拽 + 点击/右键 ──
   function NodeShell(props2: { node: N; children: JSX.Element }) {
     const n = () => props2.node;
-    let dragStart: { px: number; py: number; nx: number; ny: number } | null = null;
+    // pointerId = 拖拽态 owner：多指时先按下的指头独占，后按的不能覆写起点
+    let dragStart: { pointerId: number; px: number; py: number; nx: number; ny: number } | null = null;
     let moved = false;
 
     const onDown = (e: PointerEvent) => {
       if (e.button !== 0) return; // 右键留给 contextmenu，不进拖拽态
       if ((e.target as HTMLElement).closest("[data-nodrag], a, button, input, select, textarea")) return;
       e.stopPropagation();
+      if (dragStart) return; // 已有指针在拖这张卡
       moved = false;
-      dragStart = { px: e.clientX, py: e.clientY, nx: n().position.x, ny: n().position.y };
+      dragStart = { pointerId: e.pointerId, px: e.clientX, py: e.clientY, nx: n().position.x, ny: n().position.y };
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
       props.onNodeDragStart?.(n());
     };
     const onMove = (e: PointerEvent) => {
-      if (!dragStart) return;
+      if (!dragStart || e.pointerId !== dragStart.pointerId) return;
       const k = t().k;
       const dx = (e.clientX - dragStart.px) / k, dy = (e.clientY - dragStart.py) / k;
       if (Math.abs(e.clientX - dragStart.px) + Math.abs(e.clientY - dragStart.py) > 4) moved = true;
       props.onNodeMove(n().id, { x: dragStart.nx + dx, y: dragStart.ny + dy });
     };
     const onUp = (e: PointerEvent) => {
-      if (!dragStart) return;
+      if (!dragStart || e.pointerId !== dragStart.pointerId) return;
       dragStart = null;
       props.onNodeDragStop?.(n());
       // click 在 pointerup 之后触发，用 moved 抑制拖拽后的误点击
@@ -389,8 +397,10 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
         onPointerDown={onDown}
         onPointerMove={onMove}
         onPointerUp={onUp}
-        onPointerCancel={() => {
-          // 触摸/触控笔中断：只清状态不提交 dragStop，避免陈旧起点跳变
+        onPointerCancel={(e) => {
+          // 触摸/触控笔中断：只清状态不提交 dragStop，避免陈旧起点跳变；
+          // 非 owner 的取消不影响当前拖拽
+          if (dragStart && dragStart.pointerId !== e.pointerId) return;
           dragStart = null;
           moved = false;
         }}
@@ -483,11 +493,14 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
         onPointerDown={onPanePointerDown}
         onPointerMove={onPanePointerMove}
         onPointerUp={onPanePointerUp}
-      onPointerCancel={() => {
-        panStart = null;
-        connSource = null;
-        setConn(null);
-      }}
+        onPointerCancel={(e) => {
+          // 只清 owner 的态：非 owner 指针被系统取消（如触控笔出界）不影响进行中的平移/拖线
+          if (panStart?.pointerId === e.pointerId) panStart = null;
+          if (connSource?.pointerId === e.pointerId) {
+            connSource = null;
+            setConn(null);
+          }
+        }}
         onClick={(e) => {
           if (!(e.target as HTMLElement).closest(".flow-node, [data-flow-menu]")) {
             props.onNodeSelect?.(null);

@@ -1,15 +1,18 @@
-# 设计体检报告：elysiax monorepo  2026-10-26（第二轮复查）
+# 设计体检报告：elysiax monorepo  2026-10-26（第二轮复查）· 2026-10-30 修复批更新
 
 透镜组：全量五组（结构 1–9 / 过程 10–12 / 不确定 13–15 / 演化 16–18 / 语义 19–21，用户明确要求完整体检）。
 被检范围：`packages/{core,cli,htmx,solid,flow,elysia}` 源码 + `apps/demo` 应用形态；排除 node_modules/dist/.git。
 判据基线：仓库自身契约（原子页面分发、socket 唯一门、no-any、ServiceError、渲染器单选）+ 各卡数学判定式。
 与上一轮关系：本轮按新 agent 定义（先判实例再判病、证据纪律、给不出证据降级数据不足）**独立重验**。结论：**6 处旧病灶全部仍在，代码未改动**（行号已逐一比对）；未检出新增病灶；上一轮"健/不适用/数据不足"判定本轮复核维持，仅一处数值修正（di.ts 的 as any 从 4 处降为 3 处）。
 
+**2026-10-30 更新**：修复批已落地，逐卡复验：卡 5（A/B）、卡 6、卡 10、卡 14 **已修复**；卡 20 **已缓解**（运行期构造拒绝已加，类型级联合仍待做）；卡 15 仍开（溢出语义需人体决策）。原始病灶描述与证据行号保留供追溯，每节末尾补「现状」段记录修复方式与验证点。
+
 ## 统计
 
-病 6 / 健 9 / 不适用 4 / 数据不足 2
+修复批前：病 6 / 健 9 / 不适用 4 / 数据不足 2
+修复批后：病 1（卡15，待人体决策）/ 部分修复 1（卡20，类型级欠账）/ 已修复 4 / 健 9 / 不适用 4 / 数据不足 2（合计 21）
 
-病占比 6/21 ≈ 29%，未越 30% 过度识别阈值；沿用上一轮声明：卡 10（多指针）与卡 14（desktop 等待）属边缘场景触发，已按"给得出可证伪证据才报"的纪律保留。
+病占比 1/21 ≈ 5%；卡 20 降级为「部分修复」——类型可写面仍在，但静默丢路由这一可观测后果已被启动期抛错封死。
 
 ## 病灶清单（按信息债/影响面排序）
 
@@ -18,14 +21,16 @@
 - 数学依据：Little 定律 L = λW。发布速率 λ 由 `rt.publish()` 驱动，消费速率受 TCP/浏览器排空速度约束；W 不可控时，无界队列 ⇒ L 无界 ⇒ 积压雪崩。判定式"存在无界队列 = 病"命中。
 - 证据：`packages/core/src/realtime.ts:74-77`（`queue.push(d)` 无任何 cap，snapshot 亦整体入队）；排空只在 generator 循环里 `queue.shift()`；ReadableStream 默认内部队列同样无界（`:104` controller.enqueue 无背压处理）。
 - 治疗方向：给每订阅队列加容量上限（溢出策略：丢弃最旧帧并发 `event: resync` 让客户端重拉快照，或断开让客户端重连走 snapshot）。溢出语义由人定，本卡不代改。
+- **现状（2026-10-30）**：仍开。已加握手帧 + 先订阅后快照 + `idleTimeout` 修正（见 elysiax.mdx「实时推送」），但这只是首帧与空闲存活，**不改变队列无界**。溢出语义（丢最旧帧发 resync / 直接断开重连）是产品决策，留待人定。
 
-### [病] 卡6 · 非法组合可写性 — socket 门禁只在手动 doctor 强制【旧病灶，仍在】
+### [已修复] 卡6 · 非法组合可写性 — socket 门禁只在手动 doctor 强制【2026-10-30 修复】
 - 病灶：契约"跨原子 import 只能走 `<name>.socket.ts`"是约束谓词，但强制点仅在 `elysiax doctor`（手动命令）；`dev / gen / build` 路径（codegen）不拦，私拉电线写得出来、跑得起来。
 - 数学依据：约束 A⇒¬B（跨原子 ⇒ 必须经插座）可构造出违反它的合法类型值（普通相对 import 在任何构建路径都合法）⇒ 约束未进强制层 = 病。
 - 证据：强制逻辑在 `packages/cli/src/index.ts:864-946`（doctor 检查 4 插座门禁）；codegen 侧只校验 socket **存在性**（`packages/core/src/codegen.ts:431-439`），不校验引用方向；dev 轮询循环（`cli/src/index.ts:1290-1315`）只跑 codegen，不含门禁。
 - 治疗方向：把插座门禁前移到 codegen（或 dev 轮询循环），让 dev/build 失败而非靠人记得跑 doctor；doctor 保留为全面体检。
+- **现状（2026-10-30）**：判定逻辑抽到 `packages/core/src/socket-gate.ts`（`checkSocketGate`，导出 `stripComments`/`splitDeclarators`/`socketExports` 共用原语），**codegen 页面扫描前强制执行**：任一处违规即 `throw`，dev/gen/build/add 全部失败；doctor 改为共用同一实现（口径唯一，不再各写一份）。回归点：`packages/core/src/socket-gate.test.ts`（经插座合规 / 私拉电线 / 插座未导出符号 / 原子内相对 import 不算跨原子）。附带把 demo 跨原子组合视图改为经 socket 再导出，顺带暴露并修掉了「被插座再导出的 partials 引 `.elysiax` 桶文件 ⇒ 循环初始化」的坑。
 
-### [病] 卡5 · 零点维度（两处，各欠 1 比特）【旧病灶，仍在】
+### [已修复] 卡5 · 零点维度（两处，各欠 1 比特）【2026-10-30 修复】
 - 病灶 A：`elysiax add` 的装配校验失败只 `logger.error`，进程仍以 0 退出。
   - 数学依据：下游（CI / 脚本 / 调用方 shell）需区分 n=2 种情况（装配通过 / 失败），上游产出（进程退出码）布尔维数 m=0；⌈log₂2⌉ = 1 > 0 ⇒ 病，信息债 1 比特 ≈ 调用方要补的"grep 日志猜成败" if 数。
   - 证据：`packages/cli/src/index.ts:728-735`（`catch` 里只 `logger.error('装配校验失败: ...')`，不 throw、不置退出码；`errorHandlerPlugin({ exitOnError: true })` 只兜未捕获异常，catch 住了就到不了）。
@@ -34,24 +39,28 @@
   - 数学依据：下游需区分 n=3 种情况（未装 @elysiax/solid / 装了且正常 / 装了但 import 炸），上游断言只有"包能否 import" m=1 比特；⌈log₂3⌉ = 2 > 1 ⇒ 病，信息债 1 比特。装了但坏（babel 依赖缺失等）被 `catch {}` 静默归入"未装"，产出走错管线而零日志。
   - 证据：`packages/core/src/codegen.ts:737-745`（`try { import(...) } catch { /* 应用未装 → 走 Bun 内置 JSX */ }`——注释把两种失败折叠成一种）。对比同文件 tailwind 分支（`:909-916`）编译失败有 warn，此处没有。
   - 治疗方向：catch 里区分 MODULE_NOT_FOUND（未装，合法静默）与其他错误（装了但坏，必须 warn/throw）。
+- **现状（2026-10-30）**：A 已修——`elysiax add` 结尾改为跑 `codegen()`，装配失败直接抛出走 `errorHandlerPlugin` 非零退出，注释已写明「只打日志等于静默放行」。B 已修——探测拆成两步：`Bun.resolveSync("@elysiax/solid")` 失败（未装，合法静默）与 `import`/`solidPlugin()` 构造失败（装了但坏，自然抛出）不再折叠，注释标注「两种失败必须分开」。
 
-### [病] 卡20 · ADT — PageEntry 非法组合可写且静默丢路由【旧病灶，仍在】
+### [已缓解] 卡20 · ADT — PageEntry 非法组合可写且静默丢路由【2026-10-30 缓解·类型级欠账】
 - 病灶：`PageEntry` 是积类型（各字段可选），"结构上可能但语义非法"的组合写得出来：`{ url, client: true }` 无 `shell`、或 `{ url }` 四件全空。前者在 `start()` 两个分支都不命中，该 URL 静默不进路由表（运行期 404，无任何报错）。
 - 数学依据：合法类型值空间 ⊃ 语义合法空间，差集非空（至少上述两组合），且无构造期拒绝 ⇒ 病。
 - 证据：`packages/core/src/pages.ts:59-72`（字段全可选）；`packages/core/src/start.ts:94-97`（`if (p.client && p.shell) … else if (p.page) …`，两者皆空时静默跳过）。codegen 目前总是成对生成 client+shell，但 `ElysiaxGenerated` 是公开入口（`start({ gen })` 手写 gen 合法），缺口真实可达。
 - 治疗方向：把 PageEntry 改成可辨识联合（`{ client: true, shell } | { page, … } | { partials/actions only }`），make illegal states unrepresentable；或在 start() 对空条目 throw。
+- **现状（2026-10-30）**：已选「运行期构造拒绝」路线——`start()` 对 `client` 缺 `shell`、对四件全空条目**启动即抛**，静默 404 的后果已不可达；仅有 partials/actions 的条目明确合法并加注释。**剩余欠账**：`PageEntry` 仍是积类型，非法组合在类型层面依旧写得出（只是运行期会炸），可辨识联合落地方为本卡完全闭合。
 
-### [病] 卡10 · 偏序/并发 — flow 画布多指针无 happens-before 保护【旧病灶，仍在】
+### [已修复] 卡10 · 偏序/并发 — flow 画布多指针无 happens-before 保护【2026-10-30 修复】
 - 病灶：第二根指针的 pointerdown 可直接覆盖进行中的拖拽/平移状态，无"已有捕获则拒绝"的顺序声明。
 - 数学依据：并行事件源（pointerId A 拖拽中 ∩ pointerId B down）之间无显式偏序 ⇒ 竞争：B 覆盖 `panStart`/`dragStart` 后，A 的 pointermove 以 B 的起点为基准 ⇒ 画布/节点跳变。
 - 证据：`packages/flow/src/index.tsx:258-276`（`onPanePointerDown` 不检查 `panStart` 非空即覆写）；`:349-357`（NodeShell `onDown` 同样不检查 `dragStart`）；`setPointerCapture(e.pointerId)` 按指针捕获但状态变量是单例。
 - 治疗方向：进入拖拽/平移/拖线态时记录 owner pointerId，非 owner 的 down/move/up 一律早退（显式偏序：第一指针 ≺ 其余）。
+- **现状（2026-10-30）**：三种交互态（平移 `panStart`、拖节点 `dragStart`、拖线 `connSource`）均记录 owner `pointerId`；已有 owner 时后续 `pointerdown` 早退，`move/up/cancel` 按 `pointerId` 比对（非 owner 不写状态）。`pointercancel` 只清自己拥有的状态，不会误清他指拖拽中的状态。偏序显式化为「首指针 ≺ 其余」，第二根手指不再扰动第一根。
 
-### [病] 卡14 · 马尔可夫链 — desktop 启动等待循环存在吸收态【旧病灶，仍在】
+### [已修复] 卡14 · 马尔可夫链 — desktop 启动等待循环存在吸收态【2026-10-30 修复】
 - 病灶：desktop.gen 等待 server 就绪的 `for (;;)` 轮询，在"server 进程活着但永不就绪"（端口被占、handler 挂起但进程未退）时进入永久等待——吸收态，进去出不来，且零诊断输出。
 - 数学依据：状态 {等待中, 就绪, server 死亡} 中，转移条件只有 `fetch ok`（→就绪）与 `exitCode !== null`（→server 死亡）；"活着但不就绪"无任何出边 ⇒ 吸收态 = 病。
 - 证据：`packages/core/src/codegen.ts:955-962`（`for (;;) { try { if ((await fetch(...)).ok) break; } catch {} if (server.exitCode !== null) throw ...; await Bun.sleep(100); }`，无超时、无最大重试、无日志）。
 - 治疗方向：加超时上限（如 30s）后带着 server 的 stderr 摘要 throw；或按指数退避并周期性打印等待状态。
+- **现状（2026-10-30）**：desktop.gen 模板加 30s 截止时间，超时抛出「进程仍在运行但 / 无响应」并提示去看已继承的启动日志；状态图新增 {等待中} → {超时失败} 出边，吸收态消除。
 
 ## 健（各一行带过，本轮已复核）
 
@@ -80,4 +89,4 @@
 
 ## 收敛确认
 
-本次非重构后复查；卡 9 判定见上（健）。6 处病灶修复落地后只重跑卡 9：观察 fix 提交 severity 是否继续单调不增、单批触及包数是否收敛。
+本次非重构后复查；卡 9 判定见上（健）。修复批（2026-10-30）已落地 4 修 1 缓：单批触及 core/cli/flow/demo 四包但改动性质同源（门禁前移 + owner 定序 + 退出码/超时补齐），无新增病灶；下轮只重跑卡 9 + 卡 20（若上可辨识联合）。卡 15 需人先定溢出语义，再进实现。

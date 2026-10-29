@@ -4,105 +4,8 @@ import { errorHandlerPlugin } from "@visulima/cerebro/plugins/error-handler";
 import { existsSync, cpSync, readFileSync, writeFileSync, readdirSync, mkdirSync } from "node:fs";
 import { resolve, basename, relative } from "node:path";
 import { fileURLToPath } from "node:url";
-
-/** 剥离 // 行注释与 块注释（字符级状态机：字符串/模板串/正则里的 // 不误伤，
- *  doctor 的检查 8/11 都基于剥皮后的源码，误伤会产生幻影对比） */
-function stripComments(src: string): string {
-  let out = "";
-  let i = 0;
-  let quote: string | null = null; // ' " ` 之一，null = 不在字符串里
-  while (i < src.length) {
-    const c = src[i]!;
-    const next = src[i + 1];
-    if (quote) {
-      out += c;
-      if (c === "\\") {
-        out += next ?? "";
-        i += 2;
-        continue;
-      }
-      if (c === quote) quote = null;
-      i++;
-      continue;
-    }
-    if (c === "'" || c === '"' || c === "`") {
-      quote = c;
-      out += c;
-      i++;
-      continue;
-    }
-    if (c === "/" && next === "/") {
-      while (i < src.length && src[i] !== "\n") i++;
-      continue;
-    }
-    if (c === "/" && next === "*") {
-      i += 2;
-      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) i++;
-      i += 2;
-      continue;
-    }
-    out += c;
-    i++;
-  }
-  return out;
-}
-
-/** 按顶层逗号切分声明列表（忽略括号/方括号/花括号内部的逗号） */
-function splitDeclarators(list: string): string[] {
-  const parts: string[] = [];
-  let depth = 0;
-  let cur = "";
-  for (const ch of list) {
-    if ("([{".includes(ch)) depth++;
-    else if (")]}".includes(ch)) depth--;
-    if (ch === "," && depth === 0) {
-      parts.push(cur);
-      cur = "";
-    } else cur += ch;
-  }
-  if (cur.trim()) parts.push(cur);
-  return parts;
-}
-
-/**
- * 解析 socket 文件的导出符号表（named/type re-export + 本地声明）。
- * 先剥注释再匹配，避免注释里的示例 export 被计为真实出口；
- * resolveFile 用于递归解析 export * from "./x"（限深防环，HEAD 对比时不传）。
- */
-function socketExports(
-  src: string,
-  resolveFile?: (spec: string) => string | undefined,
-  depth = 0,
-): Set<string> {
-  const names = new Set<string>();
-  const code = stripComments(src);
-  // export { A, B as C } / export type { ... }（可多行）
-  for (const m of code.matchAll(/export\s+(?:type\s+)?\{([^}]*)\}/gs))
-    for (const part of m[1]!.split(",")) {
-      const p = part.trim().replace(/^type\s+/, "");
-      if (!p) continue;
-      const asM = /\bas\s+(\w+)$/.exec(p);
-      names.add(asM ? asM[1]! : p);
-    }
-  // export class/function/interface/type/enum X
-  for (const m of code.matchAll(/^export\s+(?:async\s+)?(?:class|function|interface|type|enum)\s+(\w+)/gm))
-    names.add(m[1]!);
-  // export const/let/var 支持多声明：export const a = 1, b = 2
-  for (const m of code.matchAll(/^export\s+(?:const|let|var)\s+([^;\n]+)/gm))
-    for (const decl of splitDeclarators(m[1]!)) {
-      const id = /^\s*(\w+)/.exec(decl);
-      if (id) names.add(id[1]!);
-    }
-  // export * from "./x"：递归收集目标文件出口
-  if (resolveFile && depth < 3)
-    for (const m of code.matchAll(/export\s+\*\s+from\s+["']([^"']+)["']/g)) {
-      const target = resolveFile(m[1]!);
-      if (target)
-        for (const n of socketExports(readFileSync(target, "utf8"), resolveFile, depth + 1))
-          names.add(n);
-    }
-  return names;
-}
+// 插座门禁与源码解析工具：与 core 的 codegen 共用同一实现（契约不能有两套判定）
+import { checkSocketGate, socketExports, stripComments } from "@elysiax/core/socket-gate";
 
 const templateDir = fileURLToPath(new URL("../template", import.meta.url));
 
@@ -860,87 +763,25 @@ cli.addCommand({
 
     // 4) 插座门禁（凹凸契约）：有 <name>.di.ts / <name>.socket.ts 的文件夹是原子；
     //    跨原子 import 只允许指向对方插座文件（<name>.socket.ts），
-    //    指向原子内部其他文件 = 私拉电线（type import 同样算——类型也是契约）
-    let socketIssues = 0;
-    const atomsDirs: string[] = [];
-    const socketFiles: string[] = [];
-    for await (const f of new Glob(`${pagesDir}/**/*.{di,socket}.ts`).scan({ cwd: root })) {
-      if (f.endsWith(".socket.ts")) socketFiles.push(resolve(root, f));
-      const d = resolve(root, f, "..");
-      if (!atomsDirs.includes(d)) atomsDirs.push(d);
-    }
+    //    指向原子内部其他文件 = 私拉电线（type import 同样算——类型也是契约）。
+    //    判定实现放在 core（codegen 同样调用），doctor 只负责报告，不维护第二套口径。
+    const gate = await checkSocketGate(root, pagesDir);
+    const atomsDirs = gate.atomDirs;
+    const socketFiles = gate.socketFiles;
+    const socketSymbols = gate.symbols;
+    const symbolsOf = (sf: string) => socketSymbols.get(sf) ?? new Set<string>();
+    for (const v of gate.violations) logger.error(`❌ ${v.file}: ${v.message}`);
+    const socketIssues = gate.violations.length;
+    errors += socketIssues;
+    if (!socketIssues) logger.info(`✅ 插座门禁 + 适配检查通过（${atomsDirs.length} 个原子）`);
+
+    // 表/迁移检查用：原子目录 → 最深归属
     const atomOf = (absFile: string): string | undefined => {
       const dir = resolve(absFile, "..");
-      // 嵌套原子取最深归属
       return atomsDirs
         .filter((a) => dir === a || dir.startsWith(`${a}/`))
         .sort((a, b) => b.length - a.length)[0];
     };
-    const resolveImport = (fromFile: string, spec: string): string | undefined => {
-      // 路径别名（模板 tsconfig paths 约定）：@gen → .elysiax/，@/ → src/
-      const base = spec.startsWith("@gen")
-        ? resolve(root, ".elysiax", spec.slice(4))
-        : spec.startsWith("@/")
-          ? resolve(root, "src", spec.slice(2))
-          : resolve(fromFile, "..", spec);
-      for (const cand of [base, `${base}.ts`, `${base}.tsx`, `${base}/index.ts`, `${base}/index.tsx`])
-        if (existsSync(cand)) return cand;
-      return undefined;
-    };
-    // 插座导出符号缓存（适配检查用）；传 resolver 让 export * from "./x" 也能被解析
-    const socketSymbols = new Map<string, Set<string>>();
-    const symbolsOf = (sf: string) => {
-      let syms = socketSymbols.get(sf);
-      if (!syms) {
-        syms = socketExports(readFileSync(sf, "utf8"), (spec) =>
-          spec.startsWith(".") ? resolveImport(sf, spec) : undefined,
-        );
-        socketSymbols.set(sf, syms);
-      }
-      return syms;
-    };
-    for await (const f of new Glob(`${pagesDir}/**/*.ts*`).scan({ cwd: root })) {
-      const abs = resolve(root, f);
-      const src = readFileSync(abs, "utf8");
-      // 三种跨文件引用形态都查：import ... from / export ... from（再导出）/ import "..."（副作用）
-      for (const m of src.matchAll(/^\s*(?:import\s+(?:type\s+)?([^"']*?)from|export\s+(?:type\s+)?([^"']*?)from|import)\s*["']([^"']+)["']/gm)) {
-        const clause = m[1] ?? m[2] ?? "";
-        const spec = m[3]!;
-        // 只查相对 import 与 @/ 别名（指向 src/ 内部）；包与 shared 基建不查
-        if (!spec.startsWith(".") && !spec.startsWith("@/")) continue;
-        const target = resolveImport(abs, spec);
-        if (!target || !target.includes(`/${pagesDir}/`)) continue;
-        const srcAtom = atomOf(abs);
-        const tgtAtom = atomOf(target);
-        if (!tgtAtom || tgtAtom === srcAtom) continue; // 原子内部 / 非原子目标
-        if (!/\.socket\.tsx?$/.test(target)) {
-          logger.error(
-            `❌ ${f}: 跨原子 import 绕过了插座（${spec}）——` +
-              `只允许指向对方的 <name>.socket.ts，被引用方请先把符号登记进插座`,
-          );
-          socketIssues++;
-          errors++;
-          continue;
-        }
-        // 5) 适配检查（符号级）：插头引用的每个符号，插座必须真实导出——
-        //    源码分发场景下"接口对不上"在安装期就报出来，而不是运行时炸
-        const named = /^\{([^}]*)\}/s.exec(clause.trim())?.[1];
-        if (!named) continue; // default/namespace import：插座无 default（§3.1），tsc 会抓
-        for (const part of named.split(",")) {
-          const sym = part.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0]!.trim();
-          if (!sym) continue;
-          if (!symbolsOf(target).has(sym)) {
-            logger.error(
-              `❌ ${f}: 插头插不上——插座 ${relative(root, target)} 没有导出 "${sym}"` +
-                `（插座出口被删/改名，或复制来的原子与对方插座版本不匹配）`,
-            );
-            socketIssues++;
-            errors++;
-          }
-        }
-      }
-    }
-    if (!socketIssues) logger.info(`✅ 插座门禁 + 适配检查通过（${atomsDirs.length} 个原子）`);
 
     // 6) 插座纯度（契约 §3.1）：socket 只含 named/type export，
     //    不 export default、不导出实例（共享可变状态绕过 DI）

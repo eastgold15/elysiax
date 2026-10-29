@@ -1,6 +1,6 @@
 import { definePage } from "@elysiax/core";
-import { OrderPanel } from "./order/order.partials";
-import { UserList } from "./user/user.partials";
+import { OrderPanel } from "./order/order.socket";
+import { UserList } from "./user/user.socket";
 
 /** 首页：直接组合两个页面的展示组件（整页服务端渲染，交互走各自 partials/actions） */
 export default definePage(({ di }) => ({

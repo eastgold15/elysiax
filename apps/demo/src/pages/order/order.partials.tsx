@@ -1,5 +1,7 @@
 import type { Component } from "@elysiax/htmx";
-import { defineRoutes, routes } from "../../../.elysiax";
+// 不引 .elysiax 桶文件：页面 composition 会经插座引到本文件，桶文件会把整张页面图拉进来成环
+import { defineRoutes } from "../../../.elysiax/controller.gen";
+import { routes } from "../../../.elysiax/routes.gen";
 
 /** 订单面板（整页直接渲染用；交互片段走下面 GET 子路由） */
 export const OrderPanel: Component = () => (

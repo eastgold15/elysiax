@@ -1,6 +1,7 @@
-import { defineRoutes } from "../../../.elysiax";
+// 不引 .elysiax 桶文件：页面 composition 会经插座引到本文件，桶文件会把整张页面图拉进来成环
+import { defineRoutes } from "../../../.elysiax/controller.gen";
 import type { Component } from "@elysiax/htmx";
-import { routes } from "../../../.elysiax";
+import { routes } from "../../../.elysiax/routes.gen";
 import type { User } from "./user.model";
 
 /** 用户列表（整页与 POST 创建后的片段刷新共用） */

@@ -7,7 +7,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { checkSocketGate, scanSource } from "./socket-gate";
+import { checkSocketGate, scanSource, socketPurityViolations } from "./socket-gate";
 
 /** 造一个最小页面树：pages/alpha、pages/beta 两个原子 */
 function fixture(betaImports: string[]): string {
@@ -227,6 +227,44 @@ test("checkSocketGate：符号表全量预热（doctor 只增不减对叶子插�
   const root = fixture([]);
   const gate = await checkSocketGate(root, "src/pages");
   expect(gate.symbols.get(join(root, "src/pages/alpha/alpha.socket.ts"))?.has("alphaThing")).toBe(true);
+});
+
+test("socketPurityViolations：named/type 出口纯净，注释/字符串里的示例不算", () => {
+  const src = [
+    'export type { Todo } from "./todo.model";',
+    'export { TodoService } from "./todo.service";',
+    "// export default 是禁止的（这里只是注释）",
+    'const doc = "export default x";',
+    "export const makeTodo = () => new TodoService();",
+    "",
+  ].join("\n");
+  expect(socketPurityViolations(src)).toEqual([]);
+});
+
+test("socketPurityViolations：export default 与 { x as default } 都违规", () => {
+  expect(socketPurityViolations("export default 1;\n")).toHaveLength(1);
+  const asDefault = socketPurityViolations('const s = 1;\nexport { s as default };\n');
+  expect(asDefault).toHaveLength(1);
+  expect(asDefault[0]).toContain("export default");
+});
+
+test("socketPurityViolations：实例出口违规，多声明里夹一个也算", () => {
+  const one = socketPurityViolations("export const db = new Container();\n");
+  expect(one).toHaveLength(1);
+  expect(one[0]).toContain("实例");
+  const multi = socketPurityViolations("export const a = 1, b = new Container();\n");
+  expect(multi).toHaveLength(1);
+});
+
+test("checkSocketGate：purity 单独列出，不与跨原子 violations 混在一起", async () => {
+  const root = fixtureWith({
+    "src/pages/alpha/alpha.socket.ts": "export const alphaThing = 1;\nexport default 1;\n",
+    "src/pages/beta/beta.service.ts": 'import { S } from "../alpha/alpha.service";\n',
+  });
+  const gate = await checkSocketGate(root, "src/pages");
+  expect(gate.violations).toHaveLength(1);
+  expect(gate.purity).toHaveLength(1);
+  expect(gate.purity[0]!.file).toBe("src/pages/alpha/alpha.socket.ts");
 });
 
 test("checkSocketGate：插座 export * from 的出口可被插头引用（递归解析）", async () => {

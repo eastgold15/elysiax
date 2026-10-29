@@ -148,7 +148,7 @@ export { UserList } from "./user.partials";
 import { UserList } from "./user/user.socket";
 ```
 
-规则由 codegen 强制（门禁不通过则 dev/gen/build 直接失败，不需要人记得跑 doctor），doctor 只是复用同一实现做全面体检。
+规则由 codegen 强制（门禁不通过则 dev/gen/build 直接失败，不需要人记得跑 doctor），doctor 只是复用同一实现做全面体检。插座**纯度**同样在此拦截：`export default`、导出实例（`export const x = new …`）都算违约——插座是一张可被逐符号核对的出口清单，default 绕开清单语义，实例则让共享可变状态绕过 DI。
 
 **坑：被插座再导出的 partials，不得 `import` `.elysiax` 桶文件**。桶文件会转导出 `pages.gen` → 反向 import 回这个 partials，形成循环，运行期报 `Cannot access 'x' before initialization`。正确写法是直接引生成文件：
 

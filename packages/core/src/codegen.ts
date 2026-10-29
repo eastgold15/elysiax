@@ -387,14 +387,19 @@ export async function codegen(
   // 不能只靠人记得跑 doctor（体检报告卡6）。判定口径与 doctor 共用同一实现。
   if (existsSync(join(root, pagesDir))) {
     const gate = await checkSocketGate(root, pagesDir);
-    if (gate.violations.length > 0) {
-      throw new Error(
+    const problems = [
+      gate.violations.length > 0 &&
         [
           `[elysiax] 插座门禁未通过（${gate.violations.length} 处，契约 §3：跨原子只能 import 对方 <name>.socket.ts）：`,
           ...gate.violations.map((v) => `  ❌ ${v.file}: ${v.message}`),
         ].join("\n"),
-      );
-    }
+      gate.purity.length > 0 &&
+        [
+          `[elysiax] 插座纯度未通过（${gate.purity.length} 处，契约 §3.1：插座只许 named/type export）：`,
+          ...gate.purity.map((v) => `  ❌ ${v.file}: ${v.message}`),
+        ].join("\n"),
+    ].filter((m): m is string => typeof m === "string");
+    if (problems.length) throw new Error(problems.join("\n\n"));
   }
 
   // 页面树扫描（新约定）：URL = 文件夹路径，页面文件夹内聚一切

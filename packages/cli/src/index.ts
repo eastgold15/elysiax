@@ -784,24 +784,11 @@ cli.addCommand({
     };
 
     // 6) 插座纯度（契约 §3.1）：socket 只含 named/type export，
-    //    不 export default、不导出实例（共享可变状态绕过 DI）
-    let purityIssues = 0;
-    for (const sf of socketFiles) {
-      // 先剥注释：块注释里被注释掉的 export default 不能算违规
-      const src = stripComments(readFileSync(sf, "utf8"));
-      const rel = relative(root, sf);
-      if (/^export\s+default\s/m.test(src) || /^export\s*\{[^}]*\bas\s+default\b/m.test(src)) {
-        logger.error(`❌ ${rel}: 插座含 export default——插座只许 named/type export（契约 §3.1）`);
-        purityIssues++;
-        errors++;
-      }
-      if (/^export\s+const\s+\w+\s*=\s*new\s/m.test(src)) {
-        logger.error(`❌ ${rel}: 插座导出了实例（export const = new …）——共享可变状态必须走 DI，不进插座`);
-        purityIssues++;
-        errors++;
-      }
-    }
-    if (!purityIssues) logger.info("✅ 插座纯度通过（无 default / 实例出口）");
+    //    不 export default、不导出实例（共享可变状态绕过 DI）。
+    //    判定在 core（socketPurityViolations），codegen 同样强制，doctor 只报告
+    for (const v of gate.purity) logger.error(`❌ ${v.file}: ${v.message}`);
+    errors += gate.purity.length;
+    if (!gate.purity.length) logger.info("✅ 插座纯度通过（无 default / 实例出口）");
 
     // 7) 插座只增不减（additive-only）：插座出口是承诺，对比 git HEAD，
     //    出口减少 = 拔插头。未入库的新文件跳过。

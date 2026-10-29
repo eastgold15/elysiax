@@ -30,7 +30,7 @@ export { start } from "./start";
 export type { ElysiaxGenerated } from "./start";
 export { defineConfig, loadConfig } from "./config";
 export type { ElysiaxConfig } from "./config";
-export { checkSocketGate, socketExports, splitDeclarators, stripComments } from "./socket-gate";
+export { checkSocketGate, socketExports, socketPurityViolations, splitDeclarators, stripComments } from "./socket-gate";
 export type { SocketGateResult, SocketViolation } from "./socket-gate";
 
 /** 模块清单（主形态 = <name>.di.ts 的 defineModule；modules/<name>/module.json 为旧形态可选兜底） */

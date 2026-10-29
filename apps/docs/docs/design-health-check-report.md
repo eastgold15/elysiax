@@ -28,7 +28,7 @@
 - 数学依据：约束 A⇒¬B（跨原子 ⇒ 必须经插座）可构造出违反它的合法类型值（普通相对 import 在任何构建路径都合法）⇒ 约束未进强制层 = 病。
 - 证据：强制逻辑在 `packages/cli/src/index.ts:864-946`（doctor 检查 4 插座门禁）；codegen 侧只校验 socket **存在性**（`packages/core/src/codegen.ts:431-439`），不校验引用方向；dev 轮询循环（`cli/src/index.ts:1290-1315`）只跑 codegen，不含门禁。
 - 治疗方向：把插座门禁前移到 codegen（或 dev 轮询循环），让 dev/build 失败而非靠人记得跑 doctor；doctor 保留为全面体检。
-- **现状（2026-10-30）**：判定逻辑抽到 `packages/core/src/socket-gate.ts`（`checkSocketGate`，导出 `stripComments`/`splitDeclarators`/`socketExports` 共用原语），**codegen 页面扫描前强制执行**：任一处违规即 `throw`，dev/gen/build/add 全部失败；doctor 改为共用同一实现（口径唯一，不再各写一份）。回归点：`packages/core/src/socket-gate.test.ts`（经插座合规 / 私拉电线 / 插座未导出符号 / 原子内相对 import 不算跨原子）。附带把 demo 跨原子组合视图改为经 socket 再导出，顺带暴露并修掉了「被插座再导出的 partials 引 `.elysiax` 桶文件 ⇒ 循环初始化」的坑。
+- **现状（2026-10-30）**：判定逻辑抽到 `packages/core/src/socket-gate.ts`（`checkSocketGate`，导出 `stripComments`/`splitDeclarators`/`socketExports` 共用原语），**codegen 页面扫描前强制执行**：任一处违规即 `throw`，dev/gen/build/add 全部失败；doctor 改为共用同一实现（口径唯一，不再各写一份）。回归点：`packages/core/src/socket-gate.test.ts`（经插座合规 / 私拉电线 / 插座未导出符号 / 原子内相对 import 不算跨原子）。附带把 demo 跨原子组合视图改为经 socket 再导出，顺带暴露并修掉了「被插座再导出的 partials 引 `.elysiax` 桶文件 ⇒ 循环初始化」的坑。**插座纯度**（§3.1：不 `export default`、不导出实例）也一并前移到 codegen（`socketPurityViolations`，结果挂在 `SocketGateResult.purity`），doctor 只打印同一份判定。
 
 ### [已修复] 卡5 · 零点维度（两处，各欠 1 比特）【2026-10-30 修复】
 - 病灶 A：`elysiax add` 的装配校验失败只 `logger.error`，进程仍以 0 退出。

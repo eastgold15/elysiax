@@ -101,6 +101,22 @@ test("client 页同时有整页 handler：报错（整页归客户端，二者�
   await expect(codegen(root, CONFIG)).rejects.toThrow(/同时声明了 client\/index 与整页 handler/);
 });
 
+test("插座含 export default：codegen 直接拒绝（契约 §3.1，不再只在 doctor 报）", async () => {
+  const root = makeFixture({
+    "src/pages/todo/todo.di.ts": atomDi("/todo"),
+    "src/pages/todo/todo.socket.ts": `export { TodoService } from "./todo.di";\nexport default 1;\n`,
+  });
+  await expect(codegen(root, CONFIG)).rejects.toThrow(/插座纯度未通过.*export default/s);
+});
+
+test("插座导出实例：codegen 拒绝（共享可变状态必须走 DI）", async () => {
+  const root = makeFixture({
+    "src/pages/todo/todo.di.ts": atomDi("/todo"),
+    "src/pages/todo/todo.socket.ts": `export { TodoService } from "./todo.di";\nexport const db = new TodoService();\n`,
+  });
+  await expect(codegen(root, CONFIG)).rejects.toThrow(/插座纯度未通过.*实例/s);
+});
+
 test("裸对象 di（未经 defineModule 归一化）：品牌校验拒绝，不再静默生成坏容器", async () => {
   const root = makeFixture({
     "src/pages/todo/todo.di.ts": `

@@ -229,6 +229,36 @@ export function socketExports(
   return names;
 }
 
+/**
+ * 插座纯度（契约 §3.1）：插座只许 named/type export。
+ * - 不 export default：default 出口绕开「符号必须登记」的清单语义
+ * - 不导出实例（export const = new …）：共享可变状态必须走 DI
+ * 注释/字符串里的示例不算。
+ */
+export function socketPurityViolations(src: string): string[] {
+  const { code, isCode } = scanSource(src);
+  const real = (m: RegExpMatchArray) => {
+    const start = (m.index ?? 0) + (m[0].length - m[0].trimStart().length);
+    return isCode[start] === true;
+  };
+  let hasDefault = false;
+  let hasInstance = false;
+  // export default X
+  for (const m of code.matchAll(/^export\s+default\b/gm)) if (real(m)) hasDefault = true;
+  // export { x as default }
+  for (const m of code.matchAll(/^export\s*\{([^}]*)\}/gm))
+    if (real(m) && /\bas\s+default\b/.test(m[1]!)) hasDefault = true;
+  // export const/let/var 多声明里任何一个 = new
+  for (const m of code.matchAll(/^export\s+(?:const|let|var)\s+([^;\n]+)/gm)) {
+    if (!real(m)) continue;
+    for (const decl of splitDeclarators(m[1]!)) if (/=\s*new\s/.test(decl)) hasInstance = true;
+  }
+  const issues: string[] = [];
+  if (hasDefault) issues.push("含 export default——插座只许 named/type export（契约 §3.1）");
+  if (hasInstance) issues.push("导出了实例（export const = new …）——共享可变状态必须走 DI，不进插座");
+  return issues;
+}
+
 export interface SocketViolation {
   /** 违规文件（相对 root） */
   file: string;
@@ -237,6 +267,8 @@ export interface SocketViolation {
 
 export interface SocketGateResult {
   violations: SocketViolation[];
+  /** 插座纯度违规（契约 §3.1）：default / 实例出口，codegen 与 doctor 共用 */
+  purity: SocketViolation[];
   /** 原子目录绝对路径（有 di/socket 文件的目录） */
   atomDirs: string[];
   /** 插座文件绝对路径（纯度检查用） */
@@ -359,7 +391,13 @@ export async function checkSocketGate(root: string, pagesDir: string): Promise<S
   // 插座符号表全量预热：doctor 的「只增不减」对没被任何插头引用的叶子插座
   // 也要拿到出口，否则会把 HEAD 里的全部出口误判成「被删」
   for (const sf of socketFiles) symbolsOf(sf);
-  return { violations, atomDirs: atomsDirs, socketFiles, symbols };
+
+  // 插座纯度：同样在生成期拦（default / 实例出口是契约违规，不该等手动体检）
+  const purity: SocketViolation[] = [];
+  for (const sf of socketFiles)
+    for (const message of socketPurityViolations(readFileSync(sf, "utf8")))
+      purity.push({ file: relativeSpec(root, sf), message });
+  return { violations, purity, atomDirs: atomsDirs, socketFiles, symbols };
 }
 
 /** 违规信息里展示相对路径（root 外则原样） */

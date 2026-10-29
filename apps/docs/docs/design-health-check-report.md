@@ -21,7 +21,7 @@
 - 数学依据：Little 定律 L = λW。发布速率 λ 由 `rt.publish()` 驱动，消费速率受 TCP/浏览器排空速度约束；W 不可控时，无界队列 ⇒ L 无界 ⇒ 积压雪崩。判定式"存在无界队列 = 病"命中。
 - 证据：`packages/core/src/realtime.ts:74-77`（`queue.push(d)` 无任何 cap，snapshot 亦整体入队）；排空只在 generator 循环里 `queue.shift()`；ReadableStream 默认内部队列同样无界（`:104` controller.enqueue 无背压处理）。
 - 治疗方向：给每订阅队列加容量上限（溢出策略：丢弃最旧帧并发 `event: resync` 让客户端重拉快照，或断开让客户端重连走 snapshot）。溢出语义由人定，本卡不代改。
-- **现状（2026-10-30）**：仍开。已加握手帧 + 先订阅后快照 + `idleTimeout` 修正（见 elysiax.mdx「实时推送」），但这只是首帧与空闲存活，**不改变队列无界**。溢出语义（丢最旧帧发 resync / 直接断开重连）是产品决策，留待人定。
+- **现状（2026-10-30）**：仍开。已加握手帧 + 先订阅后快照 + `idleTimeout` 修正（见 elysiax.mdx「实时推送」），但这只是首帧与空闲存活，**不改变队列无界**。溢出语义（丢最旧帧发 resync / 直接断开重连）是产品决策，选项与代价已整理成决策备忘：[SSE 推送队列的背压与溢出语义](./realtime-backpressure.md)，待拍板后实现。
 
 ### [已修复] 卡6 · 非法组合可写性 — socket 门禁只在手动 doctor 强制【2026-10-30 修复】
 - 病灶：契约"跨原子 import 只能走 `<name>.socket.ts`"是约束谓词，但强制点仅在 `elysiax doctor`（手动命令）；`dev / gen / build` 路径（codegen）不拦，私拉电线写得出来、跑得起来。

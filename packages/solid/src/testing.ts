@@ -58,9 +58,11 @@ import { solidPlugin } from "./index";
  * 重定向基准，与浏览器构建保持一致。
  */
 export function setupClientTest(opts?: { filter?: RegExp; resolveFrom?: string }): void {
-  // happy-dom 是应用的 devDependency：必须从应用根（cwd）解析，
+  // 应用根的解析基准：构建插件与测试去重必须用同一个（显式 resolveFrom 优先）
+  const base = opts?.resolveFrom ?? process.cwd();
+  // happy-dom 是应用的 devDependency：必须从应用根解析，
   // 从本包位置 require 在 isolated node_modules 布局下找不到它
-  const appRequire = createRequire(resolve(process.cwd(), "package.json"));
+  const appRequire = createRequire(resolve(base, "package.json"));
   // 结构化类型：registrator 是应用的 devDependency，本包不 import 它的类型
   const { GlobalRegistrator } = appRequire("@happy-dom/global-registrator") as {
     GlobalRegistrator: { register(): Promise<void> | void };
@@ -73,21 +75,37 @@ export function setupClientTest(opts?: { filter?: RegExp; resolveFrom?: string }
   // runtime peer 去重（比 Bun.build 侧更关键）：Bun.plugin 的 onResolve 在
   // `bun test` 运行时不生效（实测不触发），link: 引入的 @elysiax/flow 会从自己的
   // node_modules 拿到另一份 solid-js——两份实例的响应式图互不相通，表现为
-  // 「外部 props 变化后 flow 内部 DOM 纹丝不动」，比报错更隐蔽。用 bun:test 的
-  // mock.module 把 solid-js 全量钉到应用根副本，和浏览器构建保持同一实例。
-  try {
-    const { mock } = appRequire("bun:test") as { mock: { module(spec: string, factory: () => unknown): void } };
-    for (const spec of ["solid-js", "solid-js/web", "solid-js/store"]) {
-      const mod = appRequire(spec);
-      mock.module(spec, () => mod);
-    }
-  } catch {
-    // 非 bun test 环境（如构建脚本）：没有 bun:test，跳过即可
+  // 「外部 props 变化后 flow 内部 DOM 纹丝不动」，比报错更隐蔽。
+  //
+  // 用 bun:test 的 mock.module 把 babel-preset-solid 实际会产出的三个说明符
+  // （solid-js / web / store）钉到应用根副本。注意 require 命中的是 solid-js 的
+  // CJS 产物而非构建插件选的 ESM 入口——目标是「进程内单实例」，不是同一构建产物。
+  //
+  // 失败要吵：只有「不是 bun test 环境」才静默跳过；应用没直接声明 solid-js
+  // （只有传递依赖）时解析会抛——那正说明去重没法生效，必须让人看见，否则又回到
+  // 「测试静默通过、DOM 其实不更新」的坑里。
+  const bunTest = tryRequire<{ mock: { module(spec: string, factory: () => unknown): void } }>(appRequire, "bun:test");
+  if (bunTest) {
+    // 先全部解析成功再统一注册：避免解析中途失败留下「半去重」状态
+    const specs = ["solid-js", "solid-js/web", "solid-js/store"].map(
+      (spec) => [spec, appRequire(spec)] as const,
+    );
+    for (const [spec, mod] of specs) bunTest.mock.module(spec, () => mod);
   }
   Bun.plugin(
     solidPlugin({
       ...(opts?.filter ? { filter: opts.filter } : {}),
-      resolveFrom: opts?.resolveFrom ?? process.cwd(),
+      resolveFrom: base,
     }),
   );
+}
+
+/** 只在「该模块本就不存在」时返回 null；其它错误原样抛出 */
+function tryRequire<T>(req: NodeRequire, spec: string): T | null {
+  try {
+    return req(spec) as T;
+  } catch (e) {
+    if ((e as { code?: string }).code === "MODULE_NOT_FOUND") return null;
+    throw e;
+  }
 }

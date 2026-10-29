@@ -7,7 +7,7 @@ import { expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
-import { checkSocketGate } from "./socket-gate";
+import { checkSocketGate, scanSource } from "./socket-gate";
 
 /** 造一个最小页面树：pages/alpha、pages/beta 两个原子 */
 function fixture(betaImports: string[]): string {
@@ -37,6 +37,27 @@ function fixtureWith(extra: Record<string, string>): string {
   }
   return root;
 }
+
+test("scanSource：注释换空格保行数、字符串内容保留、正则与字符串内容标记为非代码", () => {
+  const src = [
+    "a /* x",
+    'y */ b = "no import";',
+    "const re = /[/*]/;",
+    'import x from "./y";',
+    "",
+  ].join("\n");
+  const { code, isCode } = scanSource(src);
+  // 行结构不变：注释里换行保住，注释后的代码仍在自己的行
+  expect(code.split("\n")).toHaveLength(src.split("\n").length);
+  // 字符串内容保留（import 路径要能被正则捕获），但标记为「非代码」
+  const str = code.indexOf('"no import"');
+  expect(str).toBeGreaterThan(-1);
+  expect(isCode[str + 1]).toBe(false);
+  // 正则字面量内容也非代码，且没有把后面的行吞掉
+  expect(isCode[code.indexOf("/[/*]/")]).toBe(false);
+  // 真实 import 关键字在代码区
+  expect(isCode[code.indexOf("import x")]).toBe(true);
+});
 
 test("checkSocketGate：跨原子经插座 = 合规", async () => {
   const root = fixture(['import { alphaThing } from "../alpha/alpha.socket";', "void alphaThing;"]);

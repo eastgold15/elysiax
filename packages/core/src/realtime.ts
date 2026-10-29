@@ -71,14 +71,18 @@ export function defineRealtime<T>(options: RealtimeOptions<T> = {}) {
         type Item = T | "ping";
         const snap =
           snapshot ?? (options.snapshot ? () => options.snapshot!(ch) : undefined);
-        const queue: Item[] = snap ? await snap() : [];
+        let queue: Item[] = [];
         const push = (d: Item) => {
           queue.push(d);
           wake?.();
         };
+        // 先订阅再取快照：快照往往要查库/查服务（异步），期间的推送若还没人接就永久丢失，
+        // 客户端会一直停在旧状态直到下一条事件。快照仍排最前（它是「订阅即齐」的首帧），
+        // 这段时间到达的事件接在它后面，恰好是对快照的增量修正。
         const unsub = subscribe(ch, push);
         const hb = heartbeatMs > 0 ? setInterval(() => push("ping"), heartbeatMs) : null;
         try {
+          if (snap) queue = [...(await snap()), ...queue];
           while (!done) {
             while (queue.length) {
               const item = queue.shift()!;

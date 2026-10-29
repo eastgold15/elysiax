@@ -108,24 +108,26 @@ export function Resizer(props: {
   onEnd(w: number, h: number): void;
 }) {
   const ctx = useContext(FlowContext)!;
-  let start: { px: number; py: number; w: number; h: number } | null = null;
+  // pointerId = 拉伸态 owner：与 pan/conn/node 三态同一偏序，第二根指针不得覆写起点
+  let start: { pointerId: number; px: number; py: number; w: number; h: number } | null = null;
 
   const onDown = (e: PointerEvent) => {
     if (e.button !== 0) return; // 只认左键，右/中键不进拉伸态
+    if (start) return; // 已有指针在拉伸：后来者早退
     e.stopPropagation();
     e.preventDefault();
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    start = { px: e.clientX, py: e.clientY, w: props.width, h: props.height };
+    start = { pointerId: e.pointerId, px: e.clientX, py: e.clientY, w: props.width, h: props.height };
   };
   const onMove = (e: PointerEvent) => {
-    if (!start) return;
+    if (!start || e.pointerId !== start.pointerId) return;
     const k = ctx.zoom();
     const w = Math.max(props.minW, start.w + (e.clientX - start.px) / k);
     const h = Math.max(props.minH, start.h + (e.clientY - start.py) / k);
     ctx.onResize(props.nodeId, w, h, true);
   };
   const onUp = (e: PointerEvent) => {
-    if (!start) return;
+    if (!start || e.pointerId !== start.pointerId) return;
     const k = ctx.zoom();
     const w = Math.max(props.minW, start.w + (e.clientX - start.px) / k);
     const h = Math.max(props.minH, start.h + (e.clientY - start.py) / k);
@@ -148,7 +150,15 @@ export function Resizer(props: {
       onPointerDown={onDown}
       onPointerMove={onMove}
       onPointerUp={onUp}
-      onPointerCancel={() => (start = null)}
+      onPointerCancel={(e) => {
+        // 系统取消（触屏手势/失焦）：回滚到起手尺寸并清掉「拉伸中」标记，
+        // 但不调 onEnd——取消不是一次用户确认的尺寸变更，不落库
+        if (!start || e.pointerId !== start.pointerId) return;
+        const s = start;
+        start = null;
+        ctx.onResize(props.nodeId, s.w, s.h, false);
+        ctx.onResizeEnd(props.nodeId, s.w, s.h);
+      }}
     />
   );
 }
@@ -162,7 +172,12 @@ export interface FlowViewProps<N extends FlowNodeBase> {
   nodeViews: Record<string, (p: NodeViewProps<never>) => JSX.Element>;
   onNodeMove(id: string, pos: { x: number; y: number }): void;
   onNodeDragStart?(node: N): void;
-  onNodeDragStop?(node: N): void;
+  /**
+   * 拖拽结束。cancelled=true 表示指针被系统取消（触屏手势接管、窗口失焦），
+   * 调用方应回滚到起手位置且不落库；正常松手为 undefined/false。
+   * 无论是否取消都必须清掉自身「交互中」状态——否则刷新门闩会永久关着。
+   */
+  onNodeDragStop?(node: N, cancelled?: boolean): void;
   onNodeClick?(e: MouseEvent, node: N): void;
   onNodeContextMenu?(e: MouseEvent, node: N): void;
   onNodeSelect?(id: string | null): void;
@@ -256,7 +271,20 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
   // ── 视口平移/缩放 ──
   // pointerId = 平移态的所有者：多指按下时先到者独占，后来者一律早退。
   // 没有这个偏序，第二根指头的 down 会覆写起点，第一根指头的 move 按新起点算 → 画布跳变。
-  let panStart: { pointerId: number; px: number; py: number; tx: number; ty: number } | null = null;
+  // 平移按增量累加（只记上一次坐标），不存「起手 tx/ty」——滚轮在平移中途改变 k
+  // 时旧基准会把缩放后的位移丢掉、视口跳回去（卡10 只修了多指针，没管滚轮并发）
+  let panStart: {
+    pointerId: number;
+    startX: number;
+    startY: number;
+    lastX: number;
+    lastY: number;
+  } | null = null;
+  /** 本次平移是否真的移动过：松手后的 click 不能当成「点空白 = 清选中」 */
+  let panMoved = false;
+  /** 滚轮缩放后重建进行中手势的换算基准（节点拖拽需要；平移是增量式，天然免疫） */
+  let rebaseActiveGesture: (() => void) | null = null;
+
   const onPanePointerDown = (e: PointerEvent) => {
     if (e.button !== 0) return; // 右/中键不平移不起线
     // 事件委托接 Handle 拖线起点（HandleView 带 data-nodrag，下面的 nodrag 早退会拦掉它，
@@ -270,18 +298,33 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
         return;
       }
     }
-    // 点在节点/手柄/浮层菜单上不 pan
-    if ((e.target as HTMLElement).closest("[data-nodrag], .flow-node, [data-flow-menu]")) return;
+    // 点在节点/手柄/浮层菜单/边命中层上不 pan——边命中层要拿到 click 才能选中
+    if ((e.target as HTMLElement).closest("[data-nodrag], .flow-node, [data-flow-menu], [data-edge-hit]")) return;
     if (panStart) return; // 已有指针在平移：第二根指针不得覆写起点
     props.onMoveStart?.();
-    panStart = { pointerId: e.pointerId, px: e.clientX, py: e.clientY, tx: t().x, ty: t().y };
+    panMoved = false;
+    panStart = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      lastX: e.clientX,
+      lastY: e.clientY,
+    };
     pane.setPointerCapture(e.pointerId);
   };
   const onPanePointerMove = (e: PointerEvent) => {
     // owner 校验只约束平移本身：一指平移 + 一指拖线时，拖线指针的 move
     // 不能因为「不是平移 owner」而被吞掉，否则连线冻结
     if (panStart && e.pointerId === panStart.pointerId) {
-      setT((c) => ({ ...c, x: panStart!.tx + e.clientX - panStart!.px, y: panStart!.ty + e.clientY - panStart!.py }));
+      const dx = e.clientX - panStart.lastX;
+      const dy = e.clientY - panStart.lastY;
+      if (dx || dy) {
+        if (Math.abs(e.clientX - panStart.startX) + Math.abs(e.clientY - panStart.startY) > 3)
+          panMoved = true;
+        setT((c) => ({ ...c, x: c.x + dx, y: c.y + dy }));
+      }
+      panStart.lastX = e.clientX;
+      panStart.lastY = e.clientY;
     }
     updateConn(e);
   };
@@ -301,6 +344,9 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
       x: cx - ((cx - cur.x) / cur.k) * k,
       y: cy - ((cy - cur.y) / cur.k) * k,
     });
+    // 缩放改变了屏幕↔画布换算：在拖的节点必须用新 k 重建基准，
+    // 否则下一次 move 用旧基准算位移，卡片脱离指针跳开
+    rebaseActiveGesture?.();
   };
 
   // ── 拖线连接（Handle source → target）──
@@ -351,7 +397,16 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
   function NodeShell(props2: { node: N; children: JSX.Element }) {
     const n = () => props2.node;
     // pointerId = 拖拽态 owner：多指时先按下的指头独占，后按的不能覆写起点
-    let dragStart: { pointerId: number; px: number; py: number; nx: number; ny: number } | null = null;
+    let dragStart: {
+      pointerId: number;
+      px: number;
+      py: number;
+      nx: number;
+      ny: number;
+      /** 上一次 move 的屏幕坐标：滚轮缩放后据此重建基准 */
+      lastX: number;
+      lastY: number;
+    } | null = null;
     let moved = false;
 
     const onDown = (e: PointerEvent) => {
@@ -359,9 +414,30 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
       if ((e.target as HTMLElement).closest("[data-nodrag], a, button, input, select, textarea")) return;
       e.stopPropagation();
       if (dragStart) return; // 已有指针在拖这张卡
+      // 阻止原生文本选择：不拦的话拖拽会连带选中整个卡片正文
+      e.preventDefault();
       moved = false;
-      dragStart = { pointerId: e.pointerId, px: e.clientX, py: e.clientY, nx: n().position.x, ny: n().position.y };
+      dragStart = {
+        pointerId: e.pointerId,
+        px: e.clientX,
+        py: e.clientY,
+        nx: n().position.x,
+        ny: n().position.y,
+        lastX: e.clientX,
+        lastY: e.clientY,
+      };
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+      // 滚轮在拖拽中途缩放时，以「当前节点位置 + 上一次指针位置」重建起点
+      rebaseActiveGesture = () => {
+        if (!dragStart) return;
+        dragStart = {
+          ...dragStart,
+          px: dragStart.lastX,
+          py: dragStart.lastY,
+          nx: n().position.x,
+          ny: n().position.y,
+        };
+      };
       props.onNodeDragStart?.(n());
     };
     const onMove = (e: PointerEvent) => {
@@ -369,11 +445,14 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
       const k = t().k;
       const dx = (e.clientX - dragStart.px) / k, dy = (e.clientY - dragStart.py) / k;
       if (Math.abs(e.clientX - dragStart.px) + Math.abs(e.clientY - dragStart.py) > 4) moved = true;
+      dragStart.lastX = e.clientX;
+      dragStart.lastY = e.clientY;
       props.onNodeMove(n().id, { x: dragStart.nx + dx, y: dragStart.ny + dy });
     };
     const onUp = (e: PointerEvent) => {
       if (!dragStart || e.pointerId !== dragStart.pointerId) return;
       dragStart = null;
+      rebaseActiveGesture = null;
       props.onNodeDragStop?.(n());
       // click 在 pointerup 之后触发，用 moved 抑制拖拽后的误点击
       if (!moved) {
@@ -399,11 +478,14 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
         onPointerMove={onMove}
         onPointerUp={onUp}
         onPointerCancel={(e) => {
-          // 触摸/触控笔中断：只清状态不提交 dragStop，避免陈旧起点跳变；
+          // 系统取消（触屏手势接管 / 失焦）：必须上报 dragStop(cancelled)，
+          // 否则调用方的「交互中」门闩永久关着，结构刷新全部被压住；
           // 非 owner 的取消不影响当前拖拽
-          if (dragStart && dragStart.pointerId !== e.pointerId) return;
+          if (!dragStart || dragStart.pointerId !== e.pointerId) return;
           dragStart = null;
           moved = false;
+          rebaseActiveGesture = null;
+          props.onNodeDragStop?.(n(), true);
         }}
         onContextMenu={(e) => {
           e.stopPropagation();
@@ -503,7 +585,12 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
           }
         }}
         onClick={(e) => {
-          if (!(e.target as HTMLElement).closest(".flow-node, [data-flow-menu]")) {
+          // 刚平移过：松手后的 click 不是「点空白」，不能清选中
+          if (panMoved) {
+            panMoved = false;
+            return;
+          }
+          if (!(e.target as HTMLElement).closest(".flow-node, [data-flow-menu], [data-edge-hit]")) {
             props.onNodeSelect?.(null);
             props.onEdgeSelect?.(null);
             props.onPaneClick?.();
@@ -547,6 +634,7 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
                 <g>
                   {/* 加宽的隐形命中层，便于点击选中 */}
                   <path
+                    data-edge-hit
                     d={path}
                     fill="none"
                     stroke="transparent"

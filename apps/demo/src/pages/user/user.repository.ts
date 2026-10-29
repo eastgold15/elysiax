@@ -1,4 +1,6 @@
 import type { Database } from "bun:sqlite";
+// 副作用 import：保证首次访问数据前本原子的迁移已执行（表锚点在 user/schema.ts）
+import "./migrations";
 import type { User, CreateUserInput } from "./user.model";
 
 export class UserRepository {

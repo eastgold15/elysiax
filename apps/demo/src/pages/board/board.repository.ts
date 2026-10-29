@@ -1,4 +1,6 @@
 import type { Database } from "bun:sqlite";
+// 副作用 import：保证首次访问数据前本原子的迁移已执行（表锚点在 board/schema.ts）
+import "./migrations";
 
 /** 看板三列（固定集合，client 与服务端共用此类型） */
 export type Column = "todo" | "doing" | "done";
@@ -12,15 +14,7 @@ export interface Card {
 
 export class BoardRepository {
   constructor(private db: Database) {
-    // 表锚点自含：原子自己的表自己建，不动 shared/db.ts（契约 §5 不碰共享文件）
-    this.db.run(`
-      CREATE TABLE IF NOT EXISTS board_cards (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT NOT NULL,
-        column TEXT NOT NULL DEFAULT 'todo'
-      );
-    `);
-    // 种子数据（仅首次），跟随 shared/db.ts 的写法
+    // 种子数据（仅首次）
     const { c } = this.db.query("SELECT COUNT(*) AS c FROM board_cards").get() as { c: number };
     if (c === 0) {
       this.db.run(

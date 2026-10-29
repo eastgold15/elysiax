@@ -14,12 +14,12 @@ export default defineRoutes()
       return <TodoList todos={di.get("todoService").listTodos()} />;
     },
   )
-  .post("/:id/toggle", ({ di, params }) => {
-    di.get("todoService").toggleTodo(Number(params.id));
+  .post("/:id/toggle", { params: t.Object({ id: t.Number() }) }, ({ di, params }) => {
+    di.get("todoService").toggleTodo(params.id);
     return <TodoList todos={di.get("todoService").listTodos()} />;
   })
-  .delete("/:id", ({ di, params, toast }) => {
-    di.get("todoService").removeTodo(Number(params.id));
+  .delete("/:id", { params: t.Object({ id: t.Number() }) }, ({ di, params, toast }) => {
+    di.get("todoService").removeTodo(params.id);
     toast("待办已删除");
     return <TodoList todos={di.get("todoService").listTodos()} />;
   });

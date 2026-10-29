@@ -55,7 +55,8 @@ import { solidPlugin } from "./index";
  * peer 去重：link: 引入的框架包（@elysiax/flow 等）若自己有 node_modules/solid-js
  * 副本，测试进程会混进两个 Solid 实例——`onMount` 与 ref 的调度器分属不同实例，
  * 表现为「render 时 pane 还是 undefined」这类跨实例错乱。默认以 cwd（应用根）为
- * 重定向基准，与浏览器构建保持一致。
+ * 解析基准，把三份 solid-js 钉到应用根的那一份——目标是「测试进程内单实例」，
+ * 不是和浏览器构建产物逐字节一致（require 命中的是 CJS，浏览器构建走 ESM）。
  */
 export function setupClientTest(opts?: { filter?: RegExp; resolveFrom?: string }): void {
   // 应用根的解析基准：构建插件与测试去重必须用同一个（显式 resolveFrom 优先）

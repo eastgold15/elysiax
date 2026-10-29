@@ -93,6 +93,14 @@ test("页面 URL 重复（index.page 与 <目录名>.page 同目录）：报错"
   await expect(codegen(root, CONFIG)).rejects.toThrow(/页面 URL "\/todo" 重复/);
 });
 
+test("client 页同时有整页 handler：报错（整页归客户端，二者互斥）", async () => {
+  const root = makeFixture({
+    "src/pages/board/client/index.tsx": `export default () => null;\n`,
+    "src/pages/board/board.page.tsx": `export default () => null;\n`,
+  });
+  await expect(codegen(root, CONFIG)).rejects.toThrow(/同时声明了 client\/index 与整页 handler/);
+});
+
 test("裸对象 di（未经 defineModule 归一化）：品牌校验拒绝，不再静默生成坏容器", async () => {
   const root = makeFixture({
     "src/pages/todo/todo.di.ts": `

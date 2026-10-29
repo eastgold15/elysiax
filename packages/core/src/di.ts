@@ -212,7 +212,8 @@ export function elysiaxAPI<T extends Record<string | symbol, any>>(
   // as unknown as：Elysia 每次链式调用都生成新的泛型实例（类型不可重新
   // 赋值），且各页面的 derive 泛型互不相同；框架边界内断言回 app 链类型。
   for (const p of options.pages ?? []) {
-    if (p.page && !p.client) {
+    // p.page 存在 ⇒ 必为 SsrPageEntry（联合类型保证 client 页没有整页 handler）
+    if (p.page) {
       const handler = p.page;
       type Ctx = Parameters<typeof handler>[0];
       const pageApp = authed

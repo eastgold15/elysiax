@@ -55,18 +55,58 @@ export function definePage<S extends Record<string, unknown> = any>(
   return wrapped;
 }
 
-/** pages.gen 中每个页面条目的形态（codegen 生成） */
-export interface PageEntry {
+/** 页面片段/写端点的子路由实例（Elysia 泛型在页面边界处不可统一，断言到默认形态） */
+type SubRouter = import("elysia").Elysia<any, any, any, any, any, any, any, any>;
+
+/** 页面条目公共字段：URL + 可挂的片段/写端点（client 页也可有） */
+interface PageEntryBase {
   /** 自然 URL（目录路径推导，[id] → :id），如 "/projects/:id/deploy" */
   url: string;
-  /** client 模式：目录含 client/index.tsx，url 由 shell HTMLBundle 服务 */
-  client?: boolean;
-  /** 整页 handler（client 页无） */
-  page?: PageHandler<any>;
   /** hx 片段子路由（Elysia 实例，挂载在 /api<url> 前缀下） */
-  partials?: import("elysia").Elysia<any, any, any, any, any, any, any, any>;
+  partials?: SubRouter;
   /** 写端点 / JSON 子路由（同上前缀） */
-  actions?: import("elysia").Elysia<any, any, any, any, any, any, any, any>;
-  /** client 页的壳（Bun HTMLBundle），codegen 生成到 .elysiax/shells/ */
-  shell?: Bun.HTMLBundle;
+  actions?: SubRouter;
 }
+
+/**
+ * pages.gen 中每个页面条目的形态（codegen 生成）。
+ *
+ * 可辨识联合：字段组合即语义，非法组合在类型层写不出来（体检报告卡20）。
+ * - client 页必须有壳（shell），不能同时有整页 handler——整页已归客户端
+ * - SSR 页必须有整页 handler，不能有壳
+ * - 只出片段/写端点的页：URL 本身无整页，至少要有 partials 或 actions 之一
+ */
+export interface ClientPageEntry extends PageEntryBase {
+  /** client 模式：目录含 client/index.tsx，url 由 shell HTMLBundle 服务 */
+  client: true;
+  /** client 页的壳（Bun HTMLBundle），codegen 生成到 .elysiax/shells/ */
+  shell: Bun.HTMLBundle;
+  page?: never;
+}
+
+export interface SsrPageEntry extends PageEntryBase {
+  /** 整页 handler（SSR） */
+  page: PageHandler<any>;
+  client?: never;
+  shell?: never;
+}
+
+export interface PartialPageEntry extends PageEntryBase {
+  /** 至少挂片段路由；actions 可并存 */
+  partials: SubRouter;
+  actions?: SubRouter;
+  page?: never;
+  client?: never;
+  shell?: never;
+}
+
+export interface ActionPageEntry extends PageEntryBase {
+  /** 只出写端点/JSON 端点 */
+  actions: SubRouter;
+  partials?: SubRouter;
+  page?: never;
+  client?: never;
+  shell?: never;
+}
+
+export type PageEntry = ClientPageEntry | SsrPageEntry | PartialPageEntry | ActionPageEntry;

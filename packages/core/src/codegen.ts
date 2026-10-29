@@ -312,6 +312,16 @@ async function scanPages(root: string, pagesDir: string): Promise<PageScan> {
     urlOwner.set(p.url, key.replace(`${base}/`, ""));
   }
 
+  // client 页整页归客户端：同组同时出现 client/index 与整页 handler 是两种互斥形态，
+  // 静默挑一个会让另一份成为死代码。类型层（PageEntry 联合）已只允许其一，这里在生成期拦。
+  for (const p of groups.values()) {
+    if (p.clientIndex && p.page)
+      throw new Error(
+        `[elysiax] 页面 "${p.url}" 同时声明了 client/index 与整页 handler（${relative(root, p.page)}）：` +
+          `client 页整页归客户端，整页 handler 不会被挂载。请删掉其一`,
+      );
+  }
+
   // P2-4：旧约定从警告升级为拒绝——controller/ui 形态已被页面约定取代
   if (legacy.length)
     throw new Error(

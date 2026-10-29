@@ -98,18 +98,11 @@ export async function start(opts: {
   const routes: Record<string, unknown> = {};
   if (opts.index) routes["/"] = opts.index;
   for (const p of pages) {
-    if (p.client && p.shell) routes[p.url] = p.shell;
+    // PageEntry 是可辨识联合：client 必有壳、SSR 必有整页、片段页至少有一类子路由，
+    // 非法组合在类型层已写不出来，这里只需按分支挂载（体检报告卡20）。
+    if (p.client) routes[p.url] = p.shell;
     else if (p.page) routes[p.url] = handle;
-    // 非法组合必须启动即抛，否则 URL 静默 404、排查无门。
-    // 注意：仅有 partials/actions 的条目合法（只出 hx 片段/写端点，URL 本身无整页）。
-    else if (p.client)
-      throw new Error(
-        `页面 ${p.url} 声明了 client 模式但缺少 shell（.elysiax/shells/ 未生成？请先跑 elysiax gen）`,
-      );
-    else if (!p.partials && !p.actions)
-      throw new Error(
-        `页面 ${p.url} 没有任何可服务的内容（page/client/partials/actions 全空，请重新跑 elysiax gen）`,
-      );
+    // 其余 = 只有 partials/actions：URL 本身无整页，端点由 elysiaxAPI 挂到 /api<url>
   }
   if (opts.gen.globalCss)
     routes[`${apiPrefix}/assets/global.css`] = new Response(opts.gen.globalCss, {

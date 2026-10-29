@@ -76,6 +76,8 @@ export default defineRoutes()
 
 校验失败（typebox）由框架返回 **422 + 错误横幅片段**（AppLayout 的 responseHandling 允许 swap 422），非 htmx 请求仍是 JSON 422。
 
+生成出来的页面条目是**可辨识联合**（`PageEntry`）：client 页必有壳且无整页 handler、SSR 页必有整页、只出端点的页至少有一类子路由——非法组合在类型层写不出来；同目录 `client/index` 与整页文件并存会在 gen 时直接报错（二者互斥）。
+
 ## 全局壳：AppLayout
 
 全站唯一壳（L0）：`<html><head>`、导航、toast 容器。纯视觉边框，不查业务数据。

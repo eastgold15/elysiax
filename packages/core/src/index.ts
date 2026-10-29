@@ -4,7 +4,17 @@ export { elysiaxAPI, elysiaxModule, inferdiElysia } from "./di";
 export { elysiaxModule as defineRoutes } from "./di";
 export type { ElysiaxAPIOptions } from "./di";
 export { definePage } from "./pages";
-export type { PageCtx, PageEntry, PageHandler, PageMeta, ServiceSpecs } from "./pages";
+export type {
+  PageCtx,
+  PageEntry,
+  PageHandler,
+  PageMeta,
+  ServiceSpecs,
+  ClientPageEntry,
+  SsrPageEntry,
+  PartialPageEntry,
+  ActionPageEntry,
+} from "./pages";
 export { defineLayout, getLayout } from "./layout";
 
 export { elysiaxAuth } from "./auth";

@@ -21,7 +21,7 @@
  */
 import {
   createContext, createEffect, createMemo, createSignal, For,
-  useContext, type JSX,
+  onCleanup, useContext, type JSX,
 } from "solid-js";
 import { createStore, reconcile } from "solid-js/store";
 
@@ -68,8 +68,11 @@ interface FlowCtx {
   zoom(): number;
   onResize(id: string, w: number, h: number, resizing: boolean): void;
   onResizeEnd(id: string, w: number, h: number): void;
-  /** 滚轮缩放后重建进行中手势的换算基准（拖拽/拉伸共用同一槽位）；传 null 注销 */
-  setRebase(fn: (() => void) | null): void;
+  /**
+   * 注册「滚轮缩放后重建换算基准」回调，返回注销函数。
+   * 多指手势（一指拉伸 A、另一指拖 B）各有 token，互不覆盖；注销只删自己。
+   */
+  registerRebase(fn: () => void): () => void;
 }
 const FlowContext = createContext<FlowCtx>();
 
@@ -119,7 +122,16 @@ export function Resizer(props: {
     h: number;
     lastX: number;
     lastY: number;
+    /** 起手尺寸（不可变）：取消回滚用它，滚轮 rebase 不得污染 */
+    originW: number;
+    originH: number;
   } | null = null;
+  /** 本次拉伸的 rebase token 注销函数（结束/取消/卸载都要还回去） */
+  let unregisterRebase: (() => void) | null = null;
+  onCleanup(() => {
+    unregisterRebase?.();
+    unregisterRebase = null;
+  });
 
   const onDown = (e: PointerEvent) => {
     if (e.button !== 0) return; // 只认左键，右/中键不进拉伸态
@@ -135,10 +147,13 @@ export function Resizer(props: {
       h: props.height,
       lastX: e.clientX,
       lastY: e.clientY,
+      originW: props.width,
+      originH: props.height,
     };
     // 滚轮在拉伸中途缩放时，以「当前尺寸 + 上一次指针位置」重建起点；
-    // 不重建的话下一次 move 拿旧 k 的基准算尺寸，手柄与指针脱节
-    ctx.setRebase(() => {
+    // 不重建的话下一次 move 拿旧 k 的基准算尺寸，手柄与指针脱节。
+    // 只改 w/h（增量基准）与 px/py，originW/originH 保持起手值供取消回滚。
+    unregisterRebase = ctx.registerRebase(() => {
       if (!start) return;
       start = { ...start, px: start.lastX, py: start.lastY, w: props.width, h: props.height };
     });
@@ -158,7 +173,8 @@ export function Resizer(props: {
     const w = Math.max(props.minW, start.w + (e.clientX - start.px) / k);
     const h = Math.max(props.minH, start.h + (e.clientY - start.py) / k);
     start = null;
-    ctx.setRebase(null);
+    unregisterRebase?.();
+    unregisterRebase = null;
     ctx.onResize(props.nodeId, w, h, false);
     ctx.onResizeEnd(props.nodeId, w, h);
     props.onEnd(w, h);
@@ -178,14 +194,15 @@ export function Resizer(props: {
       onPointerMove={onMove}
       onPointerUp={onUp}
       onPointerCancel={(e) => {
-        // 系统取消（触屏手势/失焦）：回滚到起手尺寸并清掉「拉伸中」标记，
-        // 但不调 onEnd——取消不是一次用户确认的尺寸变更，不落库
+        // 系统取消（触屏手势/失焦）：回滚到**起手尺寸**（origin，不受滚轮 rebase
+        // 改写）并清掉「拉伸中」标记，但不调 onEnd——取消不是一次用户确认的尺寸变更，不落库
         if (!start || e.pointerId !== start.pointerId) return;
         const s = start;
         start = null;
-        ctx.setRebase(null);
-        ctx.onResize(props.nodeId, s.w, s.h, false);
-        ctx.onResizeEnd(props.nodeId, s.w, s.h);
+        unregisterRebase?.();
+        unregisterRebase = null;
+        ctx.onResize(props.nodeId, s.originW, s.originH, false);
+        ctx.onResizeEnd(props.nodeId, s.originW, s.originH);
       }}
     />
   );
@@ -310,8 +327,18 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
   } | null = null;
   /** 本次平移是否真的移动过：松手后的 click 不能当成「点空白 = 清选中」 */
   let panMoved = false;
-  /** 滚轮缩放后重建进行中手势的换算基准（节点拖拽需要；平移是增量式，天然免疫） */
-  let rebaseActiveGesture: (() => void) | null = null;
+  /**
+   * 滚轮缩放后重建进行中手势的换算基准（节点拖拽/拉伸需要；平移是增量式，天然免疫）。
+   * 用集合而非单槽：多指并发（一指拖节点、一指拉伸另一个节点）时各自持 token，
+   * 谁的手势结束只注销自己的，不会把别人的基准清掉。
+   */
+  const rebases = new Set<() => void>();
+  const registerRebase = (fn: () => void) => {
+    rebases.add(fn);
+    return () => {
+      rebases.delete(fn);
+    };
+  };
 
   const onPanePointerDown = (e: PointerEvent) => {
     if (e.button !== 0) return; // 右/中键不平移不起线
@@ -372,9 +399,9 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
       x: cx - ((cx - cur.x) / cur.k) * k,
       y: cy - ((cy - cur.y) / cur.k) * k,
     });
-    // 缩放改变了屏幕↔画布换算：在拖的节点必须用新 k 重建基准，
+    // 缩放改变了屏幕↔画布换算：在拖/在拉的每个手势都必须用新 k 重建基准，
     // 否则下一次 move 用旧基准算位移，卡片脱离指针跳开
-    rebaseActiveGesture?.();
+    for (const rebase of rebases) rebase();
   };
 
   // ── 拖线连接（Handle source → target）──
@@ -436,6 +463,12 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
       lastY: number;
     } | null = null;
     let moved = false;
+    /** 本次拖拽的 rebase token 注销函数（松手/取消/卸载都要还回去，只删自己那份） */
+    let unregisterRebase: (() => void) | null = null;
+    onCleanup(() => {
+      unregisterRebase?.();
+      unregisterRebase = null;
+    });
 
     const onDown = (e: PointerEvent) => {
       if (e.button !== 0) return; // 右键留给 contextmenu，不进拖拽态
@@ -455,8 +488,9 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
         lastY: e.clientY,
       };
       (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-      // 滚轮在拖拽中途缩放时，以「当前节点位置 + 上一次指针位置」重建起点
-      rebaseActiveGesture = () => {
+      // 滚轮在拖拽中途缩放时，以「当前节点位置 + 上一次指针位置」重建起点。
+      // 走注册表拿自己的 token：多指并发时各自重建，谁结束都不清别人的。
+      unregisterRebase = registerRebase(() => {
         if (!dragStart) return;
         dragStart = {
           ...dragStart,
@@ -465,7 +499,7 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
           nx: n().position.x,
           ny: n().position.y,
         };
-      };
+      });
       props.onNodeDragStart?.(n());
     };
     const onMove = (e: PointerEvent) => {
@@ -480,7 +514,8 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
     const onUp = (e: PointerEvent) => {
       if (!dragStart || e.pointerId !== dragStart.pointerId) return;
       dragStart = null;
-      rebaseActiveGesture = null;
+      unregisterRebase?.();
+      unregisterRebase = null;
       props.onNodeDragStop?.(n());
       // click 在 pointerup 之后触发，用 moved 抑制拖拽后的误点击
       if (!moved) {
@@ -512,7 +547,8 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
           if (!dragStart || dragStart.pointerId !== e.pointerId) return;
           dragStart = null;
           moved = false;
-          rebaseActiveGesture = null;
+          unregisterRebase?.();
+          unregisterRebase = null;
           props.onNodeDragStop?.(n(), true);
         }}
         onContextMenu={(e) => {
@@ -586,11 +622,8 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
         zoom: () => t().k,
         onResize: (id, w, h, resizing) => props.onNodeResize?.(id, w, h, resizing),
         onResizeEnd: (id, w, h) => props.onNodeResizeEnd?.(id, w, h),
-        // 拖拽与拉伸共用同一槽位：同一时刻只可能有一个手势 owner（节点/手柄/拉伸各自单指），
-        // 滚轮缩放时由 onWheel 调它重建「屏幕 → 画布」换算基准
-        setRebase: (fn) => {
-          rebaseActiveGesture = fn;
-        },
+        // 注册表式 rebase：每个手势 token 独立，滚轮缩放时由 onWheel 逐个重建换算基准
+        registerRebase,
       }}
     >
       <div

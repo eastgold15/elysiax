@@ -38,7 +38,7 @@ async function waitSubs(rt: { hasSubs: (ch: string) => boolean }, ch: string) {
 
 const dataOf = (frame: string) => frame.split("\n").find((l) => l.startsWith("data: "))!.slice(6);
 
-test("stream：快照等待期间的推送不丢失，且快照排在最前", async () => {
+test("stream：快照等待期间的推送不丢失，且快照紧跟握手帧", async () => {
   let release!: () => void;
   const gate = new Promise<void>((r) => (release = r));
   const rt = defineRealtime<Msg>({
@@ -54,18 +54,27 @@ test("stream：快照等待期间的推送不丢失，且快照排在最前", as
   rt.publish("ch", { type: "event", n: 1 });
   release();
 
-  const frames = await readFrames(res, 2);
-  expect(dataOf(frames[0]!)).toBe('{"type":"snapshot","n":0}');
-  expect(dataOf(frames[1]!)).toBe('{"type":"event","n":1}');
+  const frames = await readFrames(res, 3);
+  expect(frames[0]!.startsWith("event: ping")).toBe(true); // 握手帧，客户端忽略
+  expect(dataOf(frames[1]!)).toBe('{"type":"snapshot","n":0}');
+  expect(dataOf(frames[2]!)).toBe('{"type":"event","n":1}');
 });
 
-test("stream：无快照时直接收推送", async () => {
+test("stream：空快照也要发首帧（连上不等于等到数据）", async () => {
+  const rt = defineRealtime<Msg>({ snapshot: () => [] });
+  const res = rt.stream("ch");
+  const [frame] = await readFrames(res, 1);
+  expect(frame!.startsWith("event: ping")).toBe(true);
+});
+
+test("stream：无快照时先握手再收推送", async () => {
   const rt = defineRealtime<Msg>();
   const res = rt.stream("ch");
   await waitSubs(rt, "ch");
   rt.publish("ch", { type: "event", n: 9 });
-  const [frame] = await readFrames(res, 1);
-  expect(dataOf(frame!)).toBe('{"type":"event","n":9}');
+  const frames = await readFrames(res, 2);
+  expect(frames[0]!.startsWith("event: ping")).toBe(true);
+  expect(dataOf(frames[1]!)).toBe('{"type":"event","n":9}');
 });
 
 test("stream：客户端断开后退订（hasSubs 归零，轮询器可跳过无观众的活）", async () => {
@@ -86,7 +95,11 @@ test("stream：快照抛错时退订，不泄漏", async () => {
   });
   const res = rt.stream("ch");
   await waitSubs(rt, "ch");
-  await expect(readFrames(res, 1)).rejects.toThrow(/snapshot boom/);
+  // 握手帧照常发出，随后快照抛错 → 流的下一次读取 reject
+  const reader = res.body!.getReader();
+  const first = await reader.read();
+  expect(new TextDecoder().decode(first.value)).toContain("event: ping");
+  await expect(reader.read()).rejects.toThrow(/snapshot boom/);
   for (let i = 0; i < 100 && rt.hasSubs("ch"); i++) await new Promise((r) => setTimeout(r, 0));
   expect(rt.hasSubs("ch")).toBe(false);
 });

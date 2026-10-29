@@ -70,6 +70,12 @@ export async function start(opts: {
   auth?: GuardOptions;
   /** 透传 elysiaxAPI 的其余选项（如 validationError） */
   api?: Omit<ElysiaxAPIOptions, "pages" | "layout" | "apiPrefix">;
+  /**
+   * Bun.serve 的 idleTimeout（秒，上限 255），默认 60。
+   * 必须大于 SSE 心跳（defineRealtime 默认 25s）：Bun 默认 10s 会在心跳之前
+   * 掐断空闲的 text/event-stream 连接（日志 `timed out a request after 10 seconds`）。
+   */
+  idleTimeout?: number;
 }) {
   const root = opts.gen.buildRootContainer();
   const pages = opts.gen.pages ?? [];
@@ -118,6 +124,8 @@ export async function start(opts: {
     port,
     routes: routes as never,
     development: opts.development ?? process.env.NODE_ENV !== "production",
+    // SSE 长连接：默认 10s 会先于心跳掐断流，见 idleTimeout 选项说明
+    idleTimeout: opts.idleTimeout ?? 60,
   });
 
   console.log(`✅ elysiax: http://localhost:${port}`);

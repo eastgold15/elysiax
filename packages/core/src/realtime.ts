@@ -82,6 +82,10 @@ export function defineRealtime<T>(options: RealtimeOptions<T> = {}) {
         const unsub = subscribe(ch, push);
         const hb = heartbeatMs > 0 ? setInterval(() => push("ping"), heartbeatMs) : null;
         try {
+          // 握手后立刻发一帧：快照可能要查库/查服务几秒，期间若一个字节都不写，
+          // 客户端与反代只能「连上了但空等」；空快照更是永远等不到第一帧。
+          // ping 是控制帧，客户端忽略，但足以确认流已建立并让连接保持写活跃。
+          yield frame("ping", "{}");
           if (snap) queue = [...(await snap()), ...queue];
           while (!done) {
             while (queue.length) {

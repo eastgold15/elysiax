@@ -7,55 +7,154 @@
  * dev/gen/build 都会经过 codegen，门禁挂在这里才是真的拦得住；doctor 复用同一实现，
  * 手动体检与构建期判定不会漂移。
  */
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import { resolve } from "node:path";
 // 显式从 bun 取 Glob：core 的 tsconfig 只声明 types:["bun"]，全局名不在类型层
 import { Glob } from "bun";
 
-/** 剥离 // 行注释与 块注释（字符级状态机：字符串/模板串/正则里的 // 不误伤） */
-export function stripComments(src: string): string {
-  let out = "";
+/**
+ * 词法预扫描结果：`code` 与源码等长（注释字符换成空格，换行保留），
+ * `isCode[i]` = 第 i 个字符是否属于「会被执行的代码」（字符串/模板/正则内容为 false）。
+ *
+ * 为什么需要 isCode：注释剥离只能解决「注释里写了 import 示例」，
+ * 模板串与 JSX 文本里的示例 `import` 同样是纯文本——行首锚定正则会把它当真。
+ * 扫描 import 前先查 keyword 位置是否在代码区，才不会被文本骗到。
+ */
+export interface SourceScan {
+  code: string;
+  isCode: boolean[];
+}
+
+/** 这些字符之后出现的 `/` 是正则开头（而不是除号） */
+const REGEX_PREV_CHARS = new Set([..."(,=:;!&|?{}[]<>+-*%~^"]);
+/** 这些关键字之后出现的 `/` 是正则开头 */
+const REGEX_PREV_WORDS = new Set([
+  "return", "typeof", "case", "delete", "void", "instanceof", "in", "of", "new", "do", "else", "yield", "await",
+]);
+const WORD_CHAR = /[A-Za-z0-9_$]/;
+
+/**
+ * 字符级词法扫描（不追求完整解析，只保证门禁要用的三类判定正确）：
+ * - 注释：内容换空格、换行保留（行首锚点在注释后仍可用）
+ * - 字符串：' " 不跨行（TSX 文本里的撇号不会把状态带出这一行）；模板串可跨行
+ * - 正则字面量：`/[/*]/` 不会被当成块注释开头（按前一个 token 判断正则 vs 除号）
+ *
+ * 不用 Bun.Transpiler.scan 兜底：它在转译期擦掉 type-only import/export，
+ * 而本门禁明确要求类型 import 同样算跨原子引用（类型也是契约）。
+ */
+export function scanSource(src: string): SourceScan {
+  const code = src.split("");
+  const isCode = new Array<boolean>(src.length).fill(true);
+  /** 把 [start, end) 标为非代码区；blank 额外把注释内容换成空格（换行保留） */
+  const mask = (start: number, end: number) => {
+    for (let k = start; k < end && k < src.length; k++) isCode[k] = false;
+  };
+  const blank = (start: number, end: number) => {
+    for (let k = start; k < end && k < src.length; k++) {
+      isCode[k] = false;
+      if (code[k] !== "\n") code[k] = " ";
+    }
+  };
+  let prevChar = ""; // 最近一个代码字符（空白不算）
+  let word = ""; // 紧邻当前位置的代码单词（用于 return /re/）
   let i = 0;
-  let quote: string | null = null; // ' " ` 之一，null = 不在字符串里
   while (i < src.length) {
     const c = src[i]!;
     const next = src[i + 1];
-    if (quote) {
-      out += c;
-      if (c === "\\") {
-        out += next ?? "";
-        i += 2;
-        continue;
-      }
-      if (c === quote) quote = null;
+    if (c === "\n") {
+      word = "";
       i++;
       continue;
     }
-    if (c === "'" || c === '"' || c === "`") {
-      quote = c;
-      out += c;
+    if (c === " " || c === "\t" || c === "\r") {
       i++;
       continue;
     }
+    // ── 注释 ──
     if (c === "/" && next === "/") {
+      const start = i;
       while (i < src.length && src[i] !== "\n") i++;
+      blank(start, i);
       continue;
     }
     if (c === "/" && next === "*") {
+      const start = i;
       i += 2;
-      // 块注释里的换行要保留：否则注释前后的两行代码会被拼到一行，
-      // 依赖行首锚点的匹配（import ...）就漏了
-      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) {
-        if (src[i] === "\n") out += "\n";
-        i++;
-      }
-      i += 2;
+      while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) i++;
+      i = Math.min(i + 2, src.length);
+      blank(start, i);
       continue;
     }
-    out += c;
+    // ── 字符串 / 模板串 ──
+    if (c === "'" || c === '"') {
+      const quote = c;
+      let k = i + 1;
+      while (k < src.length && src[k] !== quote && src[k] !== "\n") {
+        if (src[k] === "\\") k++;
+        k++;
+      }
+      // 跨行未闭合 = 大概率是 JSX 文本里的撇号：只吞到行尾，状态就此结束
+      mask(i + 1, k);
+      prevChar = quote;
+      word = "";
+      i = src[k] === quote ? k + 1 : k;
+      continue;
+    }
+    if (c === "`") {
+      let k = i + 1;
+      while (k < src.length && src[k] !== "`") {
+        if (src[k] === "\\") k++;
+        k++;
+      }
+      const closed = src[k] === "`";
+      mask(i + 1, closed ? k : src.length);
+      prevChar = "`";
+      word = "";
+      i = Math.min(k + 1, src.length);
+      continue;
+    }
+    // ── 正则字面量（expr 位置上的 /）──
+    if (c === "/" && (REGEX_PREV_CHARS.has(prevChar) || REGEX_PREV_WORDS.has(word) || prevChar === "")) {
+      let k = i + 1;
+      let inClass = false;
+      let closed = false;
+      while (k < src.length) {
+        const ch = src[k]!;
+        if (ch === "\n") break; // 正则不跨行：没闭合就当作除号
+        if (ch === "\\") {
+          k += 2;
+          continue;
+        }
+        if (ch === "[") inClass = true;
+        else if (ch === "]") inClass = false;
+        else if (ch === "/" && !inClass) {
+          closed = true;
+          break;
+        }
+        k++;
+      }
+      if (closed) {
+        k++; // 闭合的 /
+        while (k < src.length && /[a-z]/.test(src[k]!)) k++; // flags
+        mask(i, k);
+        prevChar = "/";
+        word = "";
+        i = k;
+        continue;
+      }
+    }
+    // ── 普通代码字符 ──
+    if (WORD_CHAR.test(c)) word += c;
+    else word = "";
+    prevChar = c;
     i++;
   }
-  return out;
+  return { code: code.join(""), isCode };
+}
+
+/** 剥离 // 行注释与块注释（实现见 scanSource；注释内容换成空格、行结构不变） */
+export function stripComments(src: string): string {
+  return scanSource(src).code;
 }
 
 /** 按顶层逗号切分声明列表（忽略括号/方括号/花括号内部的逗号） */
@@ -86,27 +185,42 @@ export function socketExports(
   depth = 0,
 ): Set<string> {
   const names = new Set<string>();
-  const code = stripComments(src);
+  const { code, isCode } = scanSource(src);
+  /** 匹配起点必须落在代码区：字符串/模板/正则里的「export 示例」不算出口 */
+  const real = (m: RegExpMatchArray) => {
+    const start = (m.index ?? 0) + (m[0].length - m[0].trimStart().length);
+    return isCode[start] === true;
+  };
   // export { A, B as C } / export type { ... }（可多行）
-  for (const m of code.matchAll(/export\s+(?:type\s+)?\{([^}]*)\}/gs))
+  for (const m of code.matchAll(/export\s+(?:type\s+)?\{([^}]*)\}/gs)) {
+    if (!real(m)) continue;
     for (const part of m[1]!.split(",")) {
       const p = part.trim().replace(/^type\s+/, "");
       if (!p) continue;
       const asM = /\bas\s+(\w+)$/.exec(p);
       names.add(asM ? asM[1]! : p);
     }
+  }
   // export class/function/interface/type/enum X
-  for (const m of code.matchAll(/^export\s+(?:async\s+)?(?:class|function|interface|type|enum)\s+(\w+)/gm))
-    names.add(m[1]!);
+  for (const m of code.matchAll(/^export\s+(?:async\s+)?(?:class|function|interface|type|enum)\s+(\w+)/gm)) {
+    if (real(m)) names.add(m[1]!);
+  }
   // export const/let/var 支持多声明：export const a = 1, b = 2
-  for (const m of code.matchAll(/^export\s+(?:const|let|var)\s+([^;\n]+)/gm))
+  for (const m of code.matchAll(/^export\s+(?:const|let|var)\s+([^;\n]+)/gm)) {
+    if (!real(m)) continue;
     for (const decl of splitDeclarators(m[1]!)) {
       const id = /^\s*(\w+)/.exec(decl);
       if (id) names.add(id[1]!);
     }
-  // export * from "./x"：递归收集目标文件出口
+  }
+  // export * as NS from "./x"：命名空间再导出本身就是一个命名出口
+  for (const m of code.matchAll(/export\s+(?:type\s+)?\*\s+as\s+(\w+)\s+from\s+["'][^"']+["']/g)) {
+    if (real(m)) names.add(m[1]!);
+  }
+  // export * from "./x"（含 export type * from）：递归收集目标文件出口
   if (resolveFile && depth < 3)
-    for (const m of code.matchAll(/export\s+\*\s+from\s+["']([^"']+)["']/g)) {
+    for (const m of code.matchAll(/export\s+(?:type\s+)?\*\s+from\s+["']([^"']+)["']/g)) {
+      if (!real(m)) continue;
       const target = resolveFile(m[1]!);
       if (target)
         for (const n of socketExports(readFileSync(target, "utf8"), resolveFile, depth + 1))
@@ -152,24 +266,27 @@ export async function checkSocketGate(root: string, pagesDir: string): Promise<S
       .sort((a, b) => b.length - a.length)[0];
   };
   const resolveImport = (fromFile: string, spec: string): string | undefined => {
+    // Bun 的 ?raw / ?url 等资源查询串不参与文件解析
+    const clean = spec.replace(/[?#].*$/, "");
     // 路径别名（模板 tsconfig paths 约定）：@gen → .elysiax/，@/ → src/
-    const base = spec.startsWith("@gen")
-      ? resolve(root, ".elysiax", spec.slice(4))
-      : spec.startsWith("@/")
-        ? resolve(root, "src", spec.slice(2))
-        : resolve(fromFile, "..", spec);
+    const base = clean.startsWith("@gen")
+      ? resolve(root, ".elysiax", clean.slice(4))
+      : clean.startsWith("@/")
+        ? resolve(root, "src", clean.slice(2))
+        : resolve(fromFile, "..", clean);
     // NodeNext 风格显式扩展名：./x.socket.js 实际落在 ./x.socket.ts
     const stripped = base.replace(/\.(c|m)?jsx?$/, "");
     for (const cand of [
-      base,
       `${base}.ts`,
       `${base}.tsx`,
       `${stripped}.ts`,
       `${stripped}.tsx`,
       `${base}/index.ts`,
       `${base}/index.tsx`,
+      base,
     ])
-      if (existsSync(cand)) return cand;
+      // 必须落到文件：目录导入命中 base 会把 atomOf 算到父目录，整条检查被静默跳过
+      if (existsSync(cand) && statSync(cand).isFile()) return cand;
     return undefined;
   };
   const symbols = new Map<string, Set<string>>();
@@ -220,16 +337,28 @@ export async function checkSocketGate(root: string, pagesDir: string): Promise<S
   for await (const f of new Glob(`${pagesDir}/**/*.ts*`).scan({ cwd: root })) {
     const abs = resolve(root, f);
     // 先剥注释：注释里的示例 import 不能算数，import 花括号里的行注释也不能混进符号名
-    const src = stripComments(readFileSync(abs, "utf8"));
+    const { code: src, isCode } = scanSource(readFileSync(abs, "utf8"));
+    /** 语句首个非空白字符必须落在代码区：模板串/JSX 文本里的示例 import 是纯文本，不算引用 */
+    const startsInCode = (m: RegExpMatchArray) => {
+      const text = m[0];
+      const lead = text.length - text.trimStart().length;
+      return isCode[(m.index ?? 0) + lead] === true;
+    };
     // 静态形态：import ... from / export ... from（再导出）/ import "..."（副作用）
     for (const m of src.matchAll(/^\s*(?:import\s+(?:type\s+)?([^"']*?)from|export\s+(?:type\s+)?([^"']*?)from|import)\s*["']([^"']+)["']/gm)) {
+      if (!startsInCode(m)) continue;
       checkSpec(f, abs, m[3]!, m[1] ?? m[2] ?? "");
     }
     // 动态 import(): 同样是跨原子引用通道，别名/相对路径一律按同一口径判
-    for (const m of src.matchAll(/\bimport\s*\(\s*["']([^"']+)["']\s*\)/g)) {
+    // （字符串引号与无插值模板串都算；带插值的模板串无法静态解析，跳过）
+    for (const m of src.matchAll(/\b(?:import|require)\s*\(\s*["'`]([^"'`$]+)["'`]\s*\)/g)) {
+      if (!startsInCode(m)) continue;
       checkSpec(f, abs, m[1]!, "");
     }
   }
+  // 插座符号表全量预热：doctor 的「只增不减」对没被任何插头引用的叶子插座
+  // 也要拿到出口，否则会把 HEAD 里的全部出口误判成「被删」
+  for (const sf of socketFiles) symbolsOf(sf);
   return { violations, atomDirs: atomsDirs, socketFiles, symbols };
 }
 

@@ -278,8 +278,9 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
     pane.setPointerCapture(e.pointerId);
   };
   const onPanePointerMove = (e: PointerEvent) => {
-    if (panStart) {
-      if (e.pointerId !== panStart.pointerId) return; // 非 owner 的移动不参与平移
+    // owner 校验只约束平移本身：一指平移 + 一指拖线时，拖线指针的 move
+    // 不能因为「不是平移 owner」而被吞掉，否则连线冻结
+    if (panStart && e.pointerId === panStart.pointerId) {
       setT((c) => ({ ...c, x: panStart!.tx + e.clientX - panStart!.px, y: panStart!.ty + e.clientY - panStart!.py }));
     }
     updateConn(e);

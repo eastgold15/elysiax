@@ -136,6 +136,78 @@ test("checkSocketGate：嵌套原子取最深归属——嵌套原子私拉父�
   expect(gate.violations[0]!.file).toBe("src/pages/alpha/nested/nested.service.ts");
 });
 
+test("checkSocketGate：正则字面量里的 /* 不会吞掉后续真实 import", async () => {
+  const root = fixture([
+    "const re = /[/*]/;",
+    'import { S } from "../alpha/alpha.service";',
+  ]);
+  const gate = await checkSocketGate(root, "src/pages");
+  expect(gate.violations).toHaveLength(1);
+});
+
+test("checkSocketGate：模板串里的示例 import 是纯文本，不算引用", async () => {
+  const root = fixture([
+    "const s = `",
+    'import { S } from "../alpha/alpha.service";',
+    "`;",
+    "void s;",
+  ]);
+  const gate = await checkSocketGate(root, "src/pages");
+  expect(gate.violations).toEqual([]);
+});
+
+test("checkSocketGate：模板串里的动态 import 示例同样不算", async () => {
+  const root = fixture(["const s = `", 'import("../alpha/alpha.service")', "`;", "void s;"]);
+  const gate = await checkSocketGate(root, "src/pages");
+  expect(gate.violations).toEqual([]);
+});
+
+test("checkSocketGate：JSX 文本里的撇号不会让块注释失效", async () => {
+  const root = fixture([
+    "export const C = () => <p>It's fine</p>;",
+    "/*",
+    'import { S } from "../alpha/alpha.service";',
+    "*/",
+    "export const ok = 1;",
+  ]);
+  const gate = await checkSocketGate(root, "src/pages");
+  expect(gate.violations).toEqual([]);
+});
+
+test("checkSocketGate：目录导入（alpha/index.ts）同样是私拉电线", async () => {
+  const root = fixtureWith({
+    "src/pages/alpha/index.ts": "export const x = 1;\n",
+    "src/pages/beta/beta.service.ts": 'import { x } from "../alpha";\nvoid x;\n',
+  });
+  const gate = await checkSocketGate(root, "src/pages");
+  expect(gate.violations).toHaveLength(1);
+  expect(gate.violations[0]!.message).toContain("绕过了插座");
+});
+
+test("checkSocketGate：?raw 资源查询串不影响解析判定", async () => {
+  const root = fixture(['import raw from "../alpha/alpha.service?raw";', "void raw;"]);
+  const gate = await checkSocketGate(root, "src/pages");
+  expect(gate.violations).toHaveLength(1);
+});
+
+test("checkSocketGate：插座 export type * 与 export * as NS 的出口可被引用", async () => {
+  const root = fixtureWith({
+    "src/pages/alpha/alpha.model.ts": "export type User = { id: number };\n",
+    "src/pages/alpha/alpha.socket.ts":
+      'export type * from "./alpha.model";\nexport * as Model from "./alpha.model";\n',
+    "src/pages/beta/beta.service.ts":
+      'import type { User } from "../alpha/alpha.socket";\nimport { Model } from "../alpha/alpha.socket";\nvoid Model;\nexport type { User };\n',
+  });
+  const gate = await checkSocketGate(root, "src/pages");
+  expect(gate.violations).toEqual([]);
+});
+
+test("checkSocketGate：符号表全量预热（doctor 只增不减对叶子插座也要有出口）", async () => {
+  const root = fixture([]);
+  const gate = await checkSocketGate(root, "src/pages");
+  expect(gate.symbols.get(join(root, "src/pages/alpha/alpha.socket.ts"))?.has("alphaThing")).toBe(true);
+});
+
 test("checkSocketGate：插座 export * from 的出口可被插头引用（递归解析）", async () => {
   const root = fixtureWith({
     "src/pages/alpha/alpha.partials.ts": "export const Card = 1;\n",

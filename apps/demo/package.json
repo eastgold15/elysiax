@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "elysiax dev",
     "start": "elysiax gen && bun src/index.ts",
+    "doctor": "elysiax doctor",
     "build": "elysiax build",
     "typecheck": "elysiax gen && tsc --noEmit",
     "build:desktop": "elysiax build --desktop",

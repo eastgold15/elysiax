@@ -139,6 +139,8 @@ di 的 deps 是原子的"凸"（要插哪些插座）；doctor 在 import 扫描
 
    盲区：这项检查只看**表名**，不比列结构。裸 SQL 原子的 `schema.ts` 里改了 DDL（加列/改类型）而库里还是旧结构时，doctor 依旧全绿——列变更必须走一条显式迁移（`ALTER TABLE`），并且只追加：新克隆靠迁移补齐，存量库靠已执行记录跳过，两边最终一致。drizzle 原子同理，改 schema 后忘记生成迁移不会被这条检查拦下。
 
+   > 注意「已执行记录」的前提：它适用于有迁移 journal 的项目。demo 那种「模块加载即 `db.run(DDL)`」的最小裸 SQL 形态没有 journal，`ALTER TABLE` 会在每次加载重跑、第二次就报 `duplicate column name`——这种形态要么加列前判 `PRAGMA table_info` 做幂等，要么按 §9.2 补上 journal 再谈追加。
+
 ## 10. 端点 schema 完整性
 
 Eden Treaty 与 OpenAPI 的类型质量取决于端点的 t schema 完备度：

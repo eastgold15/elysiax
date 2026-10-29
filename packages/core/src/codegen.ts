@@ -392,10 +392,14 @@ export function extractRoutes(
   const seen = new Set<string>();
   const routes: { method: string; path: string }[] = [];
   const seenRoute = new Set<string>();
+  // 拼路径要吃掉前缀末尾的 /：根页 prefix 为 "/" 时 `${prefix}${sub}` 会拼出
+  // "//x"，而实际挂载点是 /api + "/" → /api/x（见 di.ts 的 prefix 特判）
+  const join = (prefix: string, sub: string) =>
+    sub === "/" ? prefix : prefix.endsWith("/") ? `${prefix}${sub.slice(1)}` : `${prefix}${sub}`;
   for (const m of src.matchAll(routeRe)) {
     const method = m[1] === "ui" ? "GET" : m[1]!.toUpperCase();
     const sub = m[2]!;
-    const path = sub === "/" ? prefix : `${prefix}${sub}`;
+    const path = join(prefix, sub);
     if (!seen.has(path)) {
       seen.add(path);
       paths.push(path);

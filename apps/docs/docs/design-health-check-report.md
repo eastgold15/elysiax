@@ -85,6 +85,7 @@
 ## 数据不足（缺什么、去哪补）
 
 - 卡5 第三点疑似：htmx autoDetect 的 `isHtml` 启发式（`<` 开头 `>` 结尾，`packages/htmx/src/utils.ts:7-`）对"用户返回以 < 开头的 JSON/文本"的误判面——需统计应用侧 handler 实际返回值分布才能定 n，建议从 dockyard 真实页面抽样。
+  - **抽样（2026-10-30）**：dockyard 全部 actions/partials 里唯一返回裸字符串的是 runtime.service 的中文提示（如「容器未运行（先部署）」），命中误判面 **0 例**；JSON 以 `{`/`"`/`[` 开头天然不命中。结论：启发式保留，误判面已由 `packages/htmx/src/handler.test.ts` 钉住（`<pending>` 这类形似文本仍判 HTML，属可接受误判）。
 - 卡7 设计缺口：合法配置全集（PageEntry × auth × apiPrefix × layout 组合）无枚举工具，无法证伪"本该可达却不可达"的组合；如关心，可给 start() 加启动期路由表 dump 后再跑本卡。
   - **现状（2026-10-30）**：路由面已可导出审计——codegen 落 `.elysiax/routes.table.json`（kind/method/path/source，页面+client 壳+片段+actions+controller），`elysiax routes [--json]` 打印；demo 14 条、dockyard 66 条实测无冲突。顺带修掉 doctor 的一项**假通过**：旧冲突检查只扫 `modules/*.controller.tsx`，页面时代恒为 0 条也报「路由无冲突」，现改为读路由表、按「方法 + 归一化路径 + 源文件」判重。卡 7 的「配置组合枚举」仍缺，但路由可达面不再是黑盒。
 

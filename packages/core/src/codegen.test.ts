@@ -156,6 +156,26 @@ test("路由表旁产物：页面 / 片段 / actions 的挂载点与方法落 ro
   ]);
 });
 
+test("根页片段：路径拼接不产生 //（实际挂载点是 /api/x），助手与路由表一致", async () => {
+  const root = makeFixture({
+    "src/pages/index.page.tsx": `export default () => null;\n`,
+    "src/pages/index.partials.tsx": `export default defineRoutes().get("/x", () => null);\n`,
+  });
+  await codegen(root, CONFIG);
+  const rows = JSON.parse(
+    readFileSync(join(root, ".elysiax/routes.table.json"), "utf8"),
+  ) as RouteRow[];
+  expect(rows).toContainEqual({
+    kind: "partials",
+    method: "GET",
+    path: "/api/x",
+    source: "src/pages/index.partials.tsx",
+  });
+  const gen = readFileSync(join(root, ".elysiax/routes.gen.ts"), "utf8");
+  expect(gen).toContain("`/api/x`");
+  expect(gen).not.toContain("/api//x");
+});
+
 test("findRouteConflicts：跨文件同方法同路径才算冲突；参数名不同、同文件重复、方法不同都不算", () => {
   const row = (method: string, path: string, source: string): RouteRow => ({
     kind: "actions",

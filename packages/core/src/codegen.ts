@@ -353,6 +353,26 @@ export interface RouteRow {
   source: string;
 }
 
+/**
+ * 路由表冲突检测（doctor 与将来构建期门禁共用）：
+ * 同一「方法 + 归一化路径」（参数段名不参与比较）被两个以上源文件声明 = 挂载点不确定。
+ * 同文件重复声明不算冲突（重复写在 Elysia 里是后者覆盖，语义明确）。
+ */
+export function findRouteConflicts(
+  rows: RouteRow[],
+): { method: string; path: string; sources: string[] }[] {
+  const seen = new Map<string, { method: string; path: string; sources: Set<string> }>();
+  for (const r of rows) {
+    const key = `${r.method} ${r.path.replaceAll(/:[^/]+/g, ":")}`;
+    const hit = seen.get(key);
+    if (hit) hit.sources.add(r.source);
+    else seen.set(key, { method: r.method, path: r.path, sources: new Set([r.source]) });
+  }
+  return [...seen.values()]
+    .filter((e) => e.sources.size > 1)
+    .map((e) => ({ method: e.method, path: e.path, sources: [...e.sources] }));
+}
+
 /** 从 controller 源码提取路由。负向后瞻排除 di.get("...")；只认 "/" 开头字面量 */
 export function extractRoutes(
   src: string,

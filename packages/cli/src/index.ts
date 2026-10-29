@@ -688,7 +688,7 @@ cli.addCommand({
   ],
   execute: async ({ options, logger }) => {
     const root = process.cwd();
-    const { codegen, loadConfig } = await import("@elysiax/core");
+    const { codegen, loadConfig, findRouteConflicts } = await import("@elysiax/core");
     const config = await loadConfig(root);
     let errors = 0;
 
@@ -712,20 +712,13 @@ cli.addCommand({
     } catch {
       // codegen 失败时上一步已报错，这里不重复刷屏
     }
-    const routeOwner = new Map<string, string>();
-    let routeConflicts = 0;
-    for (const r of routeRows) {
-      // 参数段归一化后再比（/a/:id 与 /a/:name 是同一挂载点）；同文件重复声明不算冲突
-      const norm = `${r.method} ${r.path.replaceAll(/:[^/]+/g, ":")}`;
-      const prev = routeOwner.get(norm);
-      if (prev && prev !== r.source) {
-        logger.error(`❌ 路由冲突: ${r.method} ${r.path}（${r.source}）与 ${prev} 重复`);
-        routeConflicts++;
-        errors++;
-      } else {
-        routeOwner.set(norm, r.source);
-      }
+    // 判定在 core（findRouteConflicts），doctor 只负责报告
+    const routeConflictsList = findRouteConflicts(routeRows);
+    for (const c of routeConflictsList) {
+      logger.error(`❌ 路由冲突: ${c.method} ${c.path}——${c.sources.join(" 与 ")} 都声明了它`);
+      errors++;
     }
+    const routeConflicts = routeConflictsList.length;
     if (!routeConflicts) {
       const byKind = (k: RouteRow["kind"]) => routeRows.filter((r) => r.kind === k).length;
       logger.info(

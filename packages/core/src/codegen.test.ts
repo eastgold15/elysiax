@@ -2,7 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { codegen, extractRoutes, type RouteRow } from "./codegen";
+import { codegen, extractRoutes, findRouteConflicts, type RouteRow } from "./codegen";
 import type { ElysiaxConfig } from "./config";
 
 // di 夹具直接引用 core 源码的绝对路径：fixture 在 /tmp 下，node_modules 解析不到 "@elysiax/core"
@@ -154,6 +154,28 @@ test("路由表旁产物：页面 / 片段 / actions 的挂载点与方法落 ro
       source: "src/pages/todo/todo.actions.ts",
     },
   ]);
+});
+
+test("findRouteConflicts：跨文件同方法同路径才算冲突；参数名不同、同文件重复、方法不同都不算", () => {
+  const row = (method: string, path: string, source: string): RouteRow => ({
+    kind: "actions",
+    method,
+    path,
+    source,
+  });
+  expect(
+    findRouteConflicts([
+      row("GET", "/api/x/:id", "a.ts"),
+      row("GET", "/api/x/:name", "b.ts"), // 参数名不同 = 同一挂载点 → 冲突
+    ]),
+  ).toEqual([{ method: "GET", path: "/api/x/:id", sources: ["a.ts", "b.ts"] }]);
+  expect(
+    findRouteConflicts([
+      row("GET", "/api/x", "a.ts"),
+      row("POST", "/api/x", "b.ts"), // 同路径不同方法合法
+      row("GET", "/api/x", "a.ts"), // 同文件重复声明不算
+    ]),
+  ).toEqual([]);
 });
 
 test("插座含 export default：codegen 直接拒绝（契约 §3.1，不再只在 doctor 报）", async () => {

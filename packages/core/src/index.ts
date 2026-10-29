@@ -20,7 +20,7 @@ export { defineLayout, getLayout } from "./layout";
 export { elysiaxAuth } from "./auth";
 export type { GuardOptions } from "./auth";
 export { ServiceError, errorBanner } from "./errors";
-export { codegen, defineModule, provide, lazy, extractRoutes } from "./codegen";
+export { codegen, defineModule, provide, lazy, extractRoutes, findRouteConflicts } from "./codegen";
 export type { RouteRow } from "./codegen";
 export type { DiEntry, DiEntryInput, LazyRef, ModuleDi, ModuleDiInput, ProvideOptions } from "./codegen";
 export { createTestContainer } from "./testing";

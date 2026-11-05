@@ -23,7 +23,7 @@ model: inherit
 ### 🟠 错误处理约定
 
 6. services 抛 `ServiceError`（`@elysiax/core`），不抛裸 `Error("中文...")`。
-7. actions/controller 里**零 try/catch 回显**——ServiceError 由框架统一映射。预期错误用 `return status(code, { error })`（从 "elysia" 导入 status）。
+7. actions/controller 里**零 try/catch 回显**——ServiceError 由框架统一映射为 JSON `{ error }` + statusCode（hx 与普通请求一致）。预期错误用 `return status(code, { error })`（从 "elysia" 导入 status）。
 8. Solid/client 原子的 actions 只吐 JSON；htmx 原子的 actions 只吐 HTML 片段。**渲染器单选**，不做内容协商、不双写端点。
 
 ### 🟠 client（浏览器包）边界

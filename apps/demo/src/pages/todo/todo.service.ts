@@ -10,7 +10,7 @@ export class TodoService {
   }
 
   addTodo(input: CreateTodoInput) {
-    // 业务错误抛 ServiceError：框架统一映射（hx → 横幅片段，普通 → JSON），actions 不写 try/catch
+    // 业务错误抛 ServiceError：框架统一映射为 JSON { error }，actions 不写 try/catch
     if (!input.title.trim()) throw new ServiceError("标题不能为空", 422);
     return this.todoRepository.create({ title: input.title.trim() });
   }

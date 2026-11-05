@@ -6,7 +6,12 @@
  * toast 事件与 htmx:responseError，不持有业务状态。
  */
 
-/** htmx 全局响应处理：422 也参与 swap（写操作失败回显表单片段），4xx/5xx 不 swap */
+/**
+ * htmx 全局响应处理：422 也参与 swap（ValidationError/formError 写操作失败
+ * 回显表单片段），4xx/5xx 不 swap。
+ * ServiceError 422 JSON 由下方 htmx:beforeSwap 拦截并弹 toast，
+ * ValidationError/formError 的 422 HTML 仍正常交换表单片段。
+ */
 export const responseHandlingScript = `
 if (window.htmx) htmx.config.responseHandling = [
   { code: '204', swap: false },
@@ -36,8 +41,22 @@ const toastScript = `
       show(m, t.kind);
     });
   });
+  document.body.addEventListener('htmx:beforeSwap', function (e) {
+    // 422 同时承载 HTML 表单片段与 ServiceError JSON：只交换前者，
+    // JSON 在 swap 前拦截并弹 toast，避免原始 JSON 替换页面区域。
+    var xhr = e.detail.xhr;
+    var type = xhr.getResponseHeader('content-type') || '';
+    if (xhr.status !== 422 || type.indexOf('application/json') === -1) return;
+    e.detail.shouldSwap = false;
+    var msg = '请求失败（422）';
+    try {
+      var j = JSON.parse(xhr.responseText);
+      if (j && typeof j.error === 'string') msg = j.error;
+    } catch (_) {}
+    show(msg, 'error');
+  });
   document.body.addEventListener('htmx:responseError', function (e) {
-    // 优先展示服务端 { error } 文本（ServiceError 约定），兜底状态码
+    // 优先展示服务端 { error } 文本（ServiceError 一律 JSON），兜底状态码
     var msg = '请求失败（' + e.detail.xhr.status + '）';
     try {
       var j = JSON.parse(e.detail.xhr.responseText);

@@ -61,7 +61,7 @@ throw new ServiceError("用户名不能为空", 422);   // service 抛
 return status(404, { error: "不存在" });          // actions 预期错误返回
 ```
 
-框架统一映射：hx → statusCode + 横幅片段；普通 → JSON `{ error }`。actions 不写 try/catch 回显。
+框架统一映射：JSON `{ error }` + statusCode（hx 与普通请求一致；hx 侧全局壳弹 toast）。actions 不写 try/catch 回显。
 
 ## 类型化路由（routes.gen.ts）
 

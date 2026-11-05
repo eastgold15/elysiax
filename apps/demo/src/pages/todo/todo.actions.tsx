@@ -3,7 +3,7 @@ import { defineRoutes } from "../../../.elysiax";
 import { TodoList } from "./todo.partials";
 
 /** 写端点：挂在 /api/todo 前缀下；零 try/catch——校验失败框架 422 回显，
- *  业务错误由 service 抛 ServiceError，框架统一映射为横幅片段 */
+ *  业务错误由 service 抛 ServiceError，框架统一映射为 JSON { error }，全局壳 toast 弹错 */
 export default defineRoutes()
   .post(
     "/",

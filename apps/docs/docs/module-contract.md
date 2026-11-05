@@ -94,7 +94,8 @@ export type XxxApi = typeof xxxApi;
 
 - services 抛 `ServiceError`（`@elysiax/core`）——doctor 机械检查：service 文件里 `throw new Error/TypeError` 直接报错；
 - actions **零 try/catch** 回显；
-- 预期错误 `return status(code, { error })`。
+- 预期错误 `return status(code, { error })`；
+- 响应映射两分：`ServiceError` → 一律 JSON `{ error }` + statusCode（hx 与普通请求一致）；`ValidationError`（typebox 校验失败）→ hx 请求 422 + HTML 表单片段，普通请求 JSON 422。
 
 ## 5. 并行开发纪律（多 agent）
 

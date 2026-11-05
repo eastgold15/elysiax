@@ -16,7 +16,7 @@ description: 脚手架新的 elysiax 原子模块（页面/子域/弹窗），�
 - 身份证两件套：`<name>.di.ts` + `<name>.socket.ts`（无对外承诺则只写 di，不写 socket）。
 - 插座纯度：socket.ts 只 re-export，注释标明"对外承诺"。
 - 跨原子依赖：import 对方 `<x>.socket.ts`，且 di provide 里声明类引用依赖（`provide(XService, [DepService, "db"])`，类引用 + 字符串值服务键）。
-- services 抛 `ServiceError`（`@elysiax/core`）；actions 零 try/catch，预期错误 `return status(code, { error })`（status 从 "elysia" 导入）。
+- services 抛 `ServiceError`（`@elysiax/core`）；actions 零 try/catch，预期错误 `return status(code, { error })`（status 从 "elysia" 导入）。ServiceError 由框架统一映射为 JSON `{ error }` + statusCode（hx 与普通请求一致）；ValidationError 才走 hx 422 + HTML 片段。
 - 所有文件注释用中文。
 
 ## 模板

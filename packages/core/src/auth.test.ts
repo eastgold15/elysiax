@@ -47,7 +47,7 @@ test("guard({ auth: true }) 批量保护子路由（partials/actions 挂载形�
   expect(res.headers.get("location")).toBe("/login");
 });
 
-test("ServiceError：hx → 片段，普通 → JSON", async () => {
+test("ServiceError：hx 与普通请求均返回 JSON { error }", async () => {
   const app = new Elysia()
     .onError(ServiceError, serviceErrorHandler)
     .get("/boom", () => {
@@ -62,6 +62,6 @@ test("ServiceError：hx → 片段，普通 → JSON", async () => {
     new Request("http://x/boom", { headers: { "HX-Request": "true" } }),
   );
   expect(hx.status).toBe(409);
-  expect(hx.headers.get("content-type")).toContain("text/html");
-  expect(await hx.text()).toContain("部署失败");
+  expect(hx.headers.get("content-type")).toContain("application/json");
+  expect(await hx.json()).toEqual({ error: "部署失败" });
 });

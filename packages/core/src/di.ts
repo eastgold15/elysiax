@@ -176,8 +176,8 @@ export function elysiaxAPI<T extends Record<string | symbol, any>>(
     // Elysia 2 rc：错误处理器按错误类注册（.onError(Class, handler)）
     api.onError(ValidationError, validationErrorHandler(banner));
   }
-  // ServiceError：services 抛类型化错误 → 统一 hx 片段 / JSON 映射，
-  // controller 不再各自 try/catch 回显（7.3）
+  // ServiceError：services 抛类型化错误 → 统一 JSON { error } 映射
+  // （hx 与普通请求一致），controller 不再各自 try/catch 回显（7.3）
   api.onError(ServiceError, serviceErrorHandler);
 
   // auth 宏：具名插件幂等，内层实例各自 .use() 以获得宏定义

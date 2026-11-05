@@ -17,7 +17,7 @@ Bun + Elysia 2 + htmx（服务端 TSX）+ Solid client 逃生舱的全栈框架�
 | 一端点两响应 | 无 `HX-Request` → AppLayout 整页；有 → 只渲染 content 片段。页面函数零 if/else |
 | 写操作三态 | `ctx.redirect` / `ctx.toast` / `ctx.formError`，303 vs HX-Redirect、422 回显由框架分流 |
 | 类型化 DI | `provide(Class, [Deps])` 依赖写类引用，类型从构造函数签名推导，写错编译报错 |
-| ServiceError | services 抛类型化错误，框架统一映射（hx → 横幅片段，普通 → JSON），actions 零 try/catch |
+| ServiceError | services 抛类型化错误，框架统一映射为 JSON `{ error }`（hx 与普通请求一致），actions 零 try/catch |
 | 代码生成 | 扫描页面树生成容器/服务/路由/壳，改声明自动重生成（`.elysiax/`，类 `.next` 模式） |
 | 类型化路由 | `routes.pages.servers.ByIdCard(s.id)` —— 改路由时引用处编译报错 |
 | client 逃生舱 | 页面目录放 `client/index.tsx` → 整页 Solid（框架自造插件 `@elysiax/solid` 预打包落盘，壳走 Bun HTMLBundle），JSON API 走 actions + Eden |
@@ -74,7 +74,7 @@ export default defineRoutes()
   });
 ```
 
-校验失败（typebox）由框架返回 **422 + 错误横幅片段**（AppLayout 的 responseHandling 允许 swap 422），非 htmx 请求仍是 JSON 422。
+校验失败（typebox）由框架返回 **422 + 错误横幅片段**（AppLayout 的 responseHandling 允许 swap 422），非 htmx 请求仍是 JSON 422。**注意**：只有 `ValidationError` 走 HTML 片段；`ServiceError` 一律 JSON `{ error }` + statusCode，不产片段。
 
 生成出来的页面条目是**可辨识联合**（`PageEntry`）：client 页必有壳且无整页 handler、SSR 页必有整页、只出端点的页至少有一类子路由——非法组合在类型层写不出来；同目录 `client/index` 与整页文件并存会在 gen 时直接报错（二者互斥）。
 
@@ -123,7 +123,7 @@ if (!input.name.trim()) throw new ServiceError("用户名不能为空", 422);
 if (!target) return status(404, { error: "部署目标不存在" });
 ```
 
-框架统一映射：`HX-Request` → statusCode + 错误横幅片段；普通请求 → JSON `{ error }`。子类化（DeployError/SshError）可区分错误类别，走同一映射。
+框架统一映射：JSON `{ error }` + statusCode，hx 与普通请求一致（hx 侧全局壳 `htmx:responseError` 弹 toast）。子类化（DeployError/SshError）可区分错误类别，走同一映射。例外：`ValidationError`（typebox 校验失败）hx 请求返回 422 + 表单片段。
 
 ## 类型化路由（routes.gen）
 

@@ -43,7 +43,10 @@ derive 三个 ctx 助手，协议细节（303 vs HX-Redirect、422 回显、HX-T
 
 `ToastRoot` + `ToastScripts`（AppLayout 默认包含）：toast 容器 + 启动脚本
 （监听 `toast` 事件与 `htmx:responseError`），含 responseHandling 配置
-（422 也参与 swap，写操作失败回显表单片段）。
+（422 也参与 swap，写操作失败回显表单片段，专为 ValidationError/formError）。
+ServiceError 一律返回 JSON `{ error }`；4xx/5xx（非 422）触发
+`htmx:responseError`，422 JSON 由 `htmx:beforeSwap` 拦截；两者都解析
+`{ error }` 弹 toast，不会把 JSON 当表单片段交换。
 
 ## API
 

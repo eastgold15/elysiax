@@ -15,6 +15,7 @@ import type { PageEntry } from "./pages";
 
 export interface ElysiaxGenerated {
   modules: Record<string, ModuleEntry>;
+  /** codegen 产物 .elysiax/container.gen 的工厂；调用方建好 root 后传给 `start` */
   buildRootContainer: () => Container<any>;
   /** .elysiax/pages.gen 的页面路由表（无页面时 codegen 不生成，故可选） */
   pages?: PageEntry[];
@@ -31,7 +32,8 @@ export interface ElysiaxGenerated {
  * import { start } from "@elysiax/core";
  * import * as gen from "../.elysiax";
  *
- * await start({ port: 3000, index, gen });
+ * const root = gen.buildRootContainer();
+ * await start({ port: 3000, index, gen, root });
  * ```
  */
 // elysia 惰性加载 typebox 走运行时 req("typebox/type")（dist/type/typebox-type.mjs），
@@ -49,7 +51,7 @@ setupTypebox({
   },
 });
 
-export async function start(opts: {
+export async function start<R extends Record<string | symbol, any>>(opts: {
   port?: number;
   /**
    * 旧模式单页壳：`import index from "./index.html"`。
@@ -57,7 +59,13 @@ export async function start(opts: {
    * 生成的壳 HTMLBundle 服务，不再需要它；保留仅为兼容旧应用。
    */
   index?: Bun.HTMLBundle;
-  /** `import * as gen from "../.elysiax"` */
+  /**
+   * 根 DI 容器：调用方用 `gen.buildRootContainer()` 建好再传入。
+   * 在调用方实例化，类型不会被 ElysiaxGenerated 的 `Container<any>` 吃掉；
+   * `start` 内部只把它交给 elysiaxAPI，不做成员访问。
+   */
+  root: Container<R>;
+  /** `import * as gen from "../.elysiax"`：只读取模块表 / 页面表 / 全局样式 */
   gen: ElysiaxGenerated;
   /** 全局壳 AppLayout；缺省读 defineLayout 注册的全局单例 */
   layout?: LayoutComponent;
@@ -76,8 +84,8 @@ export async function start(opts: {
    * 掐断空闲的 text/event-stream 连接（日志 `timed out a request after 10 seconds`）。
    */
   idleTimeout?: number;
-}) {
-  const root = opts.gen.buildRootContainer();
+}): Promise<{ app: ReturnType<typeof elysiaxAPI<R>> }> {
+  const root = opts.root;
   const pages = opts.gen.pages ?? [];
   const app = elysiaxAPI(root, opts.gen.modules, {
     ...opts.api,
@@ -128,6 +136,6 @@ export async function start(opts: {
       `   页面: ${pages.map((p) => `${p.url}${p.client ? " (client)" : ""}`).join(", ")}`,
     );
 
-  // 根容器交还入口：进程级后台任务（轮询器等 DI 服务）与请求共用同一份单例
-  return { app, root };
+  // root 由调用方持有，这里只交还 app（进程级后台任务继续用调用方自己的 root）
+  return { app };
 }

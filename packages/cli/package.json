@@ -1,5 +1,6 @@
 {
   "name": "@elysiax/cli",
+  "description": "elysiax 命令行工具：项目初始化、原子脚手架、doctor 体检、codegen 生成与构建打包",
   "version": "0.1.0",
   "private": true,
   "type": "module",

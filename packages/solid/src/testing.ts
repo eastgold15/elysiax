@@ -38,7 +38,8 @@
  * 应用 `bun add -d @happy-dom/global-registrator` 后即可用本助手。
  */
 import { createRequire } from "node:module";
-import { resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import { solidPlugin } from "./index";
 
 /**
@@ -88,10 +89,42 @@ export function setupClientTest(opts?: { filter?: RegExp; resolveFrom?: string }
   const bunTest = tryRequire<{ mock: { module(spec: string, factory: () => unknown): void } }>(appRequire, "bun:test");
   if (bunTest) {
     // 先全部解析成功再统一注册：避免解析中途失败留下「半去重」状态
-    const specs = ["solid-js", "solid-js/web", "solid-js/store"].map(
-      (spec) => [spec, appRequire(spec)] as const,
-    );
-    for (const [spec, mod] of specs) bunTest.mock.module(spec, () => mod);
+    //
+    // **两个包都要 mock**（整包，不 mock 子路径）：
+    //
+    // 1) 去重：link: 引入的框架包（如 @elysiax/flow）会从**自己的** node_modules
+    //    解析 solid-js / @solidjs/web（bun 自动安装 peerDependencies），于是进程里
+    //    有两份 Solid 运行时。被导入的那份调用 delegateEvents 写进它自己的实例，
+    //    而测试的 render 来自另一份 → 委托集合不共享 → **所有委托事件静默失效**
+    //    （元素上 handler 属性在，监听器没挂，表现是「渲染出来了但点不动」）。
+    //    solidPlugin 的 onResolve 能解决这件事，但**在 bun test 里不生效**（实测），
+    //    所以测试进程只能靠 mock 把两个 specifier 都钉到应用根的同一份。
+    //
+    // 2) browser 分支：Solid 2 没有 CJS 产物，require 的条件解析会落到
+    //    node 分支 = dist/server.js（SSR 构建）——那里的 template() 等会抛
+    //    "Client-only API called on the server side"。测试跑的是浏览器语义，
+    //    所以按 exports 表手工挑 browser 条目（同 solidPlugin 的 solidBrowserEntry）。
+    //
+    // 只 mock **整包**（"solid-js" / "@solidjs/web"）；mock 子路径（如
+    // "@solidjs/web/jsx-runtime"）会让 Bun 把整个包判为 mocked，编译产物要的
+    // template/insert 等导出全部消失。
+    const specs = ["solid-js", "@solidjs/web"];
+    for (const spec of specs) {
+      const mod = browserRequire(spec, base, appRequire);
+      if (mod) bunTest.mock.module(spec, () => mod);
+    }
+
+    // **测试入口文件不能写 JSX**（Solid 2 的硬约束）：
+    // Bun 的 onLoad 插件对测试入口不生效（实测），入口里的 JSX 会走 Bun 内置的
+    // 自动 runtime → 解析 @solidjs/web/jsx-runtime——而 Solid 2 的该导出只带类型
+    // （运行时无 jsx 实现），于是报 "Export named 'jsx' not found"。
+    //
+    // 也不能用 mock 兜底：mock.module("@solidjs/web/jsx-runtime", …) 会让 Bun 把
+    // 整个 @solidjs/web 包判为 mocked，编译产物要的 template/insert 等导出全部消失
+    // （报 "Export named 'template' not found"）。
+    //
+    // 正解：需要 JSX 就放进**被导入的** .tsx（它会被 onLoad 编译），测试入口只写
+    // 纯 TS 调用。
   }
   Bun.plugin(
     solidPlugin({
@@ -108,5 +141,45 @@ function tryRequire<T>(req: NodeRequire, spec: string): T | null {
   } catch (e) {
     if ((e as { code?: string }).code === "MODULE_NOT_FOUND") return null;
     throw e;
+  }
+}
+
+/**
+ * 取包在 **browser 条件**下的入口并 require 它。
+ *
+ * 为什么不能直接 require(pkg)：Solid 2 只发 ESM 产物（没有 .cjs），require 的条件
+ * 解析落到 node 分支 = dist/server.js——SSR 构建，浏览器专用的 API（template /
+ * delegateEvents 等）会抛 "Client-only API called on the server side"。
+ * 测试跑的是浏览器语义，所以按 exports 表手工挑 browser 条目。
+ *
+ * 取不到 browser 分支时回退到普通 require（Solid 1.x 有 CJS 产物时走那条）。
+ */
+function browserRequire(
+  spec: string,
+  base: string,
+  appRequire: NodeRequire,
+): unknown {
+  try {
+    const pkgName = spec.startsWith("@")
+      ? spec.slice(0, spec.indexOf("/", 1))
+      : spec.slice(0, spec.indexOf("/") > 0 ? spec.indexOf("/") : spec.length);
+    const sub = spec === pkgName ? "." : `.${spec.slice(pkgName.length)}`;
+    const pkgPath = Bun.resolveSync(`${pkgName}/package.json`, base);
+    const pkgDir = dirname(pkgPath);
+    const exportsMap = (
+      JSON.parse(readFileSync(pkgPath, "utf8")) as { exports: Record<string, unknown> }
+    ).exports;
+    const entry = exportsMap[sub];
+    if (!entry) return tryRequire<unknown>(appRequire, spec);
+    // 条件对象逐层收窄：browser → development → import → default
+    let node: unknown = entry;
+    for (const key of ["browser", "development", "import", "default"]) {
+      if (node && typeof node === "object" && key in node)
+        node = (node as Record<string, unknown>)[key];
+    }
+    if (typeof node !== "string") return tryRequire<unknown>(appRequire, spec);
+    return appRequire(join(pkgDir, node));
+  } catch {
+    return tryRequire<unknown>(appRequire, spec);
   }
 }

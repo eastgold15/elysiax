@@ -1,5 +1,6 @@
 {
   "name": "@elysiax/flow",
+  "description": "基于 Solid 的迷你流程画布基座：纯 DOM + SVG 实现的节点编辑器内核（视口、拖拽、连线、缩放），无 VDOM",
   "module": "src/index.tsx",
   "type": "module",
   "exports": {
@@ -12,7 +13,8 @@
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
-    "solid-js": "^1.9.0"
+    "solid-js": "^2.0.3",
+    "@solidjs/web": "^2.0.3"
   },
   "private": true
 }

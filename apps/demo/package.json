@@ -20,7 +20,7 @@
     "@elysiax/htmx": "workspace:*",
     "bun-plugin-tailwind": "^0.1.2",
     "elysia": "catalog:",
-    "solid-js": "^1.9.17",
+    "solid-js": "^2.0.3",
     "tailwindcss": "^4.1.11",
     "webview-bun": "^2.4.0"
   },

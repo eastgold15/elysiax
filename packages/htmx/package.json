@@ -1,5 +1,6 @@
 {
   "name": "@elysiax/htmx",
+  "description": "elysiax 的服务端渲染层：基于 @kitajs/html 的 TSX 渲染、页面/片段/动作路由与 toast 工具",
   "module": "src/index.ts",
   "type": "module",
   "devDependencies": {

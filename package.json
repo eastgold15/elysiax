@@ -5,7 +5,9 @@
   "private": true,
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
+    "@solidjs/web": "^2.0.3",
     "@types/bun": "latest",
+    "solid-js": "^2.0.3",
     "turbo": "^2.11.10"
   },
   "peerDependencies": {

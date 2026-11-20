@@ -1,5 +1,6 @@
 {
   "name": "@elysiax/core",
+  "description": "elysiax 框架核心：DI 容器装配与 codegen、页面/路由定义、ServiceError 错误约定、插座门禁与依赖图",
   "version": "0.1.0",
   "private": true,
   "type": "module",

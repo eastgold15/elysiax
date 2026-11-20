@@ -1,5 +1,6 @@
 {
   "name": "@elysiax/solid",
+  "description": "elysiax 的 Solid 构建插件：把 client 原子的 TSX 编译打包为浏览器端产物，并提供客户端测试工具",
   "module": "src/index.ts",
   "type": "module",
   "devDependencies": {
@@ -22,7 +23,19 @@
     "@babel/core": "^8.0.9",
     "@babel/plugin-syntax-jsx": "^8.0.0",
     "@babel/preset-typescript": "^8.0.7",
-    "babel-preset-solid": "^1.9.16"
+    "@solidjs/compiler": "^2.0.0"
   },
-  "private": true
+  "private": true,
+  "peerDependencies": {
+    "solid-js": "^2.0.3",
+    "@solidjs/web": "^2.0.3"
+  },
+  "peerDependenciesMeta": {
+    "solid-js": {
+      "optional": true
+    },
+    "@solidjs/web": {
+      "optional": true
+    }
+  }
 }

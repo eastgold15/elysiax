@@ -1,4 +1,4 @@
-/** @jsxImportSource solid-js */
+/** @jsxImportSource @solidjs/web */
 /**
  * @elysiax/flow：Solid 迷你流程画布基座——替代 @xyflow/react 的节点编辑器内核，
  * 纯 DOM + SVG 实现，无 VDOM 无 d3，指针事件全透明。
@@ -21,9 +21,9 @@
  */
 import {
   createContext, createEffect, createMemo, createSignal, For,
-  onCleanup, useContext, type JSX,
+  onCleanup, useContext, createStore, reconcile,
 } from "solid-js";
-import { createStore, reconcile } from "solid-js/store";
+import type { JSX } from "@solidjs/web";
 
 // ── 公共类型 ──────────────────────────────────────────────
 
@@ -258,24 +258,29 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
 
   // fitView：首批节点到达时跑一次，把根节点纳入视野
   let fitted = false;
-  createEffect(() => {
-    if (!props.fitView || fitted || !props.nodes.length) return;
-    fitted = true;
-    const roots = props.nodes.filter((n) => !n.parentId);
-    if (!roots.length) return;
-    const x0 = Math.min(...roots.map((n) => n.position.x));
-    const y0 = Math.min(...roots.map((n) => n.position.y));
-    const x1 = Math.max(...roots.map((n) => n.position.x + (n.width ?? 0)));
-    const y1 = Math.max(...roots.map((n) => n.position.y + (n.height ?? 0)));
-    const rect = pane.getBoundingClientRect();
-    const k = Math.min(rect.width / (x1 - x0 + 80), rect.height / (y1 - y0 + 80), 1);
-    const kk = Math.max(minZoom(), k);
-    setT({
-      k: kk,
-      x: rect.width / 2 - ((x0 + x1) / 2) * kk,
-      y: rect.height / 2 - ((y0 + y1) / 2) * kk,
-    });
-  });
+  // Solid 2 两段式 effect：compute 段读 props.nodes（决定要不要 fit），
+  // effect 段做几何计算 + 写视口变换。
+  createEffect(
+    () => props.nodes.length > 0 && props.fitView && !fitted,
+    (shouldFit) => {
+      if (!shouldFit) return;
+      fitted = true;
+      const roots = props.nodes.filter((n) => !n.parentId);
+      if (!roots.length) return;
+      const x0 = Math.min(...roots.map((n) => n.position.x));
+      const y0 = Math.min(...roots.map((n) => n.position.y));
+      const x1 = Math.max(...roots.map((n) => n.position.x + (n.width ?? 0)));
+      const y1 = Math.max(...roots.map((n) => n.position.y + (n.height ?? 0)));
+      const rect = pane.getBoundingClientRect();
+      const k = Math.min(rect.width / (x1 - x0 + 80), rect.height / (y1 - y0 + 80), 1);
+      const kk = Math.max(minZoom(), k);
+      setT({
+        k: kk,
+        x: rect.width / 2 - ((x0 + x1) / 2) * kk,
+        y: rect.height / 2 - ((y0 + y1) / 2) * kk,
+      });
+    },
+  );
 
   // 节点按 id 入 store 再渲染：props.nodes 每次拖拽都换新对象引用，直接 <For> 会把
   // 被拖节点的 DOM 整个重建 → 指针捕获丢失、拖拽断掉（实测卡成“每次只动一点”）。
@@ -283,9 +288,13 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
   const [nodeStore, setNodeStore] = createStore<Record<string, N>>(
     Object.fromEntries(props.nodes.map((n) => [n.id, n])),
   );
-  createEffect(() => {
-    setNodeStore(reconcile(Object.fromEntries(props.nodes.map((n) => [n.id, n]))));
-  });
+  // Solid 2 两段式 effect：compute 段按 id 建索引，effect 段 reconcile 写回 store
+  createEffect(
+    () => props.nodes.map((n) => [n.id, n] as const),
+    (entries) => {
+      setNodeStore(reconcile(Object.fromEntries(entries)));
+    },
+  );
 
   // 边的端点需要绝对坐标：沿父链累加
   const absPos = createMemo(() => {
@@ -471,6 +480,7 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
     });
 
     const onDown = (e: PointerEvent) => {
+      console.log("[flow] onDown", e.button, (e.target as HTMLElement)?.className);
       if (e.button !== 0) return; // 右键留给 contextmenu，不进拖拽态
       if ((e.target as HTMLElement).closest("[data-nodrag], a, button, input, select, textarea")) return;
       e.stopPropagation();
@@ -617,7 +627,7 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
   );
 
   return (
-    <FlowContext.Provider
+    <FlowContext
       value={{
         zoom: () => t().k,
         onResize: (id, w, h, resizing) => props.onNodeResize?.(id, w, h, resizing),
@@ -632,7 +642,7 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
         // 不再在 onMount 里手工挂接——那要求 ref 先于 onMount 赋值，
         // 而 Provider 的 children 是渲染效果里求值的，测试环境（乃至某些调度顺序）下会拿到 undefined
         onWheel={onWheel}
-        tabIndex={0}
+        tabindex={0}
         class="relative h-full w-full overflow-hidden outline-none"
         style={{
           // 背景点阵随视口平移缩放
@@ -737,6 +747,6 @@ export function FlowView<N extends FlowNodeBase>(props: FlowViewProps<N>) {
           <NodeTree />
         </div>
       </div>
-    </FlowContext.Provider>
+    </FlowContext>
   );
 }

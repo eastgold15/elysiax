@@ -207,6 +207,9 @@ elysiax new client canvas  # 已有页面升舱 client 模式
 elysiax dev                # codegen + bun --hot；页面结构变化自动重启，声明变化自动重生成
 elysiax gen                # 手动重生成 .elysiax/
 elysiax routes [--json]    # 全部挂载路由（页面/client 壳/片段/actions/controller），源自 .elysiax/routes.table.json
+elysiax graph [--keys] [--json]
+                           # 依赖图：原子级引用图（DI 边 / import 边分开列）+ 服务键级 DI 图
+                           #   原子级给依赖闭包用；键级是容器排序与环检测的唯一口径
 elysiax doctor [--db x.db] # 体检 12 项：DI 图、路由冲突、岛边界、插座门禁/纯度/只增不减、
                            #   数据层、端点 schema、schema 漂移（--db）、迁移只追加、错误约定
                            #   插座门禁已在 codegen 强制（dev/gen/build 都会拦），doctor 复用同一实现

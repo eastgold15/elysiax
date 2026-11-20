@@ -3,6 +3,7 @@ import { basename, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { ModuleManifest } from "./index";
 import { DEFAULTS, loadConfig, type ElysiaxConfig } from "./config";
+import { buildServiceGraph, type ServiceGraph, type ServiceGraphInput } from "./graph";
 import { checkSocketGate } from "./socket-gate";
 
 /**
@@ -413,38 +414,27 @@ export function extractRoutes(
   return { prefix, paths, routes };
 }
 
+/** loadProject 的产物：项目装载结果（codegen 与 elysiax graph 共用） */
+export interface ProjectLoad {
+  pageScan: PageScan;
+  infra?: ModuleDi;
+  infraPath?: string;
+  mods: LoadedModule[];
+  /** 服务键级依赖图（唯一口径：环检测 + 装配顺序） */
+  graph: ServiceGraph;
+}
+
 /**
- * 扫描模块目录与 src/infra.di.ts，把复杂装配生成到 .elysiax/（类 .next 模式）。
- * 返回生成文件列表。
+ * 装载项目：扫 pages/modules 树，读全部 di 声明，算服务键级依赖图。
+ * codegen 与 elysiax graph 共用这一份事实（图只有一份口径）。
  */
-export async function codegen(
-  root = process.cwd(),
+export async function loadProject(
+  root: string,
   config?: ElysiaxConfig,
-): Promise<string[]> {
+): Promise<ProjectLoad> {
   config ??= await loadConfig(root);
   const modulesDir = config.modules ?? DEFAULTS.modules;
   const pagesDir = config.pages ?? DEFAULTS.pages;
-  const entry = config.build?.entry ?? DEFAULTS.entry;
-  const written: string[] = [];
-
-  // 插座门禁前移到生成管线：跨原子私拉电线必须在 dev/gen/build/add 就失败，
-  // 不能只靠人记得跑 doctor（体检报告卡6）。判定口径与 doctor 共用同一实现。
-  if (existsSync(join(root, pagesDir))) {
-    const gate = await checkSocketGate(root, pagesDir);
-    const problems = [
-      gate.violations.length > 0 &&
-        [
-          `[elysiax] 插座门禁未通过（${gate.violations.length} 处，契约 §3：跨原子只能 import 对方 <name>.socket.ts）：`,
-          ...gate.violations.map((v) => `  ❌ ${v.file}: ${v.message}`),
-        ].join("\n"),
-      gate.purity.length > 0 &&
-        [
-          `[elysiax] 插座纯度未通过（${gate.purity.length} 处，契约 §3.1：插座只许 named/type export）：`,
-          ...gate.purity.map((v) => `  ❌ ${v.file}: ${v.message}`),
-        ].join("\n"),
-    ].filter((m): m is string => typeof m === "string");
-    if (problems.length) throw new Error(problems.join("\n\n"));
-  }
 
   // 页面树扫描（新约定）：URL = 文件夹路径，页面文件夹内聚一切
   const pageScan = await scanPages(root, pagesDir);
@@ -536,66 +526,101 @@ export async function codegen(
     }
   }
 
-  // ── 拓扑排序：dep 的提供者必须先装配 ──
-  const provider = new Map<string, number>(); // key → 模块下标（-1 = infra）
-  const providerOwner = new Map<string, string>(); // key → 原子名（冲突报错用）
-  const claimProvider = (key: string, idx: number, owner: string) => {
-    const prev = providerOwner.get(key);
-    if (prev !== undefined)
-      throw new Error(
-        `[elysiax] provide 键 "${key}" 冲突：原子 "${prev}" 与 "${owner}" 都提供了它，` +
-          `依赖方会静默注入后扫描到的那个，请改名`,
-      );
-    provider.set(key, idx);
-    providerOwner.set(key, owner);
-  };
-  if (infra) for (const k of Object.keys(infra.provides)) claimProvider(k, -1, "infra");
+  // 服务键级图（容器装配顺序 + 环检测的唯一口径）
+  const serviceInputs: ServiceGraphInput[] = [];
+  if (infra) serviceInputs.push({ id: "infra", name: "infra", di: infra });
   mods.forEach((mod, i) => {
     if (mod.di)
-      for (const k of Object.keys(mod.di.provides)) claimProvider(k, i, mod.manifest.name);
+      serviceInputs.push({ id: `mod:${i}`, name: mod.manifest.name, di: mod.di });
   });
+  const graph = buildServiceGraph(serviceInputs);
+
+  return { pageScan, infra, infraPath, mods, graph };
+}
+
+/**
+ * 扫描模块目录与 src/infra.di.ts，把复杂装配生成到 .elysiax/（类 .next 模式）。
+ * 返回生成文件列表。
+ */
+export async function codegen(
+  root = process.cwd(),
+  config?: ElysiaxConfig,
+): Promise<string[]> {
+  config ??= await loadConfig(root);
+  const modulesDir = config.modules ?? DEFAULTS.modules;
+  const pagesDir = config.pages ?? DEFAULTS.pages;
+  const entry = config.build?.entry ?? DEFAULTS.entry;
+  const written: string[] = [];
+
+  // 插座门禁前移到生成管线：跨原子私拉电线必须在 dev/gen/build/add 就失败，
+  // 不能只靠人记得跑 doctor（体检报告卡6）。判定口径与 doctor 共用同一实现。
+  if (existsSync(join(root, pagesDir))) {
+    const gate = await checkSocketGate(root, pagesDir);
+    const problems = [
+      gate.violations.length > 0 &&
+        [
+          `[elysiax] 插座门禁未通过（${gate.violations.length} 处，契约 §3：跨原子只能 import 对方 <name>.socket.ts）：`,
+          ...gate.violations.map((v) => `  ❌ ${v.file}: ${v.message}`),
+        ].join("\n"),
+      gate.purity.length > 0 &&
+        [
+          `[elysiax] 插座纯度未通过（${gate.purity.length} 处，契约 §3.1：插座只许 named/type export）：`,
+          ...gate.purity.map((v) => `  ❌ ${v.file}: ${v.message}`),
+        ].join("\n"),
+    ].filter((m): m is string => typeof m === "string");
+    if (problems.length) throw new Error(problems.join("\n\n"));
+  }
+
+  const project = await loadProject(root, config);
+  const { pageScan, infra, infraPath, mods, graph } = project;
 
   const depsOf = (di: ModuleDi): string[] =>
     Object.values(di.provides).flatMap((e) => ("class" in e ? [...e.deps] : []));
 
-  // lazyKey 收集：dep 'fooLazy' → foo 的注册需要伴随键 'fooLazy'
-  const lazyKeys = new Map<string, string>();
-  const allDeps = [
-    ...(infra ? depsOf(infra) : []),
-    ...mods.flatMap((m) => (m.di ? depsOf(m.di) : [])),
-  ];
-  for (const dep of allDeps) {
-    if (dep.endsWith("Lazy")) {
-      const base = dep.slice(0, -4);
-      if (!provider.has(base))
-        throw new Error(`依赖 "${dep}" 的基键 "${base}" 没有任何模块提供`);
-      lazyKeys.set(base, dep);
-    } else if (!provider.has(dep)) {
-      throw new Error(`依赖 "${dep}" 没有任何模块提供（检查 *.di.ts）`);
-    }
+  // ── 拓扑排序：服务键级（dep 的提供者必须先注册） ──
+  //
+  // 粒度落在服务键而不是模块：模块粒度会把一个原子里所有 provides 的依赖并成一条边，
+  // 于是「canvas 里加一个只读 deploy 的叶子服务」会被判成 canvas↔deploy 环（假环）。
+  // key 级图上 canvasBoardQuery → deployService → canvasService 是一条链，不是环。
+  // 图由 loadProject 算好（与 elysiax graph 命令同一份口径）。
+
+  // 缺失依赖：声明了但没有任何归属提供（Lazy 伴随键查基键）
+  for (const m of graph.missing) {
+    if (m.base)
+      throw new Error(`依赖 "${m.dep}" 的基键 "${m.base}" 没有任何模块提供`);
+    throw new Error(`依赖 "${m.dep}" 没有任何模块提供（检查 *.di.ts）`);
   }
 
-  const order: number[] = [];
-  const state = new Array(mods.length).fill(0); // 0 未访问 1 访问中 2 完成
-  const visit = (i: number, chain: string[]) => {
-    if (state[i] === 2) return;
-    if (state[i] === 1) {
-      throw new Error(
-        `检测到依赖环: ${[...chain, mods[i]!.manifest.name].join(" → ")}\n` +
-        `InferDI 不支持双向 Lazy —— 请按限界上下文拆成单向依赖，` +
-        `跨上下文的组合上移到 controller（见 CLAUDE.md）。`,
-      );
-    }
-    state[i] = 1;
-    for (const dep of mods[i]!.di ? depsOf(mods[i]!.di!) : []) {
-      const base = dep.endsWith("Lazy") ? dep.slice(0, -4) : dep;
-      const p = provider.get(base)!;
-      if (p >= 0 && p !== i) visit(p, [...chain, mods[i]!.manifest.name]);
-    }
-    state[i] = 2;
-    order.push(i);
-  };
-  mods.forEach((_, i) => visit(i, []));
+  // 真环：key 级链路上出现回边
+  if (graph.cycles.length) {
+    const chain = graph.cycles[0]!.map((k) => {
+      const ownerId = graph.owner.get(k)!;
+      return `${k}（${graph.display.get(ownerId) ?? ownerId}）`;
+    });
+    throw new Error(
+      `检测到依赖环（按服务键）: ${chain.join(" → ")}\n` +
+        `InferDI 不支持双向 Lazy —— lazy 不打破环：registerClass 的类型链仍要求依赖先注册。\n` +
+        `拆法：把组合上移到新建的叶子原子（依赖双方、不被任何原子依赖），` +
+        `或让其中一侧改为单向依赖。`,
+    );
+  }
+
+  // lazyKey 收集：dep 'fooLazy' → foo 的注册需要伴随键 'fooLazy'
+  const lazyKeys = new Map<string, string>();
+  for (const list of graph.rawDeps.values())
+    for (const dep of list)
+      if (dep.endsWith("Lazy")) lazyKeys.set(dep.slice(0, -4), dep);
+
+  /** 服务键 → 它的注册来源（di 表达式 + 条目 + 归属名） */
+  const keySource = new Map<string, { diExpr: string; entry: DiEntry; owner: string }>();
+  if (infra)
+    for (const [k, e] of Object.entries(infra.provides))
+      keySource.set(k, { diExpr: "infraDi", entry: e, owner: "infra" });
+  for (const mod of mods) {
+    if (!mod.di) continue;
+    for (const [k, e] of Object.entries(mod.di.provides))
+      keySource.set(k, { diExpr: mod.diVar, entry: e, owner: mod.manifest.name });
+  }
 
   // ── 生成 .elysiax/ ──
   const outDir = join(root, ".elysiax");
@@ -607,11 +632,13 @@ export async function codegen(
   };
   const header = "// 由 elysiax codegen 生成，勿手改（elysiax dev / gen 会重新生成）";
 
-  // container.gen.ts：拓扑序的完整类型链
+  // container.gen.ts：服务键拓扑序的完整类型链
+  // 注册顺序 = 键级拓扑序：每个键的依赖必定先注册（InferDI 的类型链要求）。
+  // 不再按模块成块发射——模块成块会让「A 模块依赖 B 模块的某个键」被迫整块提前，
+  // 那正是原子级误判成环的根源。
   const lines: string[] = [header, `import { Container } from "@inferdi/inferdi";`];
   if (infraPath) lines.push(`import infraDi from "${rel(infraPath)}";`);
-  for (const i of order) {
-    const mod = mods[i]!;
+  for (const mod of mods) {
     if (mod.di && mod.diPath)
       lines.push(`import ${mod.diVar} from "${rel(mod.diPath)}";`);
   }
@@ -625,18 +652,21 @@ export async function codegen(
       const lazy = lazyKeys.get(key);
       lines.push(
         `    .registerClass(${JSON.stringify(key)}, ${diExpr}.provides[${JSON.stringify(key)}].class, ` +
-        `${JSON.stringify(e.deps)}, ${JSON.stringify(e.lifetime ?? "singleton")}` +
-        (lazy ? `, ${JSON.stringify(lazy)}` : "") +
-        `)`,
+          `${JSON.stringify(e.deps)}, ${JSON.stringify(e.lifetime ?? "singleton")}` +
+          (lazy ? `, ${JSON.stringify(lazy)}` : "") +
+          `)`,
       );
     }
   };
-  if (infra) for (const [k, e] of Object.entries(infra.provides)) emit("infraDi", k, e);
-  for (const i of order) {
-    const mod = mods[i]!;
-    if (!mod.di) continue;
-    lines.push(`    // ── ${mod.manifest.name} 模块 ──`);
-    for (const [k, e] of Object.entries(mod.di.provides)) emit(mod.diVar, k, e);
+  let lastOwner = "";
+  for (const key of graph.order) {
+    const src = keySource.get(key);
+    if (!src) continue;
+    if (src.owner !== lastOwner) {
+      lines.push(`    // ── ${src.owner} 模块 ──`);
+      lastOwner = src.owner;
+    }
+    emit(src.diExpr, key, src.entry);
   }
   lines.push(";", "}", "");
   writeFileSync(join(outDir, "container.gen.ts"), lines.join("\n") + "\n");
@@ -912,8 +942,7 @@ export async function codegen(
     `import type { Lazy } from "@inferdi/inferdi";`,
   ];
   if (infraPath) sl.push(`import type infraDi from "${rel(infraPath)}";`);
-  for (const i of order) {
-    const mod = mods[i]!;
+  for (const mod of mods) {
     if (mod.di && mod.diPath)
       sl.push(`import type ${mod.diVar} from "${rel(mod.diPath)}";`);
   }
@@ -931,8 +960,7 @@ export async function codegen(
   );
   const bases: string[] = [];
   if (infra) bases.push("ProvidesOf<typeof infraDi>");
-  for (const i of order) {
-    const mod = mods[i]!;
+  for (const mod of mods) {
     if (mod.di) bases.push(`ProvidesOf<typeof ${mod.diVar}>`);
   }
   sl.push(`type BaseServices = ${bases.length ? bases.join(" & ") : "{}"};`);

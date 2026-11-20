@@ -20,8 +20,8 @@ export { defineLayout, getLayout } from "./layout";
 export { elysiaxAuth } from "./auth";
 export type { GuardOptions } from "./auth";
 export { ServiceError, errorBanner } from "./errors";
-export { codegen, defineModule, provide, lazy, extractRoutes, findRouteConflicts } from "./codegen";
-export type { RouteRow } from "./codegen";
+export { codegen, defineModule, provide, lazy, extractRoutes, findRouteConflicts, loadProject } from "./codegen";
+export type { RouteRow, ProjectLoad } from "./codegen";
 export type { DiEntry, DiEntryInput, LazyRef, ModuleDi, ModuleDiInput, ProvideOptions } from "./codegen";
 export { createTestContainer } from "./testing";
 export type { Substitute } from "./testing";
@@ -32,6 +32,8 @@ export type { ElysiaxGenerated } from "./start";
 export { defineConfig, loadConfig } from "./config";
 export type { ElysiaxConfig } from "./config";
 export { checkSocketGate, socketExports, socketPurityViolations, splitDeclarators, stripComments } from "./socket-gate";
+export { buildServiceGraph, buildAtomGraph, resolveSpecifier, stripLazy } from "./graph";
+export type { ServiceGraph, ServiceGraphInput, AtomGraph, AtomInfo, AtomEdge } from "./graph";
 export type { SocketGateResult, SocketViolation } from "./socket-gate";
 
 /** 模块清单（主形态 = <name>.di.ts 的 defineModule；modules/<name>/module.json 为旧形态可选兜底） */

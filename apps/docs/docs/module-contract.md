@@ -67,6 +67,35 @@ export default defineModule({
 - InferDI **不支持双向 lazy 循环**；依赖必须单向。
 - 外部原子需要的服务，由本原子 di 提供并经 socket 导出类。
 
+### 环检测的粒度是**服务键**，不是模块
+
+codegen 与 `elysiax graph` 的节点是服务键（`provide` 的键名），边是 `provide(X, [Y])` 里的 Y。
+容器 `container.gen.ts` 同样按**键的拓扑序**逐个 `registerClass`，不再按模块成块发射。
+
+为什么必须落到键：模块粒度会把一个 di 文件里所有 provides 的依赖汇总成一条边，
+于是「A 模块里加一个只读 B 的叶子服务」会被判成 A ↔ B 环——那是假环。
+键级图上 `叶子服务 → bService → … → aService` 是一条链。
+
+报错长这样（带键名 + 属主模块）：
+
+```
+检测到依赖环（按服务键）: deployService（deploy）→ canvasService（canvas）→ deployService（deploy）
+```
+
+### 跨模块组合用「中间者」
+
+actions 的窄类型 `<Name>Services = provides ∪ 直接 deps`，取不到别模块的键。
+需要组合多个模块时，在**被组合的一侧模块内**加一个组合服务，并在该模块 di 里声明：
+
+```ts
+provides: {
+  boardService: provide(BoardService, [CanvasService, DeployService, ServerService]),
+}
+```
+
+硬约束：**中间者必须没有任何服务依赖它**（键级图上的叶子），否则就成环了。
+不要为了让 actions 直接 `di.get` 别模块的键而在泛型上做借用名单。
+
 ## 3. socket.ts：唯一对外插座
 
 ```ts

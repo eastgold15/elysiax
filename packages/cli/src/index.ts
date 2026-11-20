@@ -1030,6 +1030,108 @@ cli.addCommand({
 });
 
 // ─────────────────────────────────────────────
+// elysiax graph — 依赖图（原子级 + 服务键级）
+//
+// 原子级：谁依赖谁（CLI 算依赖闭包用：装一个原子要连带哪些）
+// 键级：容器装配顺序与环检测的唯一口径（codegen 同一份图）
+// ─────────────────────────────────────────────
+cli.addCommand({
+  name: "graph",
+  description: "打印依赖图：原子级引用图 + 服务键级 DI 图（环在这里判）",
+  options: [
+    {
+      name: "json",
+      type: Boolean,
+      description: "输出机器可读 JSON",
+    },
+    {
+      name: "keys",
+      type: Boolean,
+      description: "只打印服务键级 DI 图（键 → 依赖键）",
+    },
+  ],
+  execute: async ({ options, logger }) => {
+    const root = process.cwd();
+    const { loadProject, loadConfig, buildAtomGraph } = await import("@elysiax/core");
+    const config = await loadConfig(root);
+    const project = await loadProject(root, config);
+    const pagesDir = config.pages ?? "src/pages";
+
+    const atomGraph = await buildAtomGraph(
+      root,
+      pagesDir,
+      project.graph,
+      (id) => project.graph.display.get(id) ?? id,
+    );
+
+    if (options.json) {
+      console.log(
+        JSON.stringify(
+          {
+            atoms: atomGraph.atoms.map((a) => a.name),
+            edges: atomGraph.edges,
+            shared: atomGraph.shared,
+            services: {
+              owner: Object.fromEntries(project.graph.owner),
+              deps: Object.fromEntries(project.graph.deps),
+              order: project.graph.order,
+              cycles: project.graph.cycles,
+            },
+          },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
+
+    // 原子级：每个原子依赖谁。DI 边与 import 边分开列：
+    // DI 边进容器（受键级环检测约束），import 边只是代码引用，不参与装配。
+    const depsOfAtom = new Map<string, { di: Set<string>; imp: Set<string> }>();
+    for (const a of atomGraph.atoms)
+      depsOfAtom.set(a.name, { di: new Set(), imp: new Set() });
+    for (const e of atomGraph.edges) {
+      const slot = depsOfAtom.get(e.from);
+      if (!slot) continue;
+      if (e.kind === "di") slot.di.add(e.to);
+      else slot.imp.add(e.to);
+    }
+    logger.info("原子依赖图（DI 边进容器，import 边只引用）");
+    for (const a of atomGraph.atoms) {
+      const slot = depsOfAtom.get(a.name)!;
+      const parts = [
+        slot.di.size ? "DI: " + [...slot.di].join(", ") : "",
+        slot.imp.size ? "import: " + [...slot.imp].join(", ") : "",
+      ].filter(Boolean);
+      logger.info(`  ${a.name.padEnd(14)} ${parts.length ? parts.join("  |  ") : "（无）"}`);
+    }
+
+    // 共享层引用
+    if (atomGraph.shared.length) {
+      logger.info("");
+      logger.info("共享层引用");
+      for (const s of atomGraph.shared) logger.info(`  ${s.from} → ${s.file}`);
+    }
+
+    // 服务键级
+    logger.info("");
+    logger.info(
+      `服务键级 DI 图：${project.graph.owner.size} 键 / ` +
+        `${[...project.graph.deps.values()].reduce((n, l) => n + l.length, 0)} 边 / ` +
+        (project.graph.cycles.length ? `${project.graph.cycles.length} 个环` : "无环"),
+    );
+    if (!options.keys) return;
+    for (const key of project.graph.order) {
+      const deps = project.graph.deps.get(key) ?? [];
+      const owner = project.graph.display.get(project.graph.owner.get(key)!) ?? "";
+      logger.info(`  ${key.padEnd(22)} ${owner.padEnd(12)} ${deps.join(", ")}`);
+    }
+    for (const cycle of project.graph.cycles)
+      logger.info(`  ⚠ 环: ${cycle.join(" → ")}`);
+  },
+});
+
+// ─────────────────────────────────────────────
 // elysiax routes — 路由表 dump（页面 / client 壳 / htmx 片段 / actions / 模块 controller）
 // ─────────────────────────────────────────────
 cli.addCommand({

@@ -1,7 +1,7 @@
 # SSE 推送队列的背压与溢出语义（决策备忘）
 
 > 状态：**待人体决策**。本文只给事实、判定与选项，不代选。
-> 来源：设计体检报告卡 15（`design-health-check-report.md`）。代码位置 `packages/core/src/realtime.ts`。
+> 来源：2026-10 设计体检第 15 项（队列溢出语义需人体决策）。代码位置 `packages/core/src/realtime.ts`。
 
 ## 事实
 

@@ -66,7 +66,20 @@ DI 插件挂到 app 上、模块 controller 再 `.use()` 上去时，controller 
 
 `registerClass` 的 `deps` 只允许引用**已注册**的键。`userService ⇄ orderService` 互相依赖对方的 `*Lazy` 伴随键时，无论注册顺序如何，类型系统必然拒绝（运行时其实支持）。`Container<any>` 也不行——`NoKeyOverlap` 在 `keyof any` 下坍缩成 `never`。
 
-**解法（架构层面）**：不做双向 Lazy。按限界上下文把依赖改单向（user → order），跨上下文组合上移到 controller——双向循环本质上是上下文边界没划清。
+**解法（架构层面）**：`lazy` 不打破环——它只是延后求值，`registerClass` 的类型链仍要求依赖先注册。按限界上下文把依赖改单向，或者加一个**中间者**：
+
+```
+aService ──→ bService ──→ mediatorService
+                ↑               │
+                └───────────────┘   ← 这是环，不行
+
+mediatorService ──→ aService
+mediatorService ──→ bService        ← 这是链，可以
+```
+
+中间者是依赖双方、**不被任何服务依赖**的叶子。codegen 的环检测按服务键走，加了中间者后若还有回边，`gen` 会直接报键链路。
+
+> 注意：环检测的粒度是**服务键**，不是模块。模块粒度会把一个 di 文件里所有 provides 的依赖汇总成一条边，于是「A 模块里加一个只读 B 的叶子服务」会被误判成 A ↔ B 环——但那在键级图上只是一条链。
 
 ## TypeScript
 
